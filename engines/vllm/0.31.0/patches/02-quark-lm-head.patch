@@ -1,0 +1,21 @@
+quark-lm-head.patch: Quark quantizes an lm_head its config does not exclude, and honors an lm_head exclude under any prefix.
+Modified by Arkey, 2026: a change to vLLM 0.31.0 (Apache License 2.0; see LICENSES/Apache-2.0.txt).
+Apply in site-packages: patch -p1 --dry-run, then patch -p1.
+
+--- a/vllm/model_executor/layers/quantization/quark/quark.py
++++ b/vllm/model_executor/layers/quantization/quark/quark.py
+@@ -249,7 +249,13 @@
+             if issubclass(layer_type, LinearBase):
+                 return None, None, UnquantizedLinearMethod
+             return None, None, None
+-        if issubclass(layer_type, LinearBase):
++        from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
++        # patch: an lm_head the config does not exclude is quantized like a linear layer (AWQ's lm_head_quantized)
++        if issubclass(layer_type, ParallelLMHead) and any(
++            e.split(".")[-1] == "lm_head" for e in cast(list[str], self.quant_config.get("exclude") or [])
++        ):
++            return None, None, None  # excluded under any prefix (the model's is language_model.lm_head)
++        if issubclass(layer_type, (LinearBase, ParallelLMHead)):
+             weight_quant_key, activation_key, _ = self.get_scheme_cls(
+                 layer_type, prefix
+             )

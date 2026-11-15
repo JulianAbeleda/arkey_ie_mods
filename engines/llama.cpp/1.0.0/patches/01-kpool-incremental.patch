@@ -1,0 +1,154 @@
+diff --git a/src/llama-memory-hybrid-idx.cpp b/src/llama-memory-hybrid-idx.cpp
+index da17476..24b6d23 100644
+--- a/src/llama-memory-hybrid-idx.cpp
++++ b/src/llama-memory-hybrid-idx.cpp
+@@ -8,7 +8,9 @@
+ #include <algorithm>
+ #include <cassert>
+ #include <cmath>
++#include <cstdlib>
+ #include <iterator>
++#include <set>
+ #include <stdexcept>
+ #include <type_traits>
+ 
+@@ -396,39 +398,14 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
+     const uint32_t n_stream_kv = mem_idx->get_n_stream();
+     const bool     unified     = n_stream_kv == 1;
+ 
+-    lay.n_pool_real = 0;
+-
+-    for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
+-        auto & sq = lay.seqs[s];
+-
+-        // a non unified cache gives each sequence its own stream, with stream local cell indices
+-        if (!unified && s >= (llama_seq_id) n_stream_kv) {
+-            sq = kpool_layout::seq();
+-            continue;
+-        }
++    // opt-in: LLAMA_KPOOL_INCREMENTAL=1 updates a stale sequence from its stale position instead of rebuilding it,
++    // LLAMA_KPOOL_CHECK=1 also rebuilds it in full and aborts if the two differ. Unset: the stock path.
++    static const bool incr  = getenv("LLAMA_KPOOL_INCREMENTAL") && atoi(getenv("LLAMA_KPOOL_INCREMENTAL")) != 0;
++    static const bool check = incr && getenv("LLAMA_KPOOL_CHECK") && atoi(getenv("LLAMA_KPOOL_CHECK")) != 0;
++    static uint64_t n_incr = 0, n_fall = 0;
+ 
+-        const auto & cells = mem_idx->get_cells(unified ? 0 : s);
+-        const auto & sp    = cells.seq_pos_get(s);
+-
+-        sq.strm = unified ? 0 : mem_idx->get_stream(s);
+-
+-        if (mem_idx_stale[s] == POS_CLEAN && !sq.cells.empty() && !sp.empty() &&
+-                sq.pos_min == sp.begin()->first) {
+-            for (auto it = sp.upper_bound(sq.cells.back()); it != sp.end(); ++it) {
+-                sq.cells.push_back(*it);
+-            }
+-        }
+-
+-        // the appended tail accounts for every cell only if nothing before it was dropped, but an edit can
+-        // regroup a sequence without changing its cell count, so a stale sequence must rebuild regardless
+-        if (sq.cells.size() != sp.size() || mem_idx_stale[s] != POS_CLEAN) {
+-            sq.cells.assign(sp.begin(), sp.end());
+-            sq.pools.clear();
+-            sq.j_next  = 0;
+-            sq.pos_min = sp.empty() ? 0 : sp.begin()->first;
+-        }
+-
+-        // Pools start at the first valid token
++    // Pools start at the first valid token
++    auto scan = [&](kpool_layout::seq & sq) {
+         size_t j = sq.j_next;
+         if (hparams_idx.indexer_kpool_by_order) {
+             // consecutive cells in sequence order, whatever their positions
+@@ -458,6 +435,92 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
+             }
+         }
+         sq.j_next = j;
++    };
++
++    // An edit at p (> pos_min) leaves the cells below p and every pool ending below them as they were (the same
++    // invariant kpool_build_state relies on): truncate there, append the set from p on, and resume the scan after the
++    // last kept pool. Any inconsistency returns false and the caller rebuilds in full.
++    auto truncate = [&](kpool_layout::seq & sq, const std::set<std::pair<llama_pos, uint32_t>> & sp, llama_pos p, uint32_t strm_old) {
++        if (sq.cells.empty() || sp.empty() || sq.strm != strm_old || sq.pos_min != sp.begin()->first || p <= sq.pos_min) {
++            return false;
++        }
++        const auto   key = std::make_pair(p, 0u);
++        const size_t t   = std::lower_bound(sq.cells.begin(), sq.cells.end(), key) - sq.cells.begin();
++        const auto   it  = sp.lower_bound(key);
++        if (t == 0 || it == sp.begin() || *std::prev(it) != sq.cells[t - 1]) {
++            return false;
++        }
++        sq.cells.resize(t);
++        sq.cells.insert(sq.cells.end(), it, sp.end());
++        if (sq.cells.size() != sp.size()) {
++            return false;
++        }
++        sq.pools.erase(std::lower_bound(sq.pools.begin(), sq.pools.end(), t,
++                [&](uint32_t j, size_t tt) { return j + kpool <= tt; }), sq.pools.end());
++        sq.j_next = sq.pools.empty() ? 0 : sq.pools.back() + kpool;
++        return true;
++    };
++
++    lay.n_pool_real = 0;
++
++    for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
++        auto & sq = lay.seqs[s];
++
++        // a non unified cache gives each sequence its own stream, with stream local cell indices
++        if (!unified && s >= (llama_seq_id) n_stream_kv) {
++            sq = kpool_layout::seq();
++            continue;
++        }
++
++        const auto & cells = mem_idx->get_cells(unified ? 0 : s);
++        const auto & sp    = cells.seq_pos_get(s);
++
++        const uint32_t strm_old = sq.strm;
++        sq.strm = unified ? 0 : mem_idx->get_stream(s);
++
++        const bool stale = mem_idx_stale[s] != POS_CLEAN;
++        const bool inc   = incr && stale && truncate(sq, sp, mem_idx_stale[s], strm_old);
++        if (incr && stale) {
++            ++(inc ? n_incr : n_fall);
++        }
++
++        if (!inc) {
++            if (mem_idx_stale[s] == POS_CLEAN && !sq.cells.empty() && !sp.empty() &&
++                    sq.pos_min == sp.begin()->first) {
++                for (auto it = sp.upper_bound(sq.cells.back()); it != sp.end(); ++it) {
++                    sq.cells.push_back(*it);
++                }
++            }
++
++            // the appended tail accounts for every cell only if nothing before it was dropped, but an edit can
++            // regroup a sequence without changing its cell count, so a stale sequence must rebuild regardless
++            if (sq.cells.size() != sp.size() || mem_idx_stale[s] != POS_CLEAN) {
++                sq.cells.assign(sp.begin(), sp.end());
++                sq.pools.clear();
++                sq.j_next  = 0;
++                sq.pos_min = sp.empty() ? 0 : sp.begin()->first;
++            }
++        }
++
++        scan(sq);
++
++        if (inc && check) {
++            kpool_layout::seq ref;
++            ref.strm    = sq.strm;
++            ref.cells.assign(sp.begin(), sp.end());
++            ref.pos_min = sp.empty() ? 0 : sp.begin()->first;
++            scan(ref);
++            if (ref.cells != sq.cells || ref.pools != sq.pools || ref.j_next != sq.j_next || ref.pos_min != sq.pos_min) {
++                GGML_ABORT("LLAMA_KPOOL_CHECK: incremental kpool layout differs from the full rebuild: seq %d stale %d "
++                        "cells %zu/%zu pools %zu/%zu j_next %zu/%zu pos_min %d/%d", s, mem_idx_stale[s],
++                        sq.cells.size(), ref.cells.size(), sq.pools.size(), ref.pools.size(), sq.j_next, ref.j_next,
++                        sq.pos_min, ref.pos_min);
++            }
++            if ((n_incr & (n_incr - 1)) == 0 || n_incr % 10000 == 0) {
++                LLAMA_LOG_WARN("%s: LLAMA_KPOOL_CHECK ok: %llu incremental updates verified, %llu full rebuilds\n",
++                        __func__, (unsigned long long) n_incr, (unsigned long long) n_fall);
++            }
++        }
+ 
+         lay.n_pool_real += (uint32_t) sq.pools.size();
+     }

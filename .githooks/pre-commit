@@ -1,0 +1,8 @@
+#!/bin/sh
+# Engine-blind: runs the one check over the STAGED content (an export of the index), not the working tree.
+# History checks compare against HEAD of this repo; machine paths come from this repo's local.json.
+top="$(git rev-parse --show-toplevel)" || exit 1
+tmp="$(mktemp -d)" || exit 1
+trap 'rm -rf "$tmp"' EXIT
+git checkout-index -a --prefix="$tmp/" || exit 1
+python3 "$tmp/tools/check.py" --git "$top" --local "${ARKEY_IE_MODS_LOCAL:-$top/local.json}"

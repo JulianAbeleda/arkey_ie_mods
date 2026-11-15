@@ -1,0 +1,93 @@
+mtp-sidecar-subfolder.patch, 2026-11-10. Base: llama.cpp master 7592b61d3. Apply: git apply
+common : find MTP sidecars in a sibling mtp/ subfolder, log the pick
+
+The -hf sidecar auto-pick only searched the model's directory and its ancestors, so a repo that keeps its
+heads in a subfolder (e.g. MTP/) silently ran without MTP. Also accept a subfolder named after the sidecar
+kind (case-insensitive) under the model's directory or an ancestor; a file in the model's own directory still
+wins. Log the chosen sidecar, and warn naming the searched locations when --spec-type draft-mtp finds none.
+
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 4b716398e..bf36b670b 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -382,6 +382,15 @@ common_models_handler common_models_handler_init(const common_params & params, l
+         plan = common_download_get_hf_plan(params.model, opts);
+     }
+ 
++    if (spec_type_draft_mtp && !params.model.hf_repo.empty() && plan.mtp.path.empty() &&
++        params.speculative.draft.mparams.empty()) {
++        const std::string dir = plan.primary.path.find('/') == std::string::npos ? "" :
++                                plan.primary.path.substr(0, plan.primary.path.rfind('/') + 1);
++        LOG_WRN("%s: --spec-type draft-mtp requested but no MTP head (mtp-*.gguf) was found in %s: looked in '%s'"
++                ", its parent directories and their 'mtp/' subfolders; pass one with -md/-hfd if the model has no built-in MTP layers\n",
++                __func__, params.model.hf_repo.c_str(), dir.c_str());
++    }
++
+     if (!params.speculative.draft.mparams.hf_repo.empty()) {
+         // without a requested type, discover every sidecar the draft repo ships to infer the type later
+         auto opts_spec = opts;
+diff --git a/common/download.cpp b/common/download.cpp
+index fbd192721..aff150f8e 100644
+--- a/common/download.cpp
++++ b/common/download.cpp
+@@ -599,10 +599,14 @@ static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
+ // pick the best sibling GGUF whose filename contains `keyword` (e.g. "mmproj" / "mtp"),
+ // preferring deeper shared directory prefix with the model, then exact `tag` match,
+ // then closest quantization to the tag when given, or to the model otherwise
++// when `subdir` is set, a subfolder of that name (case-insensitive) of the model's directory or of one
++// of its ancestors also qualifies (e.g. "MTP/" for the "mtp" sidecar); at the same level a file placed
++// directly in the directory wins, so a sidecar in the model's own directory is still preferred
+ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
+                                            const std::string        & model,
+                                            const std::string        & keyword,
+-                                           const std::string        & tag = "") {
++                                           const std::string        & tag = "",
++                                           const std::string        & subdir = "") {
+     hf_cache::hf_file best;
+     size_t best_depth = 0;
+     int best_diff = 0;
+@@ -624,6 +628,13 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
+     auto model_parts = string_split<std::string>(model, '/');
+     auto model_dir = model_parts.end() - 1;
+ 
++    auto lower = [](std::string str) {
++        for (char & c : str) {
++            c = (char) std::tolower((unsigned char) c);
++        }
++        return str;
++    };
++
+     for (const auto & f : files) {
+         if (!string_ends_with(f.path, ".gguf") ||
+             f.path.find(keyword) == std::string::npos) {
+@@ -635,11 +646,14 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
+ 
+         auto [_, dir] = std::mismatch(model_parts.begin(), model_dir,
+                                       sib_parts.begin(), sib_dir);
+-        if (dir != sib_dir) {
++        size_t depth = dir - sib_parts.begin();
++        if (dir == sib_dir) {
++            depth = depth * 2 + 1;
++        } else if (!subdir.empty() && sib_dir - dir == 1 && lower(*dir) == subdir) {
++            depth = depth * 2;
++        } else {
+             continue;
+         }
+-
+-        size_t depth = dir - sib_parts.begin();
+         auto bits = extract_quant_bits(f.path);
+         auto diff = std::abs(bits - model_bits);
+ 
+@@ -848,7 +862,11 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model &
+             continue;
+         }
+         if (s.draft) {
+-            plan.*s.file = find_best_sibling(all, primary.path, s.keyword, tag);
++            plan.*s.file = find_best_sibling(all, primary.path, s.keyword, tag, s.name);
++            if (!(plan.*s.file).path.empty()) {
++                LOG_INF("%s: using %s sidecar %s for %s\n", __func__, s.name,
++                        (plan.*s.file).path.c_str(), primary.path.c_str());
++            }
+         } else if (!primary.path.empty()) {
+             plan.*s.file = find_best_sibling(all, primary.path, s.keyword);
+         }

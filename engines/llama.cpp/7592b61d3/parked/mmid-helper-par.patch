@@ -1,0 +1,180 @@
+Not submitted upstream.
+llama-mmid-helper-par.patch (was llama-moe-expert-table.patch), 2026-11-11 - helper-only record
+Base: llama.cpp master 7592b61d3 (ggml/src/ggml-cuda/mmid.cu only). Apply: git apply llama-mmid-helper-par.patch
+
+What it does
+  At this base, MUL_MAT_ID's MMQ path already reads experts in place (x + expert*stride_channel_x) and quantizes
+  activations once per token and scatters them (quantize_scatter_mmq_q8_1). So an expert pointer table
+  (moe_mmq_tab.cuh) has nothing to remove when all experts are resident. The avoidable MoE layout work left is
+  mm_ids_helper: one warp per expert scans all n_tokens serially, about 97 us per call at ub 2048.
+  This patch adds mm_ids_helper_par: 32 warps per expert, each owning a contiguous token chunk. Pass 1 counts, a
+  block-level scan gives each warp's base, and pass 2 writes ids_dst/ids_src1 directly, with no n_tokens shared
+  buffer. Order is preserved, so ids_src1, ids_dst and tile_spec are identical, and the MMQ results are bitwise
+  identical. It is used for templated n_expert_used, warp size 32, and n_tokens >= GGML_CUDA_MMID_PAR_MIN
+  (default 256; 0 = always). Decode and small batches keep the original kernel.
+
+Measured (RTX 5090, a MoE GGUF (IQ1_M), all-VRAM -ngl 99, -t 8 -b 4096 -ub 2048, cold unique-nonce
+prompts, engine prompt tok/s, 3 reps x 2 alternating passes, n=6)
+  10k (9,836 tok): stock 5,948 [5,913-5,988]  patched 6,163 [6,139-6,192]  +3.6%
+   2.7k          : stock 4,332 [4,208-4,372]  patched 4,395 [4,211-4,531]  (within noise)
+  patched -ub 6144 (-b 8192): 10k 5,841 [5,348-5,882], 2.7k 5,064 [5,019-5,120]
+  nsys 10k ub2048: mm_ids_helper 82.1 ms (846 calls) -> mm_ids_helper_par 26.2 ms (705 calls) + 0.4 ms of
+  small-batch mm_ids_helper. Kernel-busy time drops from 1,416 to 1,363 ms; every other family is unchanged.
+Correctness: test-backend-ops -o MUL_MAT_ID with GGML_CUDA_MMID_PAR_MIN=0: 967/967 pass. Greedy --temp 0, four prompts
+  (397-6,311 tokens, 96 generated tokens each): text and top-5 logprobs bitwise identical to stock.
+Evidence: boltbeam-runs/llama-expert-table-20261111.md and boltbeam-runs/llama-expert-table-20261111/
+
+diff --git a/ggml/src/ggml-cuda/mmid.cu b/ggml/src/ggml-cuda/mmid.cu
+index 64de4fb27..f42c9139f 100644
+--- a/ggml/src/ggml-cuda/mmid.cu
++++ b/ggml/src/ggml-cuda/mmid.cu
+@@ -139,6 +139,131 @@ static __global__ void mm_ids_helper(
+         = {expert, col_low, col_high, /*padding =*/ 0};
+ }
+ 
++// LOCAL PATCH (llama-moe-expert-table): parallel mm_ids_helper for prompt-sized batches.
++// mm_ids_helper above runs one warp per expert that scans all n_tokens serially (n_tokens/(warp_size/neu_padded)
++// dependent iterations), which made it ~5% of a 10k-token MoE prefill. Here a block of nwarps warps per expert splits
++// the tokens into nwarps contiguous chunks: pass 1 counts each chunk's matches (and the ids < expert), a block-level
++// exclusive scan gives each chunk its base, pass 2 rescans the chunk and writes ids_dst/ids_src1 directly. Chunks are
++// in token order and each chunk is in token order, so ids_src1, ids_dst and tile_spec are identical to mm_ids_helper's.
++// No n_tokens-sized shared buffer is needed.
++template <int n_expert_used_template, int nwarps>
++__launch_bounds__(nwarps*ggml_cuda_get_physical_warp_size(), 1)
++static __global__ void mm_ids_helper_par(
++        const int32_t * __restrict__ ids,
++        int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, ggml_cuda_mm_id_tile_spec * __restrict__ tile_spec,
++        const int n_tokens, const int nchannels_y, const uint3 tile_width,
++        const int si1, const int sis1, const bool write_inverse) {
++    constexpr int warp_size     = ggml_cuda_get_physical_warp_size();
++    constexpr int n_expert_used = n_expert_used_template;
++    constexpr int neu_padded    = mm_ids_pow2<n_expert_used_template>::value;
++    static_assert(n_expert_used_template > 0, "generic n_expert_used uses mm_ids_helper");
++    static_assert(neu_padded <= warp_size && warp_size % neu_padded == 0, "bad n_expert_used");
++    constexpr int tpi = warp_size/neu_padded; // tokens per warp iteration
++
++    const int expert = blockIdx.x;
++    const int warp   = threadIdx.y;
++    const int lane   = threadIdx.x;
++
++    __shared__ int cnt_s[nwarps];
++    __shared__ int nex_s[nwarps];
++
++    const int chunk    = ((n_tokens + nwarps*tpi - 1) / (nwarps*tpi)) * tpi;
++    const int it_begin = warp*chunk;
++    const int it_end   = min(it_begin + chunk, n_tokens);
++    const int iex      = lane % neu_padded;
++
++    // pass 1: count
++    int nex_prev = 0;
++    int cnt      = 0;
++    for (int it0 = it_begin; it0 < it_end; it0 += tpi) {
++        const int it = it0 + lane / neu_padded;
++        const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < it_end ?
++            ids[it*si1 + iex] : INT_MAX;
++        nex_prev += expert_used < expert;
++        const int self = warp_reduce_any<neu_padded>(expert_used == expert);
++        int lower = 0;
++#pragma unroll
++        for (int offset = neu_padded; offset < warp_size; offset += neu_padded) {
++            const int tmp = __shfl_up_sync(0xFFFFFFFF, self, offset, warp_size);
++            if (lane >= offset) {
++                lower += tmp;
++            }
++        }
++        cnt += __shfl_sync(0xFFFFFFFF, lower + self, warp_size - 1, warp_size);
++    }
++    nex_prev = warp_reduce_sum<warp_size>(nex_prev);
++    if (lane == 0) {
++        cnt_s[warp] = cnt;
++        nex_s[warp] = nex_prev;
++    }
++    __syncthreads();
++
++    int base = 0;       // compact columns of lower chunks
++    int total = 0;      // compact columns of this expert
++    int nex_total = 0;  // columns of experts with a lower index
++#pragma unroll
++    for (int w = 0; w < nwarps; ++w) {
++        base      += w < warp ? cnt_s[w] : 0;
++        total     += cnt_s[w];
++        nex_total += nex_s[w];
++    }
++
++    // pass 2: write, same order as mm_ids_helper
++    int it_compact = base;
++    for (int it0 = it_begin; it0 < it_end; it0 += tpi) {
++        const int it = it0 + lane / neu_padded;
++        const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < it_end ?
++            ids[it*si1 + iex] : INT_MAX;
++        const int iex_used = expert_used == expert ? iex : -1;
++        const int self = warp_reduce_any<neu_padded>(iex_used != -1);
++        int lower = 0;
++#pragma unroll
++        for (int offset = neu_padded; offset < warp_size; offset += neu_padded) {
++            const int tmp = __shfl_up_sync(0xFFFFFFFF, self, offset, warp_size);
++            if (lane >= offset) {
++                lower += tmp;
++            }
++        }
++        if (iex_used != -1) {
++            const int itc = it_compact + lower;
++            ids_dst[nex_total + itc] = it*n_expert_used + iex_used;
++            if (write_inverse) {
++                ids_src1[it*n_expert_used + iex_used] = nex_total + itc;
++            } else {
++                ids_src1[nex_total + itc] = it*sis1 + iex_used % nchannels_y;
++            }
++        }
++        it_compact += __shfl_sync(0xFFFFFFFF, lower + self, warp_size - 1, warp_size);
++    }
++
++    if (warp != 0 || lane != 0) {
++        return;
++    }
++
++    int col_low  = nex_total;
++    int col_high = nex_total + min(int(tile_width.z), total);
++
++    while (col_high > fastdiv(col_low + tile_width.z - 1, tile_width) * tile_width.z) {
++        tile_spec[fastdiv(col_low + tile_width.z - 1, tile_width)]
++            = {expert, col_low, col_high, /*padding =*/ 0};
++
++        col_low  = col_high;
++        col_high = min(col_high + int(tile_width.z), nex_total + total);
++    }
++
++    tile_spec[fastdiv(n_tokens*n_expert_used + tile_width.z - 1, tile_width) + expert]
++        = {expert, col_low, col_high, /*padding =*/ 0};
++}
++
++// Token count from which the parallel helper is used (env GGML_CUDA_MMID_PAR_MIN, default 256; 0 = always).
++static int mm_ids_par_min_tokens() {
++    static const int v = [] {
++        const char * e = getenv("GGML_CUDA_MMID_PAR_MIN");
++        return e ? atoi(e) : 256;
++    }();
++    return v;
++}
++
+ template <int n_expert_used_template>
+ static void launch_mm_ids_helper(
+         const int32_t * __restrict__ ids,
+@@ -155,6 +280,17 @@ static void launch_mm_ids_helper(
+ 
+     const uint3 tile_width_fd = init_fastdiv_values(tile_width);
+ 
++    if constexpr (n_expert_used_template != 0) {
++        if (warp_size == 32 && n_tokens >= mm_ids_par_min_tokens()) {
++            constexpr int nwarps = 32;
++            const dim3 num_blocks(n_experts, 1, 1);
++            const dim3 block_size(32, nwarps, 1);
++            mm_ids_helper_par<n_expert_used_template, nwarps><<<num_blocks, block_size, 0, stream>>>
++                (ids, ids_src1, ids_dst, tile_spec, n_tokens, nchannels_y, tile_width_fd, si1, sis1, write_inverse);
++            return;
++        }
++    }
++
+     const dim3 num_blocks(n_experts, 1, 1);
+     const dim3 block_size(warp_size, 1, 1);
+     const size_t nbytes_shared = n_tokens*sizeof(mm_ids_helper_store);

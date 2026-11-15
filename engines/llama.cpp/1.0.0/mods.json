@@ -1,0 +1,791 @@
+{
+ "schema": "arkey_ie_mods.mods.v1",
+ "engine": "llama.cpp",
+ "version": "1.0.0",
+ "base": {
+  "kind": "git_commit",
+  "tag": "b12359",
+  "release": "v1.0.0",
+  "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28"
+ },
+ "about": "Opt-in mods for long-context MoE decode. Series order = list order. Every gain is against this engine's stock code path (the unpatched build, or the same build with the switch off). archived: rejected patches, kept so nothing is lost; never in the series (archive/README.md is generated from the rows).",
+ "budget_rule": "ceil_105_10",
+ "mods": [
+  {
+   "name": "kpool-incremental",
+   "patch": "patches/01-kpool-incremental.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_INCREMENTAL",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_CHECK",
+    "needs": []
+   },
+   "reads": [],
+   "marker": "LLAMA_KPOOL_INCREMENTAL",
+   "files": [
+    "src/llama-memory-hybrid-idx.cpp"
+   ],
+   "lines": {
+    "added": 95,
+    "removed": 32
+   },
+   "budget": {
+    "added": 100,
+    "removed": 32
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/kpool-incremental-20261114",
+     "numbers": "temp-0 text and token count identical on 15/15 turns across 19 arms (on = off = unpatched build) at 32k, 19/19 at 40k; 59/59 at 128k in the later stacked runs",
+     "match": {
+      "what": "temp-0 text and token count per turn, switch on = off = unpatched build, 128k session",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "88 -> 118.5",
+    "unit": "tok/s, 128k session decode",
+    "vs": "stock build",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; at 32k: +1.10 ms/step [0.75, 1.44], +16.2 tok/s",
+    "run": "boltbeam-runs/kpool-incremental-20261114, llama-128k-20261114"
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "host-side only; gain grows with context (about 0.05 ms per 1k per step)"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 1,
+    "note": "the stock rebuild is replaced inside one function; the removed lines move under the off branch. Not provable statically."
+   }
+  },
+  {
+   "name": "sparse-direct",
+   "patch": "patches/02-sparse-direct.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_SPARSE_DIRECT",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_SPARSE_DIRECT_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_SPARSE_DIRECT",
+   "files": [
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn-mma-f16.cuh",
+    "ggml/src/ggml-cuda/fattn.cu"
+   ],
+   "lines": {
+    "added": 103,
+    "removed": 4
+   },
+   "budget": {
+    "added": 110,
+    "removed": 4
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/sparse-direct-20261114",
+     "numbers": "temp-0 text, n and draft counts identical on 59/59 turns, all 6 arms",
+     "match": {
+      "what": "temp-0 text, n and draft counts per turn, all 6 arms",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "+4.3% [3.3, 5.2]",
+    "unit": "tok/s, 128k session decode",
+    "vs": "same build, switch off (patch 01 on in both arms)",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; 96-128k bucket +8.1 to +8.6%",
+    "run": "boltbeam-runs/sparse-direct-20261114"
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "sparse MMA flash-attention path with q8_0 K/V only; other calls take the stock path",
+    "half 2 (ordered index lists from top-k) lost 1.0% and was dropped before this patch"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 3,
+    "note": "4 lines changed to thread a parameter and a gate; additive otherwise."
+   }
+  },
+  {
+   "name": "idx-pooled",
+   "patch": "patches/03-idx-pooled.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_IDX_POOLED",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_IDX_POOLED_CHECK",
+    "needs": []
+   },
+   "reads": [],
+   "marker": "LLAMA_IDX_POOLED",
+   "files": [
+    "src/llama-memory-hybrid-idx.cpp",
+    "src/llama-memory-hybrid-idx.h",
+    "src/llama-model.cpp",
+    "src/models/qwen4exp.cpp"
+   ],
+   "lines": {
+    "added": 299,
+    "removed": 19
+   },
+   "budget": {
+    "added": 320,
+    "removed": 19
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/mem-levers-20261114",
+     "numbers": "text and n identical on 59/59 turns in 5 arms; top-k recall 3,145,728 / 3,145,728; indexer_score bitwise equal 768/768",
+     "match": {
+      "what": "text and n per turn, 5 arms",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "-424",
+    "unit": "MiB VRAM at load and at depth (128k)",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; decode speed unchanged (+1.3%, inside noise)",
+    "run": "boltbeam-runs/mem-levers-20261114"
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "one sequence only (-np 1), k-pool order mode; otherwise warns and runs stock",
+    "aborts (never silent) on: context shift, mid-sequence seq_rm / seq_add / seq_div, full slot save/restore, prompt cache (--cache-ram > 0)",
+    "context checkpoints work (the raw tail rides in the partial state)"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 13,
+    "note": "19 stock lines changed across 4 files to branch on the mode. Not provable statically."
+   }
+  },
+  {
+   "name": "mtp-share-head",
+   "patch": "patches/04-mtp-share-head.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_MTP_SHARE_HEAD",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_MTP_SHARE_HEAD",
+   "files": [
+    "src/llama-context.cpp",
+    "src/llama-cparams.h",
+    "src/models/qwen4exp.cpp"
+   ],
+   "lines": {
+    "added": 45,
+    "removed": 4
+   },
+   "budget": {
+    "added": 50,
+    "removed": 4
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "quality-gated",
+    "evidence": {
+     "run": "boltbeam-runs/quality-gate-x16-20261114 (dgate.out), stack-margin-20261114",
+     "numbers": "target model distributions bit-identical teacher-forced (4,608 top-20 rows, 0 differ); the draft head's proposals change, so drafted / accepted counts and speed move; emitted text identical 15/15 turns in stack-margin",
+     "gate": {
+      "name": "dgate (teacher-forced target distributions)",
+      "run": "boltbeam-runs/quality-gate-x16-20261114 (dgate.out)",
+      "verdict": "pass: 4,608 top-20 rows, 0 differ"
+     }
+    }
+   },
+   "gain": {
+    "value": "-340",
+    "unit": "MiB VRAM at load",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; costs about 1% decode speed on turns 1-15 (129.9 vs 131.2 tok/s, 0.990x) before the memory is spent on anything",
+    "run": "boltbeam-runs/draft-shared-head-20261114, stack-margin-20261114"
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "MTP draft contexts only; the draft file's own output projection is skipped at load",
+    "the target's output projection must be on the draft head's output device; otherwise load throws",
+    "no check mode (the two heads are different quantizations: there is no stock value to equal)"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the target computes bit-identically (dgate); only the draft head's proposals change, which a stock-beside-mod check cannot compare"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 2,
+    "note": "4 stock lines changed. No check switch: rule exception, recorded here."
+   }
+  },
+  {
+   "name": "kpool-input-device",
+   "patch": "patches/05-kpool-input-device.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_INPUT_DEVICE",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_INPUT_CHECK",
+    "needs": []
+   },
+   "reads": [],
+   "marker": "LLAMA_KPOOL_INPUT_DEVICE",
+   "files": [
+    "src/llama-memory-hybrid-idx.cpp",
+    "src/llama-memory-hybrid-idx.h",
+    "src/models/qwen4exp.cpp"
+   ],
+   "lines": {
+    "added": 359,
+    "removed": 45
+   },
+   "budget": {
+    "added": 380,
+    "removed": 45
+   },
+   "depends_on": {
+    "apply": [
+     "kpool-incremental",
+     "idx-pooled"
+    ],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/idle-growth-20261114",
+     "numbers": "check: 0 aborts, 30,000+ forwards verified per context in 3 setups; text and n identical 59/59 for check = on = off",
+     "match": {
+      "what": "text and n per turn, check = on = off",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "0.585 [0.484, 0.686]",
+    "unit": "ms/step at 96-128k",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; 167.9 -> 173.2 tok/s (+3.1%) in that bucket; off-vs-off noise 0.070 ms",
+    "run": "boltbeam-runs/idle-growth-20261114"
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "covers the k-pool inputs (pool_cells, pool_idxs); pool_mask stays a host input",
+    "apply order needs patches 01 and 03 (same functions); at run time it works with either switch on or off (measured with LLAMA_IDX_POOLED unset: 8/8 turns identical)"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 11,
+    "note": "45 stock lines changed. Not provable statically."
+   }
+  },
+  {
+   "name": "seq-rm-indexed",
+   "patch": "patches/06-seq-rm-indexed.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_SEQ_RM_INDEXED",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_SEQ_RM_CHECK",
+    "needs": []
+   },
+   "reads": [],
+   "marker": "LLAMA_SEQ_RM_INDEXED",
+   "files": [
+    "src/llama-kv-cache.cpp"
+   ],
+   "lines": {
+    "added": 82,
+    "removed": 1
+   },
+   "budget": {
+    "added": 90,
+    "removed": 1
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/idle-growth-20261114 (phase 3)",
+     "numbers": "check mode compares the removed cell list and the resulting head on every call, 0 aborts; text identical on every timed arm",
+     "match": {
+      "what": "temp-0 text per turn, all 8 timed arms (boltbeam-runs/idle-growth-20261114 phase 3, pairs3.out)",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "0.192 [0.024, 0.360]",
+    "unit": "ms/step, session mean",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; flat with depth; 195.1 -> 197.3 tok/s (+1.1%). 44% of the predicted 0.44 ms: the pre-registered 0.22 ms line was missed",
+    "run": "boltbeam-runs/idle-growth-20261114"
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "host-side KV bookkeeping only",
+    "missed its own refutation line of 0.22 ms per step (0.19 measured); kept because the paired gain is positive in 9 of 9 pair-buckets past 32k (3 pairs x 3 depth buckets: 32-64k +0.128 +0.205 +0.242, 64-96k +0.171 +0.248 +0.238, 96-128k +0.096 +0.142 +0.247 ms; boltbeam-runs/idle-growth-20261114 phase 3, pairs3.out)"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 1,
+    "note": "1 stock line changed (the entry branch); additive otherwise."
+   }
+  },
+  {
+   "name": "fattn-vec-skip",
+   "patch": "patches/07-fattn-vec-skip.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_FATTN_VEC_SKIP",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_FATTN_VEC_SKIP_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_FATTN_VEC_SKIP",
+   "files": [
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn-vec.cuh",
+    "ggml/src/ggml-cuda/fattn.cu"
+   ],
+   "lines": {
+    "added": 102,
+    "removed": 10
+   },
+   "budget": {
+    "added": 110,
+    "removed": 10
+   },
+   "depends_on": {
+    "apply": [
+     "sparse-direct"
+    ],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/draft-attn-sparse-20261115",
+     "numbers": "check session: 0 value differences on every draft pass; text, n, draft_n, accepted identical on 59/59 turns",
+     "match": {
+      "what": "text, n, draft_n, accepted per turn",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "0.99",
+    "unit": "ms/step at 96-128k",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; draft KV q8_0 (-ctkd q8_0 -ctvd q8_0)",
+    "run": "boltbeam-runs/draft-attn-sparse-20261115"
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "one-query calls only (the vector kernel, q8_0 K/V, with a sparse mask): the draft passes",
+    "apply order needs patch 02 (shares its env helper and check block); the two switches are independent at run time",
+    "an accumulator that is exactly -0 would stay -0 where stock gives +0 (equal as values; never observed)"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 5,
+    "note": "10 stock lines changed in the vector kernel and the check block. Not provable statically."
+   }
+  },
+  {
+   "name": "idx-inplace",
+   "patch": "patches/08-idx-inplace.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_IDX_INPLACE",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_IDX_INPLACE_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_IDX_INPLACE",
+   "files": [
+    "ggml/src/ggml-cuda/lightning-indexer.cu",
+    "src/llama-memory-hybrid-idx.cpp",
+    "src/llama-memory-hybrid-idx.h",
+    "src/models/qwen4exp.cpp"
+   ],
+   "lines": {
+    "added": 59,
+    "removed": 0
+   },
+   "budget": {
+    "added": 70,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [
+     "idx-pooled"
+    ],
+    "run": [
+     "idx-pooled"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/mask-indexer-20261115",
+     "numbers": "check session: 116k indexer calls, 6.55e9 scores, 0 bit patterns differ; text sha, n, draft counts identical on 59/59 turns in 6 arms",
+     "match": {
+      "what": "text sha, n, draft counts per turn, 6 arms",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "about 0.30",
+    "unit": "ms/step at about 102k",
+    "vs": "same build, switch off (kernel rows from traces)",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; timed together with the parked compaction: 0.529 ms [0.496, 0.562] at 96-128k for both",
+    "run": "boltbeam-runs/mask-indexer-20261115"
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "decode shapes only (fewer than 8 query tokens); prefill keeps the stock copy",
+    "needs LLAMA_IDX_POOLED=1 and q8_0 indexer keys; otherwise stock path",
+    "falls back to the stock copy when padded pools exceed the store rows (above about 130.8k tokens)"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "purely additive (0 lines removed). One added object runs on every indexer node and returns at once unless the check is on."
+   }
+  },
+  {
+   "name": "ext-kernels",
+   "patch": "patches/09-ext-kernels.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_EXT_KERNELS",
+    "on": "/path/manifest.json"
+   },
+   "check": {
+    "kind": "env",
+    "name": "GGML_CUDA_EXT_KERNELS_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [
+    "GGML_CUDA_PDL"
+   ],
+   "marker": "GGML_CUDA_EXT_KERNELS",
+   "files": [
+    "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/ext-kernels.cpp",
+    "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ],
+   "lines": {
+    "added": 292,
+    "removed": 0
+   },
+   "budget": {
+    "added": 310,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/ext-kernel-hook-20261115",
+     "numbers": "identity kernel: 71,425 checks past 98.6k context, 0 differences (bitwise); text and n identical 59/59 with the switch on vs off",
+     "match": {
+      "what": "text and n per turn, switch on vs off, identity kernel",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "0",
+    "unit": "ms/step by itself (+0.069 measured, inside the 0.158 off-vs-off noise)",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; installs externally built kernels by op and shape; the output label of a run is that of the kernels in the manifest, not of the hook",
+    "run": "boltbeam-runs/ext-kernel-hook-20261115"
+   },
+   "exercised_by": "any graph node the manifest matches by op, types and shape; measured with a BF16 mul_mat_vec instance",
+   "limits": [
+    "a window of one op; one device",
+    "\"identical\" holds for an identity kernel only: each installed kernel carries its own tolerance and evidence"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "purely additive (0 lines removed): one new file, one guarded call site, one build-list line."
+   }
+  }
+ ],
+ "parked": [
+  {
+   "name": "fattn-compact-par",
+   "patch": "parked/fattn-compact-par.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_FATTN_COMPACT_PAR",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_FATTN_COMPACT_PAR_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_FATTN_COMPACT_PAR",
+   "files": [
+    "ggml/src/ggml-cuda/fattn.cu"
+   ],
+   "lines": {
+    "added": 119,
+    "removed": 0
+   },
+   "budget": {
+    "added": 130,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/mask-indexer-20261115",
+     "numbers": "check session: 84k compactions, 0 list words differ; 59/59 turns identical",
+     "match": {
+      "what": "text per turn, check session",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "about 0.10",
+    "unit": "ms/step at about 102k",
+    "vs": "same build, switch off (kernel rows from traces)",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; 40.4 -> 32.5 us a launch against a derived 0.31 ms",
+    "run": "boltbeam-runs/mask-indexer-20261115"
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "one-query-per-list compaction on NVIDIA only"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "purely additive (0 lines removed)."
+   },
+   "parked_why": "0.10 ms/step for 119 lines: a third of the derived gain. Correct, weak. Not in the default series; applies after it.",
+   "applies_after": "the whole series"
+  }
+ ],
+ "archived": [
+  {
+   "name": "kv-host-old",
+   "kind": "rejected",
+   "date": "2026-11-14",
+   "patch": "archive/kv-host-old.patch",
+   "switch": "LLAMA_KV_HOST_OLD",
+   "written_on": "1.0.0 + 01 + 02 (applies there; the two tested trees hold it after the whole series)",
+   "why": "KV cells older than a window in mapped host memory. Bit-identical, frees about 1.05-1.4 GiB, but costs +14.6 ms/step at 96-128k for about 4 ms of expert layers bought back. Rejected by its own cutoff rule at every window. Its code is still in both tested trees (switch unset in every kept measurement): tested_trees apply this archived copy, pinned by sha256, only to reach byte equality.",
+   "evidence": "boltbeam-runs/kv-host-old-20261114, boltbeam-runs/stack-margin-20261114",
+   "lines": {
+    "added": 409,
+    "removed": 1
+   },
+   "sha256": "2d083c9e691bfb17664e2f2fdb141e9608ef985f5edab95db58d056cf53671b2",
+   "files": [
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/kvhost.cu",
+    "ggml/src/ggml-cuda/kvhost.cuh",
+    "src/llama-kv-cache.cpp",
+    "src/llama-kv-cache.h"
+   ]
+  },
+  {
+   "name": "kv-staged-gather-a2",
+   "kind": "rejected",
+   "date": "2026-11-14",
+   "patch": "archive/kv-staged-gather-a2.patch",
+   "switch": "LLAMA_KV_STAGE",
+   "written_on": "1.0.0 + 01 + 02 + kv-host-old (applies there)",
+   "why": "staged gather of a call's union of old rows (derived 0.65-0.79 ms/step fetch). Designed, never compiled, never measured. Depends on kv-host-old. The patch was written (switch LLAMA_KV_STAGE, check LLAMA_KV_STAGE_CHECK=N) but its build log is empty: never compiled, never measured. Rejected with kv-host-old, which it needs.",
+   "evidence": "boltbeam-runs/kv-host-read-cost-20261114 (README.md sections 4-5; build.log empty)",
+   "lines": {
+    "added": 201,
+    "removed": 3
+   },
+   "sha256": "f850893db6e13c21b24798f4f70d24e96483f1124a664a75131d39e72cc09e0e",
+   "files": [
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn.cu"
+   ]
+  },
+  {
+   "name": "sparse-direct-half2",
+   "kind": "rejected",
+   "date": "2026-11-14",
+   "patch": "archive/sparse-direct-half2.patch",
+   "switch": null,
+   "written_on": "the run's working tree (01 + an earlier cut of 02's half 1, base committed as 678b0933 in the run's src/); it does not apply on 1.0.0 + 01 + 02",
+   "why": "Half 2 of sparse-direct: index lists straight from top-k, no mask scan (under 02's switch LLAMA_SPARSE_DIRECT, so no switch of its own). Bit-exact once the lists were ordered, but -1.0% [-1.3, -0.6] on the 128k session against half 1 alone (worse under 96k, zero at 96-128k), and it frees nothing because the n_kv mask is still built. Dropped before 02 was cut.",
+   "evidence": "boltbeam-runs/sparse-direct-20261114 (README.md 'Half 2 ... DROP')",
+   "lines": {
+    "added": 107,
+    "removed": 12
+   },
+   "sha256": "5cb0c4c532d56bc6d9b46a872c63d6a409677986a8db0f8fa2b0c89fd9463b30",
+   "files": [
+    "ggml/src/ggml-cuda/fattn.cu"
+   ]
+  }
+ ],
+ "engine_flags": [
+  {
+   "flags": "-ncmoe 16 --moe-cache-mib 6400",
+   "what": "stock expert cache; part of the measured setup, not a patch",
+   "output": "changes reply text; depends on request history; distribution gate inside the noise floor; benchmark verdict pending",
+   "run": "boltbeam-runs/quality-gate-x16-20261114"
+  },
+  {
+   "flags": "-ctkd q8_0 -ctvd q8_0",
+   "what": "draft KV at q8_0; stock flags",
+   "output": "target distributions bit-identical teacher-forced; changes the draft only. A net VRAM loss on stock (+110 MiB: the f16 copy); a gain only with LLAMA_SPARSE_DIRECT",
+   "run": "boltbeam-runs/mem-levers-20261114, quality-gate-x16-20261114"
+  }
+ ],
+ "tested_trees": [
+  {
+   "id": "mask-indexer",
+   "path": "boltbeam-runs/mask-indexer-20261115/src",
+   "what": "the tree every mod but the kernel hook was last built and measured on",
+   "contains": "01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement)",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/07-fattn-vec-skip.patch",
+    "patches/08-idx-inplace.patch",
+    "parked/fattn-compact-par.patch",
+    "archive/kv-host-old.patch"
+   ]
+  },
+  {
+   "id": "ext-kernel-hook",
+   "path": "boltbeam-runs/ext-kernel-hook-20261115/src",
+   "what": "the tree the kernel hook was built and measured on (cut before patches 07 and 08)",
+   "contains": "01-06 + 09 + the archived kv-host-old code (cut before 07 and 08)",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/09-ext-kernels.patch",
+    "archive/kv-host-old.patch"
+   ]
+  }
+ ],
+ "verified": []
+}

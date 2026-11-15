@@ -1,0 +1,11 @@
+{
+ "about": "Copy to local.json (gitignored) and set this machine's paths. checkouts: the base each engines/<engine>/<version> applies to (a git checkout at the recorded commit, or a site-packages folder). roots: where path references in mods.json (tested_trees, evidence) live on this machine; a reference is '<root>/rest'.",
+ "checkouts": {
+  "llama.cpp/1.0.0": "/path/to/llama.cpp at b1b770d9",
+  "llama.cpp/7592b61d3": "/path/to/llama.cpp at 7592b61d3",
+  "vllm/0.31.0": "/path/to/venv/lib/python3.12/site-packages"
+ },
+ "roots": {
+  "boltbeam-runs": "/path/to/boltbeam-runs"
+ }
+}

@@ -1,0 +1,37 @@
+Not submitted upstream.
+llama-server-ckpt-min-head.patch, 2026-11-11. Base: llama.cpp master 7592b61d3 (tools/server/server-context.cpp only). Apply: git apply
+What: LLAMA_SERVER_CKPT_MIN_HEAD=N (default 0 = stock). The chat path breaks the prompt batch at the user-message start
+(message spans from the chat template) to take a context checkpoint there. With the usual short template head this is a
+42-token batch. When experts live in host RAM, that batch runs MUL_MAT_ID for every host layer on the per-expert pageable
+path (below LLAMA_WS_MIN_TOKENS), then takes a checkpoint sync and an exposed PLE prep. With N > 0, no break and no
+checkpoint are taken at a user start within the first N tokens; later checkpoints (near the end) are unchanged.
+Measured (RTX 5090, a MoE GGUF (IQ1_M), -ncmoe 12 -t 8 -b 4096 -ub 4096 --cache-ram 0, LLAMA_WS_PIN_GIB=8, on top of
+llama-pinned-copy-stream v2 + llama-moe-prefill, cold chat text, 3 reps x 2 passes, wall tok/s):
+  10k: 4,551 [4,544-4,561] -> 5,278 [5,268-5,294] (+16%);  2.7k: 3,089 [2,760-3,129] -> 4,731 [4,412-4,741] (+53%)
+Outputs: not bitwise (the batch boundaries move). The first argmax divergences are near-ties (top-2 probabilities within
+0.01-0.09), the same envelope as stock -ub 2048 vs -ub 4096. Checkpoint restore still works (cache_n 2215 on divergent
+follow-ups).
+Evidence: boltbeam-runs/llama-expert-table-20261111.md (Lever "why 1.4x"), run dir boltbeam-runs/llama-expert-table-20261111/
+
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 5d9726796..1a60c9996 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -4522,8 +4522,16 @@ private:
+                         }
+                         slot.prompt.tokens.push_back(cur_tok);
+ 
++                        // LOCAL PATCH (llama-moe-prefill): LLAMA_SERVER_CKPT_MIN_HEAD=N (default 0 = stock) does not break the
++                        // batch (and so takes no checkpoint) at a user-message start within the first N prompt tokens: a
++                        // checkpoint of a short template head saves almost nothing, while the separate tiny batch costs a
++                        // full expert upload for host-resident experts plus a checkpoint sync.
++                        static const int32_t ckpt_min_head = [] {
++                            const char * e = getenv("LLAMA_SERVER_CKPT_MIN_HEAD");
++                            return e ? (int32_t) atoi(e) : 0;
++                        }();
+                         // break at the last user message, or at user messages at least min step past the last checkpoint
+-                        if (do_checkpoint && spans.is_user_start(slot.prompt.n_tokens())) {
++                        if (do_checkpoint && slot.prompt.n_tokens() >= ckpt_min_head && spans.is_user_start(slot.prompt.n_tokens())) {
+                             const auto pos = slot.prompt.n_tokens();
+                             const auto & checkpoints = slot.prompt.checkpoints;
+ 

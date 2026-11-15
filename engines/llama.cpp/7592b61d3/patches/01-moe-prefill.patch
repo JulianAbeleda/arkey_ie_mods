@@ -1,0 +1,388 @@
+Not submitted upstream.
+llama-moe-prefill.patch, 2026-11-11 (levers 1-4). Base: llama.cpp master 7592b61d3. Apply: git apply llama-moe-prefill.patch
+Contents
+  1. ggml-cuda/mmid.cu: mm_ids_helper_par. A 32-warp, two-pass, order-preserving MUL_MAT_ID routing sort, used at
+     >= 256 tokens (GGML_CUDA_MMID_PAR_MIN). Outputs are bit-identical. mm_ids at 10k: 82 -> 26 ms.
+  2. ggml-cuda/mmq.cu: GGML_CUDA_MMQ_ID_J=<J> sweep knob (unset = stock tile rule). Wider tiles were REFUTED
+     (J=128 at ub 2048: expert MMQ 354 -> 395 ms), so no rule is baked in.
+  3. ggml-cuda/batch-get.cu: a grow-only pinned+mapped staging buffer replaces the per-call cudaHostRegister of the
+     destination in ggml_cuda_get_tensor_n. llama-server's 3 context checkpoints per prompt (112.6 MiB each) and its
+     --cache-ram prompt save (401 MiB at 10k) each pinned a fresh buffer. The staged bytes are memcpy'd out (8 threads
+     >= 32 MB). GGML_CUDA_BATCH_GET_STAGING=0 restores the old path. Spans above GGML_CUDA_BATCH_GET_STAGING_MAX_MIB
+     (default 1024) use the old path. Pinned host memory held = the largest staged span (448 MiB with the RAM prompt
+     cache on, 128 MiB with --cache-ram 0).
+Measured (RTX 5090, a MoE GGUF (IQ1_M), all-VRAM, -t 8 -b 4096 -ub 2048, cold unique-nonce chat-completions
+text, 3 reps x 2 alternating passes n=6). Engine = server prompt timer; wall = client tok/s.
+                                       2.7k engine / wall      10k engine / wall
+  stock                                4,272 / 3,771           5,924 / 5,342
+  this patch                           5,114 / 4,711           6,455 / 6,061   (RAM prompt cache save ~80 ms outside)
+  this patch, --cache-ram 0            4,889 / 4,849           6,383 / 6,322
+  this patch, --cache-ram 0 -ctxcp 0   6,642 / 6,549           7,119 / 7,040   (no hybrid checkpoints)
+  Decode, 128 tokens: 128.3 tok/s (stock 128.9): unchanged.
+Correctness: test-backend-ops -o MUL_MAT_ID 967/967 (helper forced; also J=128 forced). Greedy --temp 0, 4 prompts
+  (397-6,311 tok) and a checkpoint save+restore test (cache_prompt, a 4,259-token cached prefix with divergent tails):
+  text and top-5 logprobs bitwise identical to stock, with default --cache-ram and with --cache-ram 0.
+Evidence: boltbeam-runs/llama-expert-table-20261111.md and boltbeam-runs/llama-expert-table-20261111/
+
+diff --git a/ggml/src/ggml-cuda/batch-get.cu b/ggml/src/ggml-cuda/batch-get.cu
+index 60c4747b9..5db16b0ec 100644
+--- a/ggml/src/ggml-cuda/batch-get.cu
++++ b/ggml/src/ggml-cuda/batch-get.cu
+@@ -3,6 +3,11 @@
+ #include "ggml-cpp.h"
+ 
+ #include <climits>
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++#include <thread>
++#include <vector>
+ 
+ #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+ struct ggml_cuda_batch_get_descriptor {
+@@ -55,6 +60,9 @@ struct ggml_cuda_batch_get_mapping {
+     unsigned char * device = nullptr;
+ 
+     ggml_cuda_batch_get_mapping(void * host, size_t size) {
++        if (!host || size == 0) {
++            return; // staged instead
++        }
+         const cudaError_t err = cudaHostRegister(host, size, cudaHostRegisterMapped | cudaHostRegisterPortable);
+         if (err != cudaSuccess) {
+             (void) cudaGetLastError();
+@@ -80,6 +88,103 @@ struct ggml_cuda_batch_get_mapping {
+         }
+     }
+ };
++
++// LOCAL PATCH (llama-moe-prefill): a grow-only pinned+mapped staging buffer that replaces the per-call
++// cudaHostRegister of the destination span. Registering a fresh pageable span (e.g. a 112 MiB server context
++// checkpoint) costs ~40 ms of host time while the GPU idles; copying the staged payload out costs a few ms.
++// GGML_CUDA_BATCH_GET_STAGING=0 restores the register path. It holds the largest staged span pinned (e.g. 448 MiB
++// after a 401 MiB llama-server --cache-ram prompt save), capped by GGML_CUDA_BATCH_GET_STAGING_MAX_MIB.
++struct ggml_cuda_batch_get_staging {
++    std::mutex      mutex;
++    void          * host   = nullptr;
++    unsigned char * device = nullptr;
++    size_t          size   = 0;
++
++    bool reserve(size_t need) {
++        if (need <= size) {
++            return true;
++        }
++        if (host) {
++            CUDA_CHECK(cudaFreeHost(host));
++            host = nullptr; device = nullptr; size = 0;
++        }
++        const size_t granule = 64u << 20;
++        const size_t want = (need + granule - 1) / granule * granule;
++        if (cudaHostAlloc(&host, want, cudaHostAllocMapped | cudaHostAllocPortable) != cudaSuccess) {
++            (void) cudaGetLastError();
++            host = nullptr;
++            return false;
++        }
++        if (cudaHostGetDevicePointer((void **) &device, host, 0) != cudaSuccess) {
++            (void) cudaGetLastError();
++            CUDA_CHECK(cudaFreeHost(host));
++            host = nullptr; device = nullptr;
++            return false;
++        }
++        size = want;
++        return true;
++    }
++};
++
++static ggml_cuda_batch_get_staging & ggml_cuda_batch_get_staging_get() {
++    static ggml_cuda_batch_get_staging staging;
++    return staging;
++}
++
++// largest span staged (GGML_CUDA_BATCH_GET_STAGING_MAX_MIB, default 1024); larger spans use the register path
++static size_t ggml_cuda_batch_get_staging_max() {
++    static const size_t v = [] {
++        const char * e = getenv("GGML_CUDA_BATCH_GET_STAGING_MAX_MIB");
++        return (size_t) (e ? atoll(e) : 1024) << 20;
++    }();
++    return v;
++}
++
++static bool ggml_cuda_batch_get_staging_enabled() {
++    static const bool enabled = [] {
++        const char * e = getenv("GGML_CUDA_BATCH_GET_STAGING");
++        return !e || atoi(e) != 0;
++    }();
++    return enabled;
++}
++
++// copy the merged destination ranges out of the staging buffer, in parallel for large payloads
++static void ggml_cuda_batch_get_unstage(const std::vector<std::pair<uintptr_t, uintptr_t>> & ranges, uintptr_t begin,
++        const unsigned char * stage, size_t payload_bytes) {
++    std::vector<std::pair<uintptr_t, uintptr_t>> merged;
++    for (const auto & r : ranges) {
++        if (!merged.empty() && merged.back().second == r.first) {
++            merged.back().second = r.second;
++        } else {
++            merged.push_back(r);
++        }
++    }
++    const size_t chunk = 8u << 20;
++    std::vector<std::pair<uintptr_t, size_t>> work; // (dst, bytes) pieces of at most chunk bytes
++    for (const auto & r : merged) {
++        for (uintptr_t a = r.first; a < r.second; a += chunk) {
++            work.emplace_back(a, std::min<size_t>(chunk, r.second - a));
++        }
++    }
++    auto run = [&](size_t i0, size_t step) {
++        for (size_t i = i0; i < work.size(); i += step) {
++            memcpy((void *) work[i].first, stage + (work[i].first - begin), work[i].second);
++        }
++    };
++    const size_t n_threads = payload_bytes >= (32u << 20) ? std::min<size_t>(8, work.size()) : 1;
++    if (n_threads <= 1) {
++        run(0, 1);
++        return;
++    }
++    std::vector<std::thread> threads;
++    for (size_t t = 1; t < n_threads; ++t) {
++        threads.emplace_back(run, t, n_threads);
++    }
++    run(0, n_threads);
++    for (auto & th : threads) {
++        th.join();
++    }
++}
+ #endif
+ 
+ bool ggml_cuda_get_tensor_n(int device,
+@@ -138,13 +243,27 @@ bool ggml_cuda_get_tensor_n(int device,
+     if (end - begin - payload_bytes > payload_bytes) {
+         return false;
+     }
+-    // Register and map the existing CPU destination so the kernel can write to it directly.
+-    ggml_cuda_batch_get_mapping mapping((void *) begin, end - begin);
+-    if (!mapping.host) {
++    // Stage through a reusable pinned buffer, or register and map the existing CPU destination so the kernel can
++    // write to it directly.
++    const bool use_staging = ggml_cuda_batch_get_staging_enabled() && end - begin <= ggml_cuda_batch_get_staging_max();
++    ggml_cuda_batch_get_staging & staging = ggml_cuda_batch_get_staging_get();
++    std::unique_lock<std::mutex> staging_lock(staging.mutex, std::defer_lock);
++    bool staged = false;
++    if (use_staging) {
++        staging_lock.lock();
++        staged = staging.reserve(end - begin);
++        if (!staged) {
++            staging_lock.unlock();
++        }
++    }
++    ggml_cuda_batch_get_mapping mapping(staged ? nullptr : (void *) begin, staged ? 0 : end - begin);
++    if (!staged && !mapping.host) {
+         return false;
+     }
++    unsigned char * const dst_device = staged ? staging.device : mapping.device;
++    unsigned char * const dst_host   = staged ? (unsigned char *) staging.host : (unsigned char *) begin;
+     // Reads selected for gather; zero means all reads use DMA.
+-    size_t n_reads_gather = mapping.device && n_reads_small >= min_batch_reads ? n_reads_small : 0;
++    size_t n_reads_gather = dst_device && n_reads_small >= min_batch_reads ? n_reads_small : 0;
+     // Keep descriptor storage alive until the final stream synchronization.
+     constexpr size_t max_batch_descriptors = 128 * 1024;
+     const size_t bytes = std::min(n_reads_gather, max_batch_descriptors) * sizeof(ggml_cuda_batch_get_descriptor);
+@@ -171,7 +290,7 @@ bool ggml_cuda_get_tensor_n(int device,
+                     continue;
+                 }
+                 copies[count++] = {(const unsigned char *) tensors[i]->data + offsets[i],
+-                        mapping.device + ((uintptr_t) data[i] - begin), sizes[i]};
++                        dst_device + ((uintptr_t) data[i] - begin), sizes[i]};
+             }
+             const size_t blocks_per_copy = std::min<size_t>(UINT16_MAX, std::max<size_t>(1, (nsm + n_batch - 1) / n_batch));
+             const dim3 blocks((unsigned int) n_batch, (unsigned int) blocks_per_copy);
+@@ -188,11 +307,14 @@ bool ggml_cuda_get_tensor_n(int device,
+     // Keep the destination pinned for DMA too; overlapping destinations already declined above.
+     for (size_t i = 0; i < n_tensors; ++i) {
+         if (sizes[i] && (!n_reads_gather || sizes[i] > max_gather_read_bytes)) {
+-            CUDA_CHECK(cudaMemcpyAsync(data[i], (const char *) tensors[i]->data + offsets[i], sizes[i], cudaMemcpyDeviceToHost, cudaStreamPerThread));
++            CUDA_CHECK(cudaMemcpyAsync(dst_host + ((uintptr_t) data[i] - begin), (const char *) tensors[i]->data + offsets[i], sizes[i], cudaMemcpyDeviceToHost, cudaStreamPerThread));
+         }
+     }
+     // Wait for GPU writes before releasing the CPU mapping and descriptor buffers.
+     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
++    if (staged) {
++        ggml_cuda_batch_get_unstage(ranges, begin, (const unsigned char *) staging.host, payload_bytes);
++    }
+     return true;
+ #endif
+ }
+diff --git a/ggml/src/ggml-cuda/mmid.cu b/ggml/src/ggml-cuda/mmid.cu
+index 64de4fb27..f42c9139f 100644
+--- a/ggml/src/ggml-cuda/mmid.cu
++++ b/ggml/src/ggml-cuda/mmid.cu
+@@ -139,6 +139,131 @@ static __global__ void mm_ids_helper(
+         = {expert, col_low, col_high, /*padding =*/ 0};
+ }
+ 
++// LOCAL PATCH (llama-moe-expert-table): parallel mm_ids_helper for prompt-sized batches.
++// mm_ids_helper above runs one warp per expert that scans all n_tokens serially (n_tokens/(warp_size/neu_padded)
++// dependent iterations), which made it ~5% of a 10k-token MoE prefill. Here a block of nwarps warps per expert splits
++// the tokens into nwarps contiguous chunks: pass 1 counts each chunk's matches (and the ids < expert), a block-level
++// exclusive scan gives each chunk its base, pass 2 rescans the chunk and writes ids_dst/ids_src1 directly. Chunks are
++// in token order and each chunk is in token order, so ids_src1, ids_dst and tile_spec are identical to mm_ids_helper's.
++// No n_tokens-sized shared buffer is needed.
++template <int n_expert_used_template, int nwarps>
++__launch_bounds__(nwarps*ggml_cuda_get_physical_warp_size(), 1)
++static __global__ void mm_ids_helper_par(
++        const int32_t * __restrict__ ids,
++        int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, ggml_cuda_mm_id_tile_spec * __restrict__ tile_spec,
++        const int n_tokens, const int nchannels_y, const uint3 tile_width,
++        const int si1, const int sis1, const bool write_inverse) {
++    constexpr int warp_size     = ggml_cuda_get_physical_warp_size();
++    constexpr int n_expert_used = n_expert_used_template;
++    constexpr int neu_padded    = mm_ids_pow2<n_expert_used_template>::value;
++    static_assert(n_expert_used_template > 0, "generic n_expert_used uses mm_ids_helper");
++    static_assert(neu_padded <= warp_size && warp_size % neu_padded == 0, "bad n_expert_used");
++    constexpr int tpi = warp_size/neu_padded; // tokens per warp iteration
++
++    const int expert = blockIdx.x;
++    const int warp   = threadIdx.y;
++    const int lane   = threadIdx.x;
++
++    __shared__ int cnt_s[nwarps];
++    __shared__ int nex_s[nwarps];
++
++    const int chunk    = ((n_tokens + nwarps*tpi - 1) / (nwarps*tpi)) * tpi;
++    const int it_begin = warp*chunk;
++    const int it_end   = min(it_begin + chunk, n_tokens);
++    const int iex      = lane % neu_padded;
++
++    // pass 1: count
++    int nex_prev = 0;
++    int cnt      = 0;
++    for (int it0 = it_begin; it0 < it_end; it0 += tpi) {
++        const int it = it0 + lane / neu_padded;
++        const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < it_end ?
++            ids[it*si1 + iex] : INT_MAX;
++        nex_prev += expert_used < expert;
++        const int self = warp_reduce_any<neu_padded>(expert_used == expert);
++        int lower = 0;
++#pragma unroll
++        for (int offset = neu_padded; offset < warp_size; offset += neu_padded) {
++            const int tmp = __shfl_up_sync(0xFFFFFFFF, self, offset, warp_size);
++            if (lane >= offset) {
++                lower += tmp;
++            }
++        }
++        cnt += __shfl_sync(0xFFFFFFFF, lower + self, warp_size - 1, warp_size);
++    }
++    nex_prev = warp_reduce_sum<warp_size>(nex_prev);
++    if (lane == 0) {
++        cnt_s[warp] = cnt;
++        nex_s[warp] = nex_prev;
++    }
++    __syncthreads();
++
++    int base = 0;       // compact columns of lower chunks
++    int total = 0;      // compact columns of this expert
++    int nex_total = 0;  // columns of experts with a lower index
++#pragma unroll
++    for (int w = 0; w < nwarps; ++w) {
++        base      += w < warp ? cnt_s[w] : 0;
++        total     += cnt_s[w];
++        nex_total += nex_s[w];
++    }
++
++    // pass 2: write, same order as mm_ids_helper
++    int it_compact = base;
++    for (int it0 = it_begin; it0 < it_end; it0 += tpi) {
++        const int it = it0 + lane / neu_padded;
++        const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < it_end ?
++            ids[it*si1 + iex] : INT_MAX;
++        const int iex_used = expert_used == expert ? iex : -1;
++        const int self = warp_reduce_any<neu_padded>(iex_used != -1);
++        int lower = 0;
++#pragma unroll
++        for (int offset = neu_padded; offset < warp_size; offset += neu_padded) {
++            const int tmp = __shfl_up_sync(0xFFFFFFFF, self, offset, warp_size);
++            if (lane >= offset) {
++                lower += tmp;
++            }
++        }
++        if (iex_used != -1) {
++            const int itc = it_compact + lower;
++            ids_dst[nex_total + itc] = it*n_expert_used + iex_used;
++            if (write_inverse) {
++                ids_src1[it*n_expert_used + iex_used] = nex_total + itc;
++            } else {
++                ids_src1[nex_total + itc] = it*sis1 + iex_used % nchannels_y;
++            }
++        }
++        it_compact += __shfl_sync(0xFFFFFFFF, lower + self, warp_size - 1, warp_size);
++    }
++
++    if (warp != 0 || lane != 0) {
++        return;
++    }
++
++    int col_low  = nex_total;
++    int col_high = nex_total + min(int(tile_width.z), total);
++
++    while (col_high > fastdiv(col_low + tile_width.z - 1, tile_width) * tile_width.z) {
++        tile_spec[fastdiv(col_low + tile_width.z - 1, tile_width)]
++            = {expert, col_low, col_high, /*padding =*/ 0};
++
++        col_low  = col_high;
++        col_high = min(col_high + int(tile_width.z), nex_total + total);
++    }
++
++    tile_spec[fastdiv(n_tokens*n_expert_used + tile_width.z - 1, tile_width) + expert]
++        = {expert, col_low, col_high, /*padding =*/ 0};
++}
++
++// Token count from which the parallel helper is used (env GGML_CUDA_MMID_PAR_MIN, default 256; 0 = always).
++static int mm_ids_par_min_tokens() {
++    static const int v = [] {
++        const char * e = getenv("GGML_CUDA_MMID_PAR_MIN");
++        return e ? atoi(e) : 256;
++    }();
++    return v;
++}
++
+ template <int n_expert_used_template>
+ static void launch_mm_ids_helper(
+         const int32_t * __restrict__ ids,
+@@ -155,6 +280,17 @@ static void launch_mm_ids_helper(
+ 
+     const uint3 tile_width_fd = init_fastdiv_values(tile_width);
+ 
++    if constexpr (n_expert_used_template != 0) {
++        if (warp_size == 32 && n_tokens >= mm_ids_par_min_tokens()) {
++            constexpr int nwarps = 32;
++            const dim3 num_blocks(n_experts, 1, 1);
++            const dim3 block_size(32, nwarps, 1);
++            mm_ids_helper_par<n_expert_used_template, nwarps><<<num_blocks, block_size, 0, stream>>>
++                (ids, ids_src1, ids_dst, tile_spec, n_tokens, nchannels_y, tile_width_fd, si1, sis1, write_inverse);
++            return;
++        }
++    }
++
+     const dim3 num_blocks(n_experts, 1, 1);
+     const dim3 block_size(warp_size, 1, 1);
+     const size_t nbytes_shared = n_tokens*sizeof(mm_ids_helper_store);
+diff --git a/ggml/src/ggml-cuda/mmq.cu b/ggml/src/ggml-cuda/mmq.cu
+index 367657508..0806e2002 100644
+--- a/ggml/src/ggml-cuda/mmq.cu
++++ b/ggml/src/ggml-cuda/mmq.cu
+@@ -251,6 +251,16 @@ void ggml_cuda_mul_mat_q(
+         }
+ 
+         J_best = ggml_cuda_mmq_get_J_best(src0->type, ncols_opt, fallback, cc, smpbo, prec_src1, &nthreads_best);
++
++        // LOCAL PATCH (llama-moe-prefill): GGML_CUDA_MMQ_ID_J forces the MUL_MAT_ID column-tile width (sweep knob).
++        static const int J_env = [] { const char * e = getenv("GGML_CUDA_MMQ_ID_J"); return e ? atoi(e) : 0; }();
++        if (ids && J_env > 0) {
++            const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(src0->type, J_env, fallback, cc, prec_src1);
++            if (config.type != GGML_TYPE_COUNT && mmq_get_nbytes_shared(config, cc) <= smpbo) {
++                J_best        = J_env;
++                nthreads_best = config.nthreads;
++            }
++        }
+     }
+     GGML_ASSERT(J_best > 0);
+ 

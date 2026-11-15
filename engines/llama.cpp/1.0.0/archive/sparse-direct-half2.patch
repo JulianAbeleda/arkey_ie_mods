@@ -1,0 +1,153 @@
+diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
+index c69d219e..eab56de8 100644
+--- a/ggml/src/ggml-cuda/fattn.cu
++++ b/ggml/src/ggml-cuda/fattn.cu
+@@ -6,6 +6,93 @@
+ #include "fattn-vec.cuh"
+ #include "fattn.cuh"
+ 
++// LLAMA_SPARSE_DIRECT (local long-context mod, off by default; 1 = both parts, 2 = q8_0 rows only, 3 = lists only):
++// - q8_0 rows: calls that take the sparse MMA gather read q8_0 K/V rows by index and dequantize them in registers,
++//   so the whole-cache f16 copy and its buffer go away;
++// - lists: the sparse index lists come straight from the top-k picks of the mask's GGML_OP_TOP_K_MASK, no n_kv scan.
++// LLAMA_SPARSE_DIRECT_CHECK=N also runs the stock path on every Nth q8_0-rows call (needs GGML_CUDA_DISABLE_GRAPHS=1)
++// and aborts if the outputs differ beyond tolerance.
++static int sparse_direct_env(const char * name) {
++    const char * e = getenv(name);
++    return e ? atoi(e) : 0;
++}
++static thread_local bool sparse_direct_off = false;
++static bool sparse_direct_part(const int part) { // 1 = q8_0 rows, 2 = lists
++    static const int mode = sparse_direct_env("LLAMA_SPARSE_DIRECT");
++    return !sparse_direct_off && (mode == 1 || mode == part + 1);
++}
++
++// LLAMA_SPARSE_DIRECT: one index list per query straight from the picks of a GGML_OP_TOP_K_MASK mask, no n_kv scan.
++// The cells of the live picks and the extra cells set bits of an n_kv bitmap in shared memory, which is then walked in
++// order: the list is the ascending, duplicate-free cell list of the mask scan, at n_kv/32 words instead of n_kv halves.
++static __global__ void flash_attn_top_k_to_sparse_indices(
++        const int32_t * top_k, const float * score, const int32_t * blocks, const int32_t * extra,
++        int32_t * indices, int32_t * counts, const int n_top, const int n_pick, const int n_blk, const int n_extra,
++        const int n_kv, const int n_kv_max, const int64_t sk1, const int64_t ss1, const int64_t sb1, const int64_t se1) {
++    constexpr int nthreads = 256;
++    extern __shared__ uint32_t bits[];
++    __shared__ int offs[nthreads + 1];
++
++    const int row = blockIdx.x;
++    const int tid = threadIdx.x;
++    const int nw  = (n_kv + 31) / 32;
++
++    for (int i = tid; i < nw; i += nthreads) {
++        bits[i] = 0;
++    }
++    __syncthreads();
++    auto set = [&](const int32_t c) {
++        if (c >= 0 && c < n_kv) {
++            atomicOr(&bits[c / 32], 1u << (c % 32));
++        }
++    };
++    for (int i = tid; i < n_top*n_blk; i += nthreads) {
++        const int32_t p = top_k[row*sk1 + i / n_blk];
++        if (p >= 0 && p < n_pick && score[row*ss1 + p] > -INFINITY) {
++            set(blocks[i % n_blk + p*sb1]);
++        }
++    }
++    for (int i = tid; i < n_extra; i += nthreads) {
++        set(extra[i + row*se1]);
++    }
++    __syncthreads();
++
++    const int wpt = (nw + nthreads - 1) / nthreads;
++    const int w0  = min(tid*wpt, nw);
++    const int w1  = min(w0 + wpt, nw);
++    int n = 0;
++    for (int w = w0; w < w1; ++w) {
++        n += __popc(bits[w]);
++    }
++    offs[tid + 1] = n;
++    __syncthreads();
++    if (tid == 0) {
++        offs[0] = 0;
++        for (int i = 1; i <= nthreads; ++i) {
++            offs[i] += offs[i - 1];
++        }
++    }
++    __syncthreads();
++
++    int32_t * list = indices + int64_t(row)*n_kv_max;
++    int o = offs[tid];
++    for (int w = w0; w < w1; ++w) {
++        for (uint32_t m = bits[w]; m; m &= m - 1) {
++            if (o < n_kv_max) {
++                list[o] = 32*w + __ffs(m) - 1;
++            }
++            ++o;
++        }
++    }
++    const int count = min(offs[nthreads], n_kv_max);
++    for (int i = count + tid; i < n_kv_max; i += nthreads) {
++        list[i] = -1;
++    }
++    if (tid == 0) {
++        counts[row] = count;
++    }
++}
++
+ #if !defined(GGML_USE_MUSA)
+ 
+ // one list per group of ncols1 queries: a column is selected if any query of the group can see it
+@@ -121,6 +208,24 @@ void ggml_cuda_flash_attn_ext_compact_mask(
+     GGML_UNUSED_VARS(mask, indices, counts, n_queries, ncols1, n_kv_max, stream);
+     GGML_ABORT("sparse flash attention is not supported on MUSA");
+ #else
++    // LLAMA_SPARSE_DIRECT lists: one query per list, one sequence, the picks give exactly n_kv_max slots
++    const ggml_tensor * sel = mask->view_src ? mask->view_src : mask;
++    if (sparse_direct_part(2) && ncols1 == 1 && mask->ne[3] == 1 && sel->op == GGML_OP_TOP_K_MASK && sel->src[2] && sel->src[3] &&
++            sel->ne[1] == n_queries && sel->src[1]->ne[1] == n_queries && sel->src[1]->ne[0]*sel->src[3]->ne[0] +
++            (sel->src[4] ? sel->src[4]->ne[0] : 0) == n_kv_max && sel->src[1]->nb[0] == sizeof(int32_t) &&
++            sel->src[2]->nb[0] == sizeof(float) && sel->src[3]->nb[0] == sizeof(int32_t) &&
++            (!sel->src[4] || sel->src[4]->nb[0] == sizeof(int32_t)) && (sel->ne[0] + 31)/32*sizeof(uint32_t) <= 40*1024) {
++        const ggml_tensor * top_k = sel->src[1], * score = sel->src[2], * blocks = sel->src[3], * extra = sel->src[4];
++        const int n_pick = int(blocks->ne[1]);
++        flash_attn_top_k_to_sparse_indices<<<n_queries, 256, ((sel->ne[0] + 31)/32)*sizeof(uint32_t), stream>>>(
++            (const int32_t *) top_k->data, (const float *) score->data, (const int32_t *) blocks->data,
++            extra ? (const int32_t *) extra->data : nullptr, indices, counts, int(top_k->ne[0]), n_pick, int(blocks->ne[0]),
++            extra ? int(extra->ne[0]) : 0, int(sel->ne[0]), n_kv_max, top_k->nb[1]/sizeof(int32_t), score->nb[1]/sizeof(float),
++            blocks->nb[1]/sizeof(int32_t), extra ? extra->nb[1]/sizeof(int32_t) : 0);
++        CUDA_CHECK(cudaGetLastError());
++        return;
++    }
++
+     const int64_t s31 = mask->nb[1] / sizeof(half);
+     const int64_t s33 = mask->nb[3] / sizeof(half);
+     const dim3 blocks_num((n_queries + ncols1 - 1)/ncols1, mask->ne[3], 1);
+@@ -781,19 +886,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+     return BEST_FATTN_KERNEL_TILE;
+ }
+ 
+-// LLAMA_SPARSE_DIRECT=1 (local long-context mod, off by default): calls that take the sparse MMA gather read q8_0 K/V
+-// rows by index and dequantize them in registers, so the whole-cache f16 copy and its buffer go away.
+-// LLAMA_SPARSE_DIRECT_CHECK=N also runs the stock path on every Nth such call (needs GGML_CUDA_DISABLE_GRAPHS=1)
+-// and aborts if the outputs differ beyond tolerance.
+-static int sparse_direct_env(const char * name) {
+-    const char * e = getenv(name);
+-    return e ? atoi(e) : 0;
+-}
+-static thread_local bool sparse_direct_off = false;
+ 
+ bool ggml_cuda_flash_attn_ext_sparse_direct(const ggml_tensor * dst) {
+-    static const bool on = sparse_direct_env("LLAMA_SPARSE_DIRECT") != 0;
+-    if (!on || sparse_direct_off) {
++    if (!sparse_direct_part(1)) {
+         return false;
+     }
+     const ggml_tensor * Q = dst->src[0];
+@@ -880,7 +975,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
+         max_err = std::max(max_err, err);
+         ++n_check;
+         if (n_check <= 3 || n_check % 200 == 0 || !(err <= 1e-3*ref)) {
+-            GGML_LOG_INFO("sparse_direct check %llu (%s, q %lld, n_kv %lld): max |diff| %.3g (max |ref| %.3g, %zu of %zu differ), worst so far %.3g\n",
++            GGML_LOG_WARN("sparse_direct check %llu (%s, q %lld, n_kv %lld): max |diff| %.3g (max |ref| %.3g, %zu of %zu differ), worst so far %.3g\n",
+                 (unsigned long long) n_check, dst->name, (long long) dst->src[0]->ne[1], (long long) dst->src[1]->ne[1], err, ref, n_diff, n, max_err);
+         }
+         if (!(err <= 1e-3*ref)) {

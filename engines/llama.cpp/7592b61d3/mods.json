@@ -1,0 +1,610 @@
+{
+ "schema": "arkey_ie_mods.mods.v1",
+ "engine": "llama.cpp",
+ "version": "7592b61d3",
+ "base": {
+  "kind": "git_commit",
+  "tag": null,
+  "release": null,
+  "commit": "7592b61d3b53ca5b39a25a03508fa1246b78c579",
+  "describe": "b12274-2-g7592b61d"
+ },
+ "about": "MoE prefill mods. Written on llama.cpp master 7592b61d3 (2026-11-10) before this repo's rules: most have no check mode, two are ON by default, one has no switch; each row records its rule exceptions. Every patch here also applies alone on b12359 / v1.0.0 (git apply --check, 2026-11-15; BoltBeam tests/test_engine_patches.py). Series order = list order; the six apply together in this order. budget = measured size. Gains are against this engine's stock build or the same build with the switch off.",
+ "budget_rule": "measured",
+ "mods": [
+  {
+   "name": "moe-prefill",
+   "patch": "patches/01-moe-prefill.patch",
+   "engine": "llama.cpp",
+   "base": "7592b61d3",
+   "switch": null,
+   "switch_null_why": "default ON, three knobs; stock needs GGML_CUDA_BATCH_GET_STAGING=0 and GGML_CUDA_MMID_PAR_MIN larger than any batch (read from the patch code)",
+   "check": null,
+   "reads": [
+    "GGML_CUDA_MMID_PAR_MIN",
+    "GGML_CUDA_MMQ_ID_J",
+    "GGML_CUDA_BATCH_GET_STAGING",
+    "GGML_CUDA_BATCH_GET_STAGING_MAX_MIB"
+   ],
+   "marker": "GGML_CUDA_MMID_PAR_MIN",
+   "files": [
+    "ggml/src/ggml-cuda/batch-get.cu",
+    "ggml/src/ggml-cuda/mmid.cu",
+    "ggml/src/ggml-cuda/mmq.cu"
+   ],
+   "lines": {
+    "added": 274,
+    "removed": 6
+   },
+   "budget": {
+    "added": 274,
+    "removed": 6
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/llama-expert-table-20261111 (and .md); BoltBeam docs/evidence/llama-patches-20261111/notes/llama-expert-table-20261111.md Levers 3-4",
+     "numbers": "test-backend-ops -o MUL_MAT_ID 967/967 (helper forced, and GGML_CUDA_MMQ_ID_J=128 forced); greedy temp 0, 4 prompts (397-6,311 tokens) and a checkpoint save + restore test: text and top-5 logprobs bitwise identical to the stock build, default --cache-ram and --cache-ram 0",
+     "match": {
+      "what": "greedy temp-0 prompts (397-6,311 tokens): text and top-5 logprobs vs the stock build",
+      "equal": 4,
+      "of": 4
+     }
+    }
+   },
+   "gain": {
+    "value": "engine prompt 5,924 -> 6,455 tok/s at 10k, 4,272 -> 5,114 at 2.7k (client wall 5,342 -> 6,061 and 3,771 -> 4,711)",
+    "unit": "tok/s prefill",
+    "vs": "stock build",
+    "conditions": "RTX 5090 (PCIe), Ryzen 7 5800X, 31 GB RAM, one request at a time; a MoE GGUF on the engine's qwen4exp graph (IQ1_M), -t 8 -b 4096, cold unique-nonce real-text chat prompts, medians of 3 reps x 2 alternating passes; model fully in VRAM, -ub 2048, default --cache-ram; decode 128 tokens 128.3 vs stock 128.9 (unchanged)",
+    "run": "boltbeam-runs/llama-expert-table-20261111"
+   },
+   "exercised_by": "MUL_MAT_ID (MoE expert matmul) prefill on CUDA; measured on one MoE model",
+   "limits": [
+    "GGML_CUDA_MMQ_ID_J (tile width) is a sweep knob, off by default; wider tiles were refuted (expert MMQ 354 -> 395 ms at J=128)",
+    "the staging buffer holds pinned host memory equal to the largest staged span (448 MiB with the RAM prompt cache, 128 MiB with --cache-ram 0)"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: written before the rules (2026-11-11)"
+    },
+    {
+     "rule": "switch",
+     "why": "default ON, three knobs; stock needs GGML_CUDA_BATCH_GET_STAGING=0 and GGML_CUDA_MMID_PAR_MIN larger than any batch (read from the patch code)"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 3,
+    "note": "three parts; 3 hunks change stock lines in mmid.cu, mmq.cu and batch-get.cu to route through the new paths"
+   },
+   "scrubbed_from": [
+    {
+     "sha256": "4d0a47d10e63889f7e2623a43afb35f67d3f2fd2ef4e6910e4510d4ae8f298a1",
+     "what": "header lines naming a model, another engine, an author, a session or a local path removed; the diff body is unchanged except one code comment in 04 (no behaviour change)"
+    },
+    {
+     "sha256": "8d50c7d47b44e24fd8747fdc6b24da2bd16d654f0240a5c943670856055b942b",
+     "what": "header: 'LOCAL PATCH - NEVER UPSTREAM' line replaced by 'Not submitted upstream.'"
+    }
+   ]
+  },
+  {
+   "name": "pinned-copy-stream",
+   "patch": "patches/02-pinned-copy-stream.patch",
+   "engine": "llama.cpp",
+   "base": "7592b61d3",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_WS",
+    "on": "unset or 1",
+    "off": "0",
+    "default": "on"
+   },
+   "check": null,
+   "reads": [
+    "LLAMA_WS_MIN_TOKENS",
+    "LLAMA_WS_PIN_GIB",
+    "LLAMA_WS_PIN_DEBUG",
+    "GGML_CUDA_WS_RING_MIB",
+    "GGML_CUDA_WS_CHUNK_KIB",
+    "GGML_CUDA_WS_SLOTS",
+    "GGML_CUDA_WS_THREADS",
+    "GGML_CUDA_WS_PAGEABLE",
+    "GGML_CUDA_WS_STATS"
+   ],
+   "marker": "GGML_CUDA_WS_RING_MIB",
+   "files": [
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/weight-stream.cu",
+    "ggml/src/ggml-cuda/weight-stream.cuh",
+    "src/llama-context.cpp",
+    "src/llama-context.h"
+   ],
+   "lines": {
+    "added": 474,
+    "removed": 0
+   },
+   "budget": {
+    "added": 474,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/llama-pinned-stream-20261111 (and .md); BoltBeam docs/evidence/llama-patches-20261111/notes/llama-pinned-stream-20261111.md (data/pinned-stream/correct.jsonl)",
+     "numbers": "greedy temp 0, 96 tokens, 4 prompts of 2.6k-9.1k tokens: byte-identical to the stock build (v1 ring, and v2 at LLAMA_WS_PIN_GIB=12)",
+     "match": {
+      "what": "greedy temp-0 prompts (2.6k-9.1k tokens, 96 generated): bytes vs the stock build",
+      "equal": 4,
+      "of": 4
+     }
+    }
+   },
+   "gain": {
+    "value": "engine prompt at 10k: -ncmoe 12 2,757 -> 4,352 (1.58x, PIN 8); -ncmoe 18 2,236 -> 3,897; -ncmoe 24 1,844 -> 3,527 (PIN 12); -cmoe 1,082 -> 1,797 (PIN 4)",
+    "unit": "tok/s prefill, experts in host RAM",
+    "vs": "stock build",
+    "conditions": "RTX 5090 (PCIe), Ryzen 7 5800X, 31 GB RAM, one request at a time; a MoE GGUF on the engine's qwen4exp graph (IQ1_M), -t 8 -b 4096, cold unique-nonce real-text chat prompts, medians of 3 reps x 2 alternating passes; -ub 4096 --cache-ram 0, experts in host RAM (-ncmoe / -cmoe); decode (-cmoe, 128 tokens) unchanged",
+    "run": "boltbeam-runs/llama-pinned-stream-20261111"
+   },
+   "exercised_by": "MoE prefill with expert weights in host RAM (MUL_MAT_ID host weights, batches >= 1,024 tokens); measured on one MoE model",
+   "limits": [
+    "batches under LLAMA_WS_MIN_TOKENS (1,024) take the stock path",
+    "on 31 GB of RAM, -cmoe with 8+ GiB pinned collapses from page faults: keep LLAMA_WS_PIN_GIB <= 4 there",
+    "adds weight-stream.cu/.cuh: re-run cmake so the CUDA glob picks them up"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: written before the rules (2026-11-11)"
+    },
+    {
+     "rule": "default_off",
+     "why": "switch ON by default: unset = the patched path; LLAMA_WS=0 = stock"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "purely additive (0 lines removed)"
+   },
+   "scrubbed_from": [
+    {
+     "sha256": "62e81df621913d9806a762b8b2c3c58f382f7111434b3ec1bbfa6504085019ce",
+     "what": "header lines naming a model, another engine, an author, a session or a local path removed; the diff body is unchanged except one code comment in 04 (no behaviour change)"
+    },
+    {
+     "sha256": "b1edefc1f50c6420b4415305a9d97727bb36b57e002ab42984ac1d71bf82e9e8",
+     "what": "header: 'LOCAL PATCH - NEVER UPSTREAM' line replaced by 'Not submitted upstream.'; architecture name removed from the measured-setup line"
+    }
+   ]
+  },
+  {
+   "name": "server-ckpt-min-head",
+   "patch": "patches/03-server-ckpt-min-head.patch",
+   "engine": "llama.cpp",
+   "base": "7592b61d3",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_SERVER_CKPT_MIN_HEAD",
+    "on": "N > 0 (tokens)"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_SERVER_CKPT_MIN_HEAD",
+   "files": [
+    "tools/server/server-context.cpp"
+   ],
+   "lines": {
+    "added": 9,
+    "removed": 1
+   },
+   "budget": {
+    "added": 9,
+    "removed": 1
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "untested",
+    "evidence": {
+     "run": "boltbeam-runs/llama-expert-table-20261111.md (Lever 'why 1.4x', 'Fix found during the audit')",
+     "numbers": "not bitwise: batch boundaries move; the first argmax divergences are near-ties (top-2 probabilities within 0.01-0.09), the same envelope as stock -ub 2048 vs -ub 4096; no agreement gate run. Checkpoint restore still works (cache_n 2215 on divergent follow-ups)"
+    }
+   },
+   "gain": {
+    "value": "client wall 4,551 -> 5,278 at 10k (+16%), 3,089 -> 4,731 at 2.7k (+53%)",
+    "unit": "tok/s prefill",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 (PCIe), Ryzen 7 5800X, 31 GB RAM, one request at a time; a MoE GGUF on the engine's qwen4exp graph (IQ1_M), -t 8 -b 4096, cold unique-nonce real-text chat prompts, medians of 3 reps x 2 alternating passes; -ncmoe 12 -ub 4096 --cache-ram 0, LLAMA_WS_PIN_GIB=8, on top of 01 and 02",
+    "run": "boltbeam-runs/llama-expert-table-20261111"
+   },
+   "exercised_by": "llama-server chat requests whose template marks a user-message start near the prompt head; the gain is with experts in host RAM",
+   "limits": [
+    "later checkpoints (near the prompt end) are unchanged"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: written before the rules (2026-11-11)"
+    },
+    {
+     "rule": "output",
+     "why": "output not bitwise and no agreement gate: labelled untested"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 1,
+    "note": "one condition line rewritten to read the knob"
+   },
+   "scrubbed_from": [
+    {
+     "sha256": "b908dd12bce8b194563e739c0ad8d95a3f7be76c1053e95446782e651f8afad9",
+     "what": "header lines naming a model, another engine, an author, a session or a local path removed; the diff body is unchanged except one code comment in 04 (no behaviour change)"
+    },
+    {
+     "sha256": "f99e3231d305f7f1d440ec6254198dab745f1c868036361039ec88a7227bd2e1",
+     "what": "header: 'LOCAL PATCH - NEVER UPSTREAM' line replaced by 'Not submitted upstream.'"
+    }
+   ]
+  },
+  {
+   "name": "server-ckpt-tail-only",
+   "patch": "patches/04-server-ckpt-tail-only.patch",
+   "engine": "llama.cpp",
+   "base": "7592b61d3",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_SERVER_CKPT_TAIL_ONLY",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_SERVER_CKPT_TAIL_ONLY",
+   "files": [
+    "tools/server/server-context.cpp"
+   ],
+   "lines": {
+    "added": 7,
+    "removed": 1
+   },
+   "budget": {
+    "added": 7,
+    "removed": 1
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/llama-expert-table-20261111.md ('Close 10k'); BoltBeam docs/evidence/offload-close10k-20261111/README.md",
+     "numbers": "single-request greedy, 4 prompts: bitwise identical to the switch off. Follow-up requests were not compared (see limits)",
+     "match": {
+      "what": "single-request greedy temp-0 prompts vs the switch off",
+      "equal": 4,
+      "of": 4
+     }
+    }
+   },
+   "gain": {
+    "value": "client wall 5,892 -> 6,016 at 10k",
+    "unit": "tok/s prefill",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 (PCIe), Ryzen 7 5800X, 31 GB RAM, one request at a time; a MoE GGUF on the engine's qwen4exp graph (IQ1_M), -t 8 -b 4096, cold unique-nonce real-text chat prompts, medians of 3 reps x 2 alternating passes; -ncmoe 12 -ub 4096 --cache-ram 0, on top of 01, 02, 03 (=256), 05 and GGML_CUDA_WS_SLOTS=24; n=6",
+    "run": "boltbeam-runs/llama-expert-table-20261111"
+   },
+   "exercised_by": "llama-server prompts long enough to take two context checkpoints",
+   "limits": [
+    "a feature trade-off, not a fix: the restore test loses its restore point (cache_n 2215 -> 0); a follow-up that diverges before the last few tokens reprocesses the whole prompt"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: written before the rules (2026-11-11)"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 1,
+    "note": "one condition line rewritten to read the knob; a code comment still names another engine (no number)"
+   },
+   "scrubbed_from": [
+    {
+     "sha256": "7d9d107e4a13e8c711d0d468fb3dd1f02b11a8e6f2d00c07ad50d8fb457869ba",
+     "what": "header lines naming a model, another engine, an author, a session or a local path removed; the diff body is unchanged except one code comment in 04 (no behaviour change)"
+    },
+    {
+     "sha256": "548b504e7396017ca977495e36e5c1198c7603a86e48f8c3bf17f768d9870c41",
+     "what": "header: 'LOCAL PATCH - NEVER UPSTREAM' line replaced by 'Not submitted upstream.'"
+    }
+   ]
+  },
+  {
+   "name": "ple-prefetch-async",
+   "patch": "patches/05-ple-prefetch-async.patch",
+   "engine": "llama.cpp",
+   "base": "7592b61d3",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_PLE_PREFETCH_ASYNC",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_PLE_PREFETCH_ASYNC",
+   "files": [
+    "src/models/qwen4exp.cpp"
+   ],
+   "lines": {
+    "added": 9,
+    "removed": 1
+   },
+   "budget": {
+    "added": 9,
+    "removed": 1
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 9,
+      "removed": 2
+     },
+     "to": {
+      "added": 9,
+      "removed": 1
+     },
+     "why": "tools/check.py now stops the header at the first diff line: a header line starting with '-' (\"-106 ms\") had been counted as a removed line",
+     "date": "2026-11-15"
+    }
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/llama-expert-table-20261111.md; BoltBeam docs/evidence/offload-audit-20261111/README.md",
+     "numbers": "greedy temp 0, 4 prompts + the checkpoint-restore test: text and top-5 logprobs bitwise identical to the switch off",
+     "match": {
+      "what": "greedy temp-0 prompts: text and top-5 logprobs vs the switch off",
+      "equal": 4,
+      "of": 4
+     }
+    }
+   },
+   "gain": {
+    "value": "client wall 5,105 -> 5,397 at 10k (wall ms -58 / -106, passes 1 / 2)",
+    "unit": "tok/s prefill",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 (PCIe), Ryzen 7 5800X, 31 GB RAM, one request at a time; a MoE GGUF on the engine's qwen4exp graph (IQ1_M), -t 8 -b 4096, cold unique-nonce real-text chat prompts, medians of 3 reps x 2 alternating passes; -ncmoe 12 -ub 4096 --cache-ram 0, LLAMA_WS_PIN_GIB=8, LLAMA_SERVER_CKPT_MIN_HEAD=256, on top of 01, 02, 03",
+    "run": "boltbeam-runs/llama-expert-table-20261111"
+   },
+   "exercised_by": "graphs with a per-layer-embedding (PLE) n-gram table read through mmap (engine architecture file qwen4exp)",
+   "limits": [
+    "one detached thread per ubatch; a prefetch still running at shutdown only madvises",
+    "~200 more major faults per 10k request"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: written before the rules (2026-11-11)"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 1,
+    "note": "the prefetch branch is split in two"
+   },
+   "scrubbed_from": [
+    {
+     "sha256": "b4b981a2ab9d6ccf1f99a928bc17981a1aa1776fd1786252627a5b811cf03c3b",
+     "what": "header lines naming a model, another engine, an author, a session or a local path removed; the diff body is unchanged except one code comment in 04 (no behaviour change)"
+    },
+    {
+     "sha256": "f33f83e75587c0fd4ae89774a71626d584ba2f82d78f0c0c4e2f03879b882f1d",
+     "what": "header: 'LOCAL PATCH - NEVER UPSTREAM' line replaced by 'Not submitted upstream.'"
+    }
+   ]
+  },
+  {
+   "name": "mtp-sidecar-subfolder",
+   "patch": "patches/06-mtp-sidecar-subfolder.patch",
+   "engine": "llama.cpp",
+   "base": "7592b61d3",
+   "switch": null,
+   "switch_null_why": "a file lookup: adds a search location for -hf MTP sidecars and logs the pick; nothing to switch at run time",
+   "check": null,
+   "reads": [],
+   "marker": "no MTP head (mtp-*.gguf) was found",
+   "files": [
+    "common/arg.cpp",
+    "common/download.cpp"
+   ],
+   "lines": {
+    "added": 32,
+    "removed": 5
+   },
+   "budget": {
+    "added": 32,
+    "removed": 5
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 32,
+      "removed": 7
+     },
+     "to": {
+      "added": 32,
+      "removed": 5
+     },
+     "why": "the git format-patch header, diffstat separator and signature were removed (author and session lines scrubbed) and tools/check.py now stops the header at the first diff line; they had been counted as removed lines",
+     "date": "2026-11-15"
+    }
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "untested",
+    "evidence": {
+     "run": null,
+     "numbers": "no output comparison was run. It changes which MTP sidecar file loads when none is beside the model (stock: none, the server runs without MTP)"
+    }
+   },
+   "gain": null,
+   "exercised_by": "-hf downloads whose repo keeps the MTP head in a subfolder named after the sidecar kind",
+   "limits": [
+    "a file in the model's own directory still wins"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: written before the rules (2026-11-11)"
+    },
+    {
+     "rule": "switch",
+     "why": "a file lookup: adds a search location for -hf MTP sidecars and logs the pick; nothing to switch at run time"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 3,
+    "note": "a git format-patch (its header is counted as patch lines)"
+   },
+   "scrubbed_from": {
+    "sha256": "a972315fb72af21c2230e814ab8169367255b8e542738522655812ad87c7b910",
+    "what": "header lines naming a model, another engine, an author, a session or a local path removed; the diff body is unchanged except one code comment in 04 (no behaviour change)"
+   }
+  }
+ ],
+ "parked": [
+  {
+   "name": "mmid-helper-par",
+   "patch": "parked/mmid-helper-par.patch",
+   "engine": "llama.cpp",
+   "base": "7592b61d3",
+   "switch": null,
+   "switch_null_why": "default ON; GGML_CUDA_MMID_PAR_MIN above any batch = stock",
+   "check": null,
+   "reads": [
+    "GGML_CUDA_MMID_PAR_MIN"
+   ],
+   "marker": "GGML_CUDA_MMID_PAR_MIN",
+   "files": [
+    "ggml/src/ggml-cuda/mmid.cu"
+   ],
+   "lines": {
+    "added": 136,
+    "removed": 0
+   },
+   "budget": {
+    "added": 136,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/llama-expert-table-20261111 (and .md)",
+     "numbers": "test-backend-ops -o MUL_MAT_ID with GGML_CUDA_MMID_PAR_MIN=0: 967/967; greedy temp 0, 4 prompts (397-6,311 tokens, 96 generated): text and top-5 logprobs bitwise identical to stock",
+     "match": {
+      "what": "greedy temp-0 prompts (397-6,311 tokens, 96 generated): text and top-5 logprobs vs stock",
+      "equal": 4,
+      "of": 4
+     }
+    }
+   },
+   "gain": {
+    "value": "engine prompt 5,948 -> 6,163 at 10k (+3.6%); 2.7k within noise; mm_ids 82.1 -> 26.2 ms",
+    "unit": "tok/s prefill",
+    "vs": "stock build",
+    "conditions": "RTX 5090 (PCIe), Ryzen 7 5800X, 31 GB RAM, one request at a time; a MoE GGUF on the engine's qwen4exp graph (IQ1_M), -t 8 -b 4096, cold unique-nonce real-text chat prompts, medians of 3 reps x 2 alternating passes; model fully in VRAM, -ub 2048",
+    "run": "boltbeam-runs/llama-expert-table-20261111"
+   },
+   "exercised_by": "MUL_MAT_ID (MoE expert matmul) prefill on CUDA; measured on one MoE model",
+   "limits": [
+    "the routing sort only: part 1 of 01-moe-prefill"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: written before the rules (2026-11-11)"
+    },
+    {
+     "rule": "switch",
+     "why": "default ON; GGML_CUDA_MMID_PAR_MIN above any batch = stock"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "purely additive (0 lines removed)"
+   },
+   "scrubbed_from": [
+    {
+     "sha256": "f6f83fa2529ae799ed18be8a248337c4de35c8340308fa0f188fc397cec77796",
+     "what": "header lines naming a model, another engine, an author, a session or a local path removed; the diff body is unchanged except one code comment in 04 (no behaviour change)"
+    },
+    {
+     "sha256": "b6edde8af5670f9e5f54599e4611a953eaf0590c84b0e133aaf759f4400a096a",
+     "what": "header: 'LOCAL PATCH - NEVER UPSTREAM' line replaced by 'Not submitted upstream.'"
+    }
+   ],
+   "parked_why": "a subset of 01-moe-prefill (its part 1, the routing sort, alone), kept as its record. It conflicts with 01 in mmid.cu, so it is not in the series; it applies alone on the base."
+  }
+ ],
+ "archived": [
+  {
+   "name": "ple-pipeline",
+   "kind": "decommissioned",
+   "date": "2026-11-14",
+   "patch": "archive/ple-pipeline.patch",
+   "switch": "LLAMA_PLE_PIPELINE",
+   "written_on": "7592b61d3 with 05-ple-prefetch-async applied first (both edit src/models/qwen4exp.cpp); it applies there",
+   "why": "Opt-in per-layer-embedding pipeline: raw IQ4_NL rows copied on host threads, dequantized on the GPU. Bitwise identical (4 prompts, restore test, tensor sums, test-backend-ops GET_ROWS 216/216). Gain at -ncmoe 12: 10k 5,888 -> 6,012 (one outlier rep), 2.7k no gain (5,198 -> 4,923), with 2.3x the major faults. Decommissioned 2026-11-14: it did not apply to the llama.cpp pin b12359 (v1.0.0).",
+   "evidence": "BoltBeam git db96468e (added), 0308b68a (removed); BoltBeam docs/evidence/offload-close10k-20261111/README.md",
+   "lines": {
+    "added": 61,
+    "removed": 0
+   },
+   "sha256": "450d1445a29dc5cc7006532a9d238777c43f08e08ff341fda45fc59051486c0b",
+   "files": [
+    "src/models/qwen4exp.cpp"
+   ],
+   "scrubbed_from": [
+    {
+     "sha256": "1ec6fdf7e46d6c2200e37024281c8500b9d40bbfa174724a55327afc107106cb",
+     "what": "header lines naming a model, another engine, an author, a session or a local path removed; the diff body is unchanged except one code comment in 04 (no behaviour change)"
+    },
+    {
+     "sha256": "f7c883d75a31cb3ee817069ed607c9549abf6122b4f6df15705ac70c048f722d",
+     "what": "header: 'LOCAL PATCH - NEVER UPSTREAM' line replaced by 'Not submitted upstream.'"
+    }
+   ]
+  }
+ ],
+ "tested_trees": [],
+ "tested_trees_none": {
+  "why": "the measured trees were git worktrees of a local llama.cpp clone and are gone"
+ },
+ "also_applies_to": [
+  {
+   "version": "1.0.0",
+   "how": "each series and parked patch alone (git apply --check on the 1.0.0 base)"
+  }
+ ]
+}

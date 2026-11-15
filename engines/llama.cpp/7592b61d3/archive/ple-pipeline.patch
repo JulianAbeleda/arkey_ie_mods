@@ -1,0 +1,122 @@
+Not submitted upstream.
+llama-ple-pipeline.patch, 2026-11-11. Base: llama.cpp master 7592b61d3 WITH llama-ple-prefetch-async.patch applied first
+(both edit src/models/qwen4exp.cpp; this file only). Apply: git apply llama-ple-prefetch-async.patch && git apply llama-ple-pipeline.patch
+OPT-IN, DEFAULT OFF: LLAMA_PLE_PIPELINE=1 (LLAMA_PLE_PIPELINE_THREADS, default 8).
+What: the PLE n-gram embedding was a CPU GET_ROWS (IQ4_NL rows -> 4-byte floats, 42 MB per 4096-token ubatch) in the
+graph's first split, plus a 42 MB upload. With the knob on, set_input copies the table's RAW rows of each token's heads
+(90 B each; one token's 16 heads = 2,560 values, whole 256-value blocks) on 8 host threads into a [2560, n_tokens] input
+of the table's type (5.9 MB per 4096 tokens), and the GPU dequantizes it with GET_ROWS over an iota index. The layout
+and the dequant arithmetic (fp16 scale x int8 table value) are the same as stock. Falls back to stock when the table
+is not host memory or its rows are not whole blocks.
+Not an overlap: each llama_decode call here is one ubatch, the server gives llama the next call's tokens only
+at that call, and the graph alloc waits for the GPU. So the gather is made cheap rather than hidden behind GPU work.
+Correctness: greedy --temp 0, 4 prompts, bitwise identical to stock (-ncmoe 12, -ub 4096); greedy + checkpoint-restore
+test bitwise identical to the same build without the knob; llama-eval-callback tensor sums identical through the whole
+model; test-backend-ops GET_ROWS 216/216 on CUDA (incl. iq4_nl).
+Measured (RTX 5090, a MoE GGUF (IQ1_M), -t 8 -b 4096 -ub 4096 --cache-ram 0, checkpoints on, with pinned-copy-stream v2,
+llama-moe-prefill, llama-server-ckpt-min-head (=256), llama-ple-prefetch-async, GGML_CUDA_WS_SLOTS=24; cold chat text,
+wall tok/s):
+  -ncmoe 12, 10k (n=6): off 5,888 [5,829-5,917] -> on 6,012 [4,791-6,062] (5 of 6 reps above off's max; the outlier is a
+    first rep with 879 major faults)
+  -ncmoe 12, 2.7k (n=6): off 5,198 [3,521-5,334] -> on 4,923 [3,494-5,471] (no gain; both have the slow first request)
+  -ncmoe 6, 10k (n=3): 5,935 -> 6,036;  -ncmoe 24, 10k (n=3): 5,308 -> 5,431;  2.7k unchanged at both
+  BoltBeam time-budget, -ncmoe 12 10k: 1,693.6 -> 1,645.4 ms (host outside the GPU work 108.3 -> 73.9, idle 112.2 -> 98.9)
+Caveat: about 2.3x the major faults per request (~470 vs ~210). The gather reads the mmap right after the async prefetch
+is issued, so a cold page-cache state costs more here than in the stock path.
+
+--- a/src/models/qwen4exp.cpp	2026-11-11 19:34:30.844391032 -0500
++++ b/src/models/qwen4exp.cpp	2026-11-11 19:34:30.846391042 -0500
+@@ -6,6 +6,7 @@
+ #include <algorithm>
+ #include <cstdlib>
+ #include <thread>
++#include <cstring>
+ #include <cinttypes>
+ 
+ // bad metadata must be catchable: GGML_ASSERT aborts the whole process
+@@ -1285,11 +1286,21 @@
+ 
+     bool can_reuse(const llm_graph_params & params) override {
+         mctx = static_cast<const llama_memory_hybrid_idx_context *>(params.mctx)->get_attn();
++        if (raw) {
++            return raw->ne[1] == (int64_t) params.ubatch.n_tokens;
++        }
+         return rows->ne[0] == (int64_t) model.hparams.ple_n_heads * params.ubatch.n_tokens;
+     }
+ 
+     ggml_tensor * rows = nullptr;   // I32 [ple_n_heads * n_tokens]
+ 
++    // LOCAL PATCH (llama-ple-pipeline), LLAMA_PLE_PIPELINE=1: the host gathers the table's RAW (quantized) rows of each
++    // token's heads into `raw` ([n_heads * head_dim, n_tokens] of the table's type) on several threads, and the GPU
++    // dequantizes them with GET_ROWS over `iota`, instead of a CPU GET_ROWS that writes 4-byte floats.
++    ggml_tensor * raw  = nullptr;
++    ggml_tensor * iota = nullptr;
++    std::vector<uint8_t> raw_buf;
++
+     const llama_model & model;
+ 
+     // the predecessor tokens live in the attention KV cells (ext.tok)
+@@ -1375,6 +1386,36 @@
+         }
+     }
+ 
++    if (raw) {
++        // gather the raw rows: token i's heads are contiguous, in the order of idx (i * n_heads + h)
++        const ggml_tensor * ple = model.per_layer_tok_embd;
++        const size_t row_bytes = ggml_row_size(ple->type, ple->ne[0]);
++        const char * base = (const char *) ple->data;
++        const size_t nb1 = ple->nb[1];
++        raw_buf.resize(idx.size() * row_bytes);
++        uint8_t * dst = raw_buf.data();
++        const int64_t n = (int64_t) idx.size();
++        static const int n_thr = [] { const char * e = getenv("LLAMA_PLE_PIPELINE_THREADS"); return e ? std::max(1, atoi(e)) : 8; }();
++        auto work = [&](int t, int stride) {
++            for (int64_t k = t; k < n; k += stride) {
++                memcpy(dst + k * row_bytes, base + (size_t) idx[k] * nb1, row_bytes);
++            }
++        };
++        if (n >= 4096 && n_thr > 1) {
++            std::vector<std::thread> th;
++            for (int t = 1; t < n_thr; ++t) th.emplace_back(work, t, n_thr);
++            work(0, n_thr);
++            for (auto & x : th) x.join();
++        } else {
++            work(0, 1);
++        }
++        ggml_backend_tensor_set(raw, raw_buf.data(), 0, raw_buf.size());
++        std::vector<int32_t> io(n_tokens);
++        for (int64_t i = 0; i < n_tokens; ++i) io[i] = (int32_t) i;
++        ggml_backend_tensor_set(iota, io.data(), 0, io.size() * sizeof(int32_t));
++        return;
++    }
++
+     ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*ggml_element_size(rows));
+ }
+ 
+@@ -1416,6 +1457,26 @@
+     // the attention cells see every ubatch regardless of the layer types
+     auto ple_inp = std::make_unique<llm_graph_input_qwen4exp_ple>(model, mctx_hyb->get_attn());
+ 
++    // LLAMA_PLE_PIPELINE=1: raw rows gathered on the host, dequantized on the GPU (see llm_graph_input_qwen4exp_ple)
++    static const bool ple_pipeline_env = [] { const char * e = getenv("LLAMA_PLE_PIPELINE"); return e && atoi(e) != 0; }();
++    const ggml_tensor * tab = model.per_layer_tok_embd;
++    const int64_t width = hparams.ple_head_dim * n_heads;
++    const bool ple_pipeline = ple_pipeline_env && tab->data && tab->buffer && ggml_backend_buffer_is_host(tab->buffer) &&
++        tab->ne[0] == (int64_t) hparams.ple_head_dim && tab->ne[0] % ggml_blck_size(tab->type) == 0 &&
++        ggml_row_size(tab->type, tab->ne[0]) * n_heads == ggml_row_size(tab->type, width);
++    if (ple_pipeline) {
++        ple_inp->raw = ggml_new_tensor_2d(ctx0, tab->type, width, n_tokens);
++        ggml_set_input(ple_inp->raw);
++        ple_inp->iota = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
++        ggml_set_input(ple_inp->iota);
++        ggml_tensor * raw  = ple_inp->raw;
++        ggml_tensor * iota = ple_inp->iota;
++        res->add_input(std::move(ple_inp));
++        ggml_tensor * emb = ggml_get_rows(ctx0, raw, iota);   // [width, n_tokens] f32, the layout below
++        cb(emb, "ple_embd", -1);
++        return emb;
++    }
++
+     ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
+     ggml_set_input(ple_inp->rows);
+     ggml_tensor * rows = ple_inp->rows;

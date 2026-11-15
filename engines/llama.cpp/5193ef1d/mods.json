@@ -1,0 +1,49 @@
+{
+ "schema": "arkey_ie_mods.mods.v1",
+ "engine": "llama.cpp",
+ "version": "5193ef1d",
+ "base": {
+  "kind": "git_commit",
+  "tag": null,
+  "release": null,
+  "commit": "5193ef1d4f7c95b006ab3b9f857ed27be9a63235",
+  "describe": "b12367-5-g5193ef1d"
+ },
+ "about": "Archive only: a decommissioned patch written on llama.cpp master 5193ef1d (an AMD Radeon AI PRO R9700 machine). No series.",
+ "budget_rule": "measured",
+ "mods": [],
+ "parked": [],
+ "archived": [
+  {
+   "name": "iq1m-mmq",
+   "kind": "decommissioned",
+   "date": "2026-11-14",
+   "patch": "archive/iq1m-mmq.patch",
+   "switch": null,
+   "written_on": "llama.cpp master 5193ef1d (b12367-5); it applies there (git apply --check, 2026-11-15), not on b12359 / v1.0.0",
+   "why": "MMQ for IQ1_M in the Q3_K layout (stock MMQ has IQ1_S only; IQ1_M expert matrices fell back to dequantize + hipBLAS past 8 tokens). No switch: always on once applied. Correct on gfx1201: test-backend-ops MUL_MAT 49/49, MUL_MAT_ID 4/4 for iq1_m against the CPU. Speed on a model never measured. Decommissioned 2026-11-14: it does not apply to the pin b12359 (v1.0.0); it can be restored and rebased on an AMD Radeon AI PRO R9700 machine if a model needs it.",
+   "evidence": "BoltBeam git 88cbc557 (added, message holds the test counts), 81cc9688 (removed again after a merge brought it back); BoltBeam tools/patches/README.md (Decommissioned), docs/release-0325-20261114.md",
+   "lines": {
+    "added": 206,
+    "removed": 1
+   },
+   "sha256": "19cffb16f7ebfc7532dda9e01cbb0ec9c61af6d18c978727e04f39809960baa3",
+   "files": [
+    "ggml/src/ggml-cuda/mmq-config-ampere.cuh",
+    "ggml/src/ggml-cuda/mmq-config-cdna.cuh",
+    "ggml/src/ggml-cuda/mmq-config-gcn.cuh",
+    "ggml/src/ggml-cuda/mmq-config-pascal-dp4a.cuh",
+    "ggml/src/ggml-cuda/mmq-config-pascal-older.cuh",
+    "ggml/src/ggml-cuda/mmq-config-rdna2.cuh",
+    "ggml/src/ggml-cuda/mmq-config-rdna3-5.cuh",
+    "ggml/src/ggml-cuda/mmq-config-rdna3.cuh",
+    "ggml/src/ggml-cuda/mmq-config-rdna4.cuh",
+    "ggml/src/ggml-cuda/mmq-load-tiles.cuh",
+    "ggml/src/ggml-cuda/mmq.cu",
+    "ggml/src/ggml-cuda/mmq.cuh",
+    "ggml/src/ggml-cuda/template-instances/generate_cu_files.py",
+    "ggml/src/ggml-cuda/template-instances/mmq-instance-iq1_m.cu"
+   ]
+  }
+ ]
+}

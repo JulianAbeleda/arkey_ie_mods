@@ -1,0 +1,166 @@
+{
+ "schema": "arkey_ie_mods.mods.v1",
+ "engine": "vllm",
+ "version": "0.31.0",
+ "base": {
+  "kind": "pip_version_wheel_hash",
+  "package": "vllm",
+  "version": "0.31.0",
+  "record_sha256": "356306f7f9ddef6995b32de8139612e5a287e6f8484d45a540a96e7b3f2c4819",
+  "record_note": "sha256 of the installed dist-info RECORD (names the exact build) of a local CUDA install, Tag cp38-abi3-linux_x86_64. Not the measured build: the runs used 0.31.0+rocm723",
+  "wheel_sha256": null,
+  "wheel_why": "no wheel file was kept and none was recorded"
+ },
+ "about": "vLLM mods. Applied with patch -p1 in vLLM's site-packages folder (--dry-run first); reverted with patch -R -p1. Neither has a switch or a check mode: recorded as rule exceptions. budget = measured size.",
+ "budget_rule": "measured",
+ "mods": [
+  {
+   "name": "split-kv-verify",
+   "patch": "patches/01-split-kv-verify.patch",
+   "engine": "vllm",
+   "base": "0.31.0",
+   "switch": null,
+   "switch_null_why": "vLLM has no switch for it: applied = on, patch -R -p1 = stock",
+   "check": null,
+   "reads": [],
+   "marker": "MAX_3D_QUERY_LEN",
+   "files": [
+    "vllm/v1/attention/ops/triton_unified_attention.py"
+   ],
+   "lines": {
+    "added": 4,
+    "removed": 1
+   },
+   "budget": {
+    "added": 4,
+    "removed": 1
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "untested",
+    "evidence": {
+     "run": "BoltBeam docs/evidence/mtp-27b-rtx5090-r9700-20261027 (README.md and r9700/sources.md: the author's recorded results; no raw run files were kept)",
+     "numbers": "output matches the 2D kernel to 5e-4 (not bitwise); no agreement gate run"
+    }
+   },
+   "gain": {
+    "value": "MTP k=2 decode over 2,900-3,000 tokens of context: stock 84 -> 51 tok/s, patched ~90 flat; short context 92.3 (k=2), 86.0 (k=3)",
+    "unit": "tok/s decode",
+    "vs": "stock vLLM 0.31.0",
+    "conditions": "2 x R9700 (RDNA4), TP=2, vLLM 0.31.0+rocm723, TRITON_ATTN, GPU_MAX_HW_QUEUES=1, a dense model in Quark W4A16 with an MTP head (head size 256), 4 text prompts x 256 tokens, greedy",
+    "run": "BoltBeam docs/evidence/mtp-27b-rtx5090-r9700-20261027 (README.md and r9700/sources.md: the author's recorded results; no raw run files were kept)",
+    "basis": "self-reported: the author's recorded results (commit message and setup doc); no raw run files were kept"
+   },
+   "exercised_by": "TRITON_ATTN unified attention with a short multi-token query (an MTP / speculative verify of up to 8 tokens) when the batch's tokens fit the split-KV scratch rows",
+   "limits": [
+    "queries over 8 tokens, or batches past seq_threshold_3D, keep the stock 2D kernel",
+    "measured on vLLM 0.31.0+rocm723 (2 x R9700); the local CUDA 0.31.0 install the check applies the patch to is a different build and was not measured"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode"
+    },
+    {
+     "rule": "switch",
+     "why": "vLLM has no switch for it: applied = on, patch -R -p1 = stock"
+    },
+    {
+     "rule": "output",
+     "why": "output not bitwise and no agreement gate: labelled untested"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 1,
+    "note": "one condition rewritten (the 3D-kernel gate)"
+   },
+   "scrubbed_from": {
+    "sha256": "9d93b47cba7eeb5d953d67ae9d14899026a88f9f61703458e8b4764ebe090b14",
+    "what": "header lines naming a model, another engine, an author or a session removed; vLLM: modification notice added; diff body unchanged except one code comment in 04"
+   }
+  },
+  {
+   "name": "quark-lm-head",
+   "patch": "patches/02-quark-lm-head.patch",
+   "engine": "vllm",
+   "base": "0.31.0",
+   "switch": null,
+   "switch_null_why": "vLLM has no switch for it: applied = on, patch -R -p1 = stock",
+   "check": null,
+   "reads": [],
+   "marker": "ParallelLMHead",
+   "files": [
+    "vllm/model_executor/layers/quantization/quark/quark.py"
+   ],
+   "lines": {
+    "added": 7,
+    "removed": 1
+   },
+   "budget": {
+    "added": 7,
+    "removed": 1
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "untested",
+    "evidence": {
+     "run": "BoltBeam docs/evidence/mtp-27b-rtx5090-r9700-20261027 (README.md and r9700/sources.md: the author's recorded results; no raw run files were kept)",
+     "numbers": "with a checkpoint whose config excludes lm_head nothing changes by construction (not run). With the int4-head copy from tools/quark_lm_head_int4.py: 98.0% top-1 agreement with the bf16 head, perplexity 1.228 -> 1.242; that is the checkpoint's effect, and no agreement gate was run"
+    }
+   },
+   "gain": {
+    "value": "0 by itself",
+    "unit": "-",
+    "vs": "stock vLLM 0.31.0",
+    "conditions": "it only lets vLLM load a checkpoint whose lm_head is quantized. The int4-head checkpoint it enables (tools/quark_lm_head_int4.py): lm_head 2.54 -> 0.66 GB; decode 56.1 -> 61.2 tok/s without MTP, 92.3 -> 115.5 at MTP k=2 (split-kv-verify on in both), vs the bf16 head; 98.0% top-1 agreement, perplexity 1.228 -> 1.242 (2 x R9700, TP=2, a dense model with an MTP head)",
+    "run": "BoltBeam docs/evidence/mtp-27b-rtx5090-r9700-20261027 (README.md and r9700/sources.md: the author's recorded results; no raw run files were kept)",
+    "basis": "self-reported: the author's recorded results; no raw run files were kept"
+   },
+   "exercised_by": "Quark-quantized checkpoints whose lm_head is quantized (not in the config's exclude list)",
+   "limits": [
+    "it only matters with a checkpoint that quantizes lm_head; vLLM 0.33.0 loads such a copy only with this patch reapplied (2026-11-13; not checked here)",
+    "measured on vLLM 0.31.0+rocm723 (2 x R9700); the local CUDA 0.31.0 install the check applies the patch to is a different build and was not measured"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode"
+    },
+    {
+     "rule": "switch",
+     "why": "vLLM has no switch for it: applied = on, patch -R -p1 = stock"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 1,
+    "note": "one condition widened (LinearBase -> LinearBase or ParallelLMHead)"
+   },
+   "scrubbed_from": {
+    "sha256": "eee40198490d891f162ac1d448e6a82484f867ff4fb8367ba09af787d7858e72",
+    "what": "header lines naming a model, another engine, an author or a session removed; vLLM: modification notice added; diff body unchanged except one code comment in 04"
+   }
+  }
+ ],
+ "parked": [],
+ "archived": [],
+ "tools": [
+  {
+   "path": "tools/quark_lm_head_int4.py",
+   "sha256": "c6ad3dc628099ab96920d2bef16411a40f5affaf0a569f3381896602b9ef4f8b",
+   "needs": [
+    "quark-lm-head"
+   ],
+   "what": "SRC DST: a copy of a single-file Quark W4A16 checkpoint with lm_head quantized like its linear layers (int4 symmetric, groups of 128, scale amax / 7.5, AWQ nibble order). Needs torch and safetensors. Not a patch."
+  }
+ ],
+ "tested_trees": [],
+ "tested_trees_none": {
+  "why": "the measured runs used vLLM 0.31.0+rocm723 on an AMD (2 x R9700) machine; the local CUDA install this check applies to is a different build and was not measured"
+ }
+}

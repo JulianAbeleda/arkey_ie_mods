@@ -1,0 +1,504 @@
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index fed14ddf..d4d8d6d1 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -27,6 +27,7 @@
+ #include "ggml-cuda/cumsum.cuh"
+ #include "ggml-cuda/diag.cuh"
+ #include "ggml-cuda/fattn.cuh"
++#include "ggml-cuda/kvhost.cuh"
+ #include "ggml-cuda/fp8.cuh"
+ #include "ggml-cuda/fwht.cuh"
+ #include "ggml-cuda/getrows.cuh"
+@@ -945,6 +946,7 @@ struct ggml_backend_cuda_buffer_context {
+     int device;
+     void * dev_ptr = nullptr;
+     std::string name;
++    ggml_cuda_kvhost * kvh = nullptr; // LLAMA_KV_HOST_OLD: VMM buffer with host-backed granules
+ 
+     ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
+         device(device), dev_ptr(dev_ptr),
+@@ -952,7 +954,11 @@ struct ggml_backend_cuda_buffer_context {
+     }
+ 
+     ~ggml_backend_cuda_buffer_context() {
+-        CUDA_CHECK(cudaFree(dev_ptr));
++        if (kvh) {
++            ggml_cuda_kvhost_destroy(kvh);
++        } else {
++            CUDA_CHECK(cudaFree(dev_ptr));
++        }
+     }
+ };
+ 
+@@ -1214,6 +1220,28 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
+     return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
+ }
+ 
++// LLAMA_KV_HOST_OLD: a CUDA buffer whose granules are backed by device or pinned host memory (kvhost.cu)
++static ggml_backend_buffer_t ggml_backend_cuda_kvhost_buffer_alloc(ggml_backend_buffer_type_t buft, size_t size, size_t n_dev) {
++    ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *)buft->context;
++    void * base = nullptr;
++    ggml_cuda_kvhost * kvh = ggml_cuda_kvhost_create(buft_ctx->device, size, n_dev, &base);
++    ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, base);
++    ctx->kvh = kvh;
++    return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
++}
++
++static ggml_cuda_kvhost * ggml_backend_cuda_buffer_kvhost(ggml_backend_buffer_t buffer) {
++    return buffer && ggml_backend_buffer_is_cuda(buffer) ? ((ggml_backend_cuda_buffer_context *) buffer->context)->kvh : nullptr;
++}
++
++static void ggml_backend_cuda_kvhost_set_regions(ggml_backend_buffer_t buffer, int n, const size_t * off, const size_t * row, const int64_t * ncell) {
++    ggml_cuda_kvhost_set_regions(ggml_backend_cuda_buffer_kvhost(buffer), n, off, row, ncell);
++}
++
++static int ggml_backend_cuda_kvhost_place(ggml_backend_buffer_t buffer, int64_t lo, int64_t hi) {
++    return ggml_cuda_kvhost_place(ggml_backend_cuda_buffer_kvhost(buffer), lo, hi);
++}
++
+ static size_t ggml_backend_cuda_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+     return 128;
+ 
+@@ -3006,6 +3034,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
+             break;
+         case GGML_OP_FLASH_ATTN_EXT:
+             ggml_cuda_flash_attn_ext(ctx, dst);
++            if (ggml_cuda_kvhost_check_every() && ggml_backend_cuda_buffer_kvhost(dst->src[1]->buffer)) {
++                ggml_cuda_kvhost_check_fa(ctx, dst);
++            }
+             break;
+         case GGML_OP_CROSS_ENTROPY_LOSS:
+             ggml_cuda_cross_entropy_loss(ctx, dst);
+@@ -6873,6 +6904,15 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+     if (strcmp(name, "ggml_backend_get_features") == 0) {
+         return (void *)ggml_backend_cuda_get_features;
+     }
++    if (strcmp(name, "ggml_backend_cuda_kvhost_buffer_alloc") == 0) {
++        return (void *)ggml_backend_cuda_kvhost_buffer_alloc;
++    }
++    if (strcmp(name, "ggml_backend_cuda_kvhost_set_regions") == 0) {
++        return (void *)ggml_backend_cuda_kvhost_set_regions;
++    }
++    if (strcmp(name, "ggml_backend_cuda_kvhost_place") == 0) {
++        return (void *)ggml_backend_cuda_kvhost_place;
++    }
+     return nullptr;
+ }
+ 
+diff --git a/ggml/src/ggml-cuda/kvhost.cu b/ggml/src/ggml-cuda/kvhost.cu
+new file mode 100644
+index 00000000..4fdd5068
+--- /dev/null
++++ b/ggml/src/ggml-cuda/kvhost.cu
+@@ -0,0 +1,241 @@
++#include "kvhost.cuh"
++#include "fattn.cuh"
++
++#include <cuda.h>
++#include <algorithm>
++#include <climits>
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++
++#define KVH_CU(x) do { CUresult e_ = (x); if (e_ != CUDA_SUCCESS) { const char * s_ = nullptr; cuGetErrorString(e_, &s_); \
++    GGML_ABORT("kvhost: %s failed: %s", #x, s_ ? s_ : "?"); } } while (0)
++
++struct ggml_cuda_kvhost {
++    int device;
++    size_t G;          // granule bytes
++    size_t ng;         // granules
++    CUdeviceptr va;    // the buffer, mixed backing
++    CUdeviceptr hva;   // all host granules, for the copies
++    std::vector<CUmemGenericAllocationHandle> hhost;  // per granule
++    std::vector<CUmemGenericAllocationHandle> hdev;   // per granule, 0 when host-backed
++    std::vector<CUmemGenericAllocationHandle> dfree;  // unmapped device granules
++    std::vector<int64_t> cmin, cmax;                  // cell range per granule (cmin > cmax: no cells)
++    size_t n_dev_total = 0;
++    bool   check = false;
++    int64_t n_moves = 0;
++};
++
++static CUmemAccessDesc kvh_access(int device) {
++    CUmemAccessDesc a = {};
++    a.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
++    a.location.id   = device;
++    a.flags         = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
++    return a;
++}
++
++static void kvh_map(ggml_cuda_kvhost * k, size_t g, CUmemGenericAllocationHandle h) {
++    const CUmemAccessDesc a = kvh_access(k->device);
++    KVH_CU(cuMemMap(k->va + g*k->G, k->G, 0, h, 0));
++    KVH_CU(cuMemSetAccess(k->va + g*k->G, k->G, &a, 1));
++}
++
++ggml_cuda_kvhost * ggml_cuda_kvhost_create(int device, size_t size, size_t n_dev, void ** base) {
++    ggml_cuda_set_device(device);
++    auto * k = new ggml_cuda_kvhost();
++    k->device = device;
++    const char * ck = getenv("LLAMA_KV_HOST_OLD_CHECK");
++    k->check = ck && atoi(ck) > 0;
++
++    CUmemAllocationProp pd = {};
++    pd.type = CU_MEM_ALLOCATION_TYPE_PINNED; pd.location.type = CU_MEM_LOCATION_TYPE_DEVICE; pd.location.id = device;
++    CUmemAllocationProp ph = {};
++    ph.type = CU_MEM_ALLOCATION_TYPE_PINNED; ph.location.type = CU_MEM_LOCATION_TYPE_HOST; ph.location.id = 0;
++    size_t gd = 0, gh = 0;
++    KVH_CU(cuMemGetAllocationGranularity(&gd, &pd, CU_MEM_ALLOC_GRANULARITY_MINIMUM));
++    KVH_CU(cuMemGetAllocationGranularity(&gh, &ph, CU_MEM_ALLOC_GRANULARITY_MINIMUM));
++    k->G  = std::max(gd, gh);
++    k->ng = (std::max<size_t>(size, 1) + k->G - 1) / k->G;
++    n_dev = std::min(n_dev, k->ng);
++
++    KVH_CU(cuMemAddressReserve(&k->va,  k->ng*k->G, k->G, 0, 0));
++    KVH_CU(cuMemAddressReserve(&k->hva, k->ng*k->G, k->G, 0, 0));
++    k->hhost.resize(k->ng);
++    k->hdev.assign(k->ng, 0);
++    const CUmemAccessDesc a = kvh_access(device);
++    for (size_t g = 0; g < k->ng; ++g) {
++        KVH_CU(cuMemCreate(&k->hhost[g], k->G, &ph, 0));
++        KVH_CU(cuMemMap(k->hva + g*k->G, k->G, 0, k->hhost[g], 0));
++        kvh_map(k, g, k->hhost[g]);
++    }
++    KVH_CU(cuMemSetAccess(k->hva, k->ng*k->G, &a, 1));
++    for (size_t i = 0; i < n_dev; ++i) {
++        CUmemGenericAllocationHandle h;
++        KVH_CU(cuMemCreate(&h, k->G, &pd, 0));
++        k->dfree.push_back(h);
++    }
++    k->n_dev_total = n_dev;
++    // until regions are set every granule counts as one unbounded region (all device if the pool allows)
++    k->cmin.assign(k->ng, 0);
++    k->cmax.assign(k->ng, INT64_MAX);
++
++    GGML_LOG_WARN("%s: %.2f MiB in %zu granules of %zu KiB, %zu device granules (%.2f MiB) + pinned host backing%s\n", __func__,
++        size/1024.0/1024.0, k->ng, k->G/1024, n_dev, n_dev*k->G/1024.0/1024.0, k->check ? ", check mode" : "");
++    *base = (void *) k->va;
++    return k;
++}
++
++void ggml_cuda_kvhost_destroy(ggml_cuda_kvhost * k) {
++    if (!k) {
++        return;
++    }
++    ggml_cuda_set_device(k->device);
++    CUDA_CHECK(cudaDeviceSynchronize());
++    for (size_t g = 0; g < k->ng; ++g) {
++        KVH_CU(cuMemUnmap(k->va  + g*k->G, k->G));
++        KVH_CU(cuMemUnmap(k->hva + g*k->G, k->G));
++        KVH_CU(cuMemRelease(k->hhost[g]));
++        if (k->hdev[g]) {
++            KVH_CU(cuMemRelease(k->hdev[g]));
++        }
++    }
++    for (auto h : k->dfree) {
++        KVH_CU(cuMemRelease(h));
++    }
++    KVH_CU(cuMemAddressFree(k->va,  k->ng*k->G));
++    KVH_CU(cuMemAddressFree(k->hva, k->ng*k->G));
++    GGML_LOG_WARN("%s: %lld granule moves\n", __func__, (long long) k->n_moves);
++    delete k;
++}
++
++void ggml_cuda_kvhost_set_regions(ggml_cuda_kvhost * k, int n, const size_t * off, const size_t * row, const int64_t * ncell) {
++    k->cmin.assign(k->ng, INT64_MAX);
++    k->cmax.assign(k->ng, -1);
++    for (int i = 0; i < n; ++i) {
++        if (ncell[i] <= 0 || row[i] == 0) {
++            continue;
++        }
++        const size_t b0 = off[i], b1 = off[i] + row[i]*ncell[i];
++        for (size_t g = b0 / k->G; g < k->ng && g*k->G < b1; ++g) {
++            const size_t lo = std::max(b0, g*k->G) - b0;
++            const size_t hi = std::min(b1, (g + 1)*k->G) - b0; // exclusive
++            k->cmin[g] = std::min<int64_t>(k->cmin[g], lo / row[i]);
++            k->cmax[g] = std::max<int64_t>(k->cmax[g], (hi - 1) / row[i]);
++        }
++    }
++}
++
++static void kvh_compare(ggml_cuda_kvhost * k, size_t g, const char * what) {
++    std::vector<uint8_t> a(k->G), b(k->G);
++    CUDA_CHECK(cudaMemcpy(a.data(), (void *) (k->va  + g*k->G), k->G, cudaMemcpyDeviceToHost));
++    CUDA_CHECK(cudaMemcpy(b.data(), (void *) (k->hva + g*k->G), k->G, cudaMemcpyDeviceToHost));
++    if (memcmp(a.data(), b.data(), k->G) != 0) {
++        GGML_ABORT("kvhost check: granule %zu differs after %s", g, what);
++    }
++}
++
++int ggml_cuda_kvhost_place(ggml_cuda_kvhost * k, int64_t lo, int64_t hi) {
++    std::vector<size_t> to_host, to_dev;
++    for (size_t g = 0; g < k->ng; ++g) {
++        const bool want = k->cmin[g] <= k->cmax[g] && k->cmin[g] < hi && k->cmax[g] >= lo;
++        if (!want && k->hdev[g]) {
++            to_host.push_back(g);
++        } else if (want && !k->hdev[g]) {
++            to_dev.push_back(g);
++        }
++    }
++    if (to_host.empty() && to_dev.empty()) {
++        return 0;
++    }
++    ggml_cuda_set_device(k->device);
++    CUDA_CHECK(cudaDeviceSynchronize());
++
++    for (size_t g : to_host) {
++        CUDA_CHECK(cudaMemcpy((void *) (k->hva + g*k->G), (void *) (k->va + g*k->G), k->G, cudaMemcpyDeviceToDevice));
++        if (k->check) {
++            kvh_compare(k, g, "copy to host");
++        }
++        KVH_CU(cuMemUnmap(k->va + g*k->G, k->G));
++        kvh_map(k, g, k->hhost[g]);
++        k->dfree.push_back(k->hdev[g]);
++        k->hdev[g] = 0;
++    }
++    int n_short = 0;
++    for (size_t g : to_dev) {
++        if (k->dfree.empty()) {
++            n_short++; // stays on the host: correct, only slower
++            continue;
++        }
++        const CUmemGenericAllocationHandle h = k->dfree.back();
++        k->dfree.pop_back();
++        KVH_CU(cuMemUnmap(k->va + g*k->G, k->G));
++        kvh_map(k, g, h);
++        k->hdev[g] = h;
++        CUDA_CHECK(cudaMemcpy((void *) (k->va + g*k->G), (void *) (k->hva + g*k->G), k->G, cudaMemcpyDeviceToDevice));
++        if (k->check) {
++            kvh_compare(k, g, "copy to device");
++        }
++    }
++    k->n_moves += to_host.size() + to_dev.size() - n_short;
++    if (n_short > 0) {
++        static bool warned = false;
++        if (!warned) {
++            GGML_LOG_WARN("%s: device pool short by %d granules, they stay on the host\n", __func__, n_short);
++            warned = true;
++        }
++    }
++    if (getenv("LLAMA_KV_HOST_OLD_LOG")) {
++        size_t nd = 0;
++        for (auto h : k->hdev) nd += h != 0;
++        GGML_LOG_WARN("%s: window [%lld, %lld): %zu to host, %zu to device, %zu/%zu granules on device\n", __func__,
++            (long long) lo, (long long) hi, to_host.size(), to_dev.size() - n_short, nd, k->ng);
++    }
++    return int(to_host.size() + to_dev.size()) - n_short;
++}
++
++bool ggml_cuda_kvhost_check_every() {
++    static const int every = [] { const char * s = getenv("LLAMA_KV_HOST_OLD_CHECK"); return s ? atoi(s) : 0; }();
++    return every > 0;
++}
++
++void ggml_cuda_kvhost_check_fa(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
++    static const int every = [] { const char * s = getenv("LLAMA_KV_HOST_OLD_CHECK"); return s ? std::max(1, atoi(s)) : 1; }();
++    static int64_t n_calls = 0, n_checked = 0, n_skipped = 0;
++    if (n_calls++ % every != 0) {
++        return;
++    }
++    cudaStream_t st = ctx.stream();
++    cudaStreamCaptureStatus cs = cudaStreamCaptureStatusNone;
++    CUDA_CHECK(cudaStreamIsCapturing(st, &cs));
++    if (cs != cudaStreamCaptureStatusNone) {
++        if (n_skipped++ == 0) {
++            GGML_LOG_WARN("%s: stream is capturing a graph, check skipped (set GGML_CUDA_DISABLE_GRAPHS=1)\n", __func__);
++        }
++        return;
++    }
++    const ggml_tensor * K = dst->src[1];
++    const ggml_tensor * V = dst->src[2];
++    const size_t kb = ggml_nbytes(K), vb = ggml_nbytes(V), ob = ggml_nbytes(dst);
++    const size_t extra = ob + 2*sizeof(half)*(ggml_nelements(K) + ggml_nelements(V)) + 1024; // FA keeps its f16 copies after dst
++
++    ggml_cuda_pool_alloc<char> kd(ctx.pool(), kb), vd(ctx.pool(), vb), od(ctx.pool(), extra);
++    CUDA_CHECK(cudaMemcpyAsync(kd.ptr, K->data, kb, cudaMemcpyDeviceToDevice, st));
++    CUDA_CHECK(cudaMemcpyAsync(vd.ptr, V->data, vb, cudaMemcpyDeviceToDevice, st));
++
++    ggml_tensor K2 = *K, V2 = *V, d2 = *dst;
++    K2.data = kd.ptr; V2.data = vd.ptr; d2.data = od.ptr;
++    d2.src[1] = &K2; d2.src[2] = &V2;
++    ggml_cuda_flash_attn_ext(ctx, &d2);
++
++    std::vector<uint8_t> a(ob), b(ob);
++    CUDA_CHECK(cudaMemcpyAsync(a.data(), dst->data, ob, cudaMemcpyDeviceToHost, st));
++    CUDA_CHECK(cudaMemcpyAsync(b.data(), od.ptr,    ob, cudaMemcpyDeviceToHost, st));
++    CUDA_CHECK(cudaStreamSynchronize(st));
++    n_checked++;
++    const bool ok = memcmp(a.data(), b.data(), ob) == 0;
++    GGML_LOG_WARN("kvhost check #%lld: %s n_kv %lld n_q %lld: %s\n", (long long) n_checked, dst->name,
++        (long long) K->ne[1], (long long) dst->src[0]->ne[1], ok ? "bit-identical" : "MISMATCH");
++    if (!ok) {
++        GGML_ABORT("kvhost check: flash attention over host-backed K/V differs from the device copy");
++    }
++}
+diff --git a/ggml/src/ggml-cuda/kvhost.cuh b/ggml/src/ggml-cuda/kvhost.cuh
+new file mode 100644
+index 00000000..f4331008
+--- /dev/null
++++ b/ggml/src/ggml-cuda/kvhost.cuh
+@@ -0,0 +1,25 @@
++#pragma once
++// KV older than a threshold in pinned host memory (opt-in, LLAMA_KV_HOST_OLD).
++// One VMM reservation; each granule is backed by device memory or by pinned host memory and is remapped as the
++// window of recent cells moves. Pointers never change, so kernels and CUDA graphs are untouched: a kernel that reads
++// an old cell reads it over PCIe.
++
++#include "common.cuh"
++
++struct ggml_cuda_kvhost;
++
++// reserves size bytes, backs every granule with pinned host memory, pre-allocates n_dev device granules
++ggml_cuda_kvhost * ggml_cuda_kvhost_create(int device, size_t size, size_t n_dev, void ** base);
++void ggml_cuda_kvhost_destroy(ggml_cuda_kvhost * kvh);
++
++// the cell layout: region i starts at byte off[i] of the buffer, holds ncell[i] rows of row[i] bytes
++void ggml_cuda_kvhost_set_regions(ggml_cuda_kvhost * kvh, int n, const size_t * off, const size_t * row, const int64_t * ncell);
++
++// back with device memory every granule that holds a cell in [lo, hi), the rest with host memory
++// syncs the device only when a granule moves; returns the number of granules moved
++int ggml_cuda_kvhost_place(ggml_cuda_kvhost * kvh, int64_t lo, int64_t hi);
++
++// check mode (LLAMA_KV_HOST_OLD_CHECK=N): every N-th flash attention over a host-backed K/V is recomputed from a
++// device copy of the same K/V bytes and the outputs compared bitwise
++bool ggml_cuda_kvhost_check_every();
++void ggml_cuda_kvhost_check_fa(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 4ec7fb89..5d6f5d3b 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -14,6 +14,61 @@
+ #include <stdexcept>
+ #include <unordered_map>
+ 
++#include "ggml-alloc.h"
++
++// LLAMA_KV_HOST_OLD (opt-in, local mod): the K/V tensors of a sparse-attention cache go into one CUDA VMM buffer whose
++// granules are backed by device memory near the newest cells and by pinned host memory for cells older than the
++// window; the backend remaps granules as the window moves (ggml-cuda/kvhost.cu). nullptr = backend lacks it, use stock.
++static constexpr int64_t LLAMA_KV_HOST_OLD_AHEAD = 2048; // cells ahead of the newest kept on the device for the next ubatches
++
++static ggml_backend_buffer_t llama_kv_host_old_alloc(llama_memory_bufs & bufs, ggml_context_ptr & ctx, ggml_backend_buffer_type_t buft,
++        int64_t kv_size, int64_t window, int (**place)(ggml_backend_buffer_t, int64_t, int64_t)) {
++    typedef ggml_backend_buffer_t (*alloc_t)(ggml_backend_buffer_type_t, size_t, size_t);
++    typedef void (*regions_t)(ggml_backend_buffer_t, int, const size_t *, const size_t *, const int64_t *);
++    ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
++    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
++    auto fn_alloc   = reg ? (alloc_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_kvhost_buffer_alloc") : nullptr;
++    auto fn_regions = reg ? (regions_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_kvhost_set_regions")  : nullptr;
++    *place = reg ? (int (*)(ggml_backend_buffer_t, int64_t, int64_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_kvhost_place") : nullptr;
++    if (!fn_alloc || !fn_regions || !*place || ggml_backend_buft_is_host(buft)) {
++        return nullptr;
++    }
++    // device granules: per tensor, the window plus the cells ahead, plus one granule at each end
++    const size_t gran = 2u*1024*1024;
++    size_t n_dev = 0;
++    for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t; t = ggml_get_next_tensor(ctx.get(), t)) {
++        if (!t->view_src) {
++            n_dev += (size_t(window + LLAMA_KV_HOST_OLD_AHEAD)*t->nb[1] + gran - 1)/gran + 2;
++        }
++    }
++    const size_t size = ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.get(), buft);
++    ggml_backend_buffer_t buf = fn_alloc(buft, size, n_dev);
++    GGML_ASSERT(buf);
++    ggml_tallocr ta = ggml_tallocr_new(buf);
++    std::vector<size_t> off, row;
++    std::vector<int64_t> ncell;
++    const char * base = (const char *) ggml_backend_buffer_get_base(buf);
++    for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t; t = ggml_get_next_tensor(ctx.get(), t)) {
++        if (!t->view_src) {
++            GGML_ASSERT(ggml_tallocr_alloc(&ta, t) == GGML_STATUS_SUCCESS);
++            GGML_ASSERT(t->ne[1] == kv_size && t->ne[2] == 1 && t->ne[3] == 1);
++            off.push_back((const char *) t->data - base);
++            row.push_back(t->nb[1]);
++            ncell.push_back(t->ne[1]);
++        }
++    }
++    for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t; t = ggml_get_next_tensor(ctx.get(), t)) {
++        if (t->view_src) {
++            GGML_ASSERT(ggml_backend_view_init(t) == GGML_STATUS_SUCCESS);
++        }
++    }
++    fn_regions(buf, (int) off.size(), off.data(), row.data(), ncell.data());
++    (*place)(buf, 0, LLAMA_KV_HOST_OLD_AHEAD);
++    ggml_backend_buffer_clear(buf, 0);
++    bufs.bufs.emplace_back(std::move(ctx), ggml_backend_buffer_ptr(buf));
++    return buf;
++}
++
+ static bool ggml_is_power_of_2(int n) {
+     return (n & (n - 1)) == 0;
+ }
+@@ -273,6 +328,30 @@ llama_kv_cache::llama_kv_cache(
+         }
+     }
+ 
++    // LLAMA_KV_HOST_OLD: the attention K/V of a sparse-attention (indexer) model's main context only;
++    // the indexer keys (read every step) and the MTP draft's cache stay as they are
++    if (const char * env = getenv("LLAMA_KV_HOST_OLD"); env && !no_alloc && !other && offload && n_stream == 1 &&
++            name_tag[0] == '\0' && !is_indexer && model.hparams.indexer_head_size > 0 && ctx_map.size() == 1) {
++        bool main_layers = !layers.empty();
++        for (const auto & l : layers) {
++            main_layers = main_layers && l.il < model.hparams.n_layer() && l.k && l.v;
++        }
++        const int64_t window = atoll(env);
++        if (main_layers && window > 0 && window + LLAMA_KV_HOST_OLD_AHEAD < (int64_t) kv_size) {
++            auto & [buft, ctx] = *ctx_map.begin();
++            host_old_buf = llama_kv_host_old_alloc(ctxs_bufs, ctx, buft, kv_size, window, &host_old_place);
++            if (host_old_buf) {
++                host_old_window = window;
++                host_old_hi     = LLAMA_KV_HOST_OLD_AHEAD;
++                LLAMA_LOG_WARN("%s: LLAMA_KV_HOST_OLD = %lld: cells older than that live in pinned host memory\n", __func__, (long long) window);
++                LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB (host-old)\n", __func__, ggml_backend_buffer_name(host_old_buf), ggml_backend_buffer_get_size(host_old_buf)/1024.0/1024.0);
++                ctx_map.clear();
++            }
++        } else if (main_layers) {
++            LLAMA_LOG_WARN("%s: LLAMA_KV_HOST_OLD = %s not applied (window must be > 0 and below kv_size - %lld)\n", __func__, env, (long long) LLAMA_KV_HOST_OLD_AHEAD);
++        }
++    }
++
+     // allocate the tensors and initialize the buffers to avoid NaNs in the padding
+     for (auto & [buft, ctx] : ctx_map) {
+         ggml_backend_buffer_t buf = ctxs_bufs.emplace(std::move(ctx), buft, "kv cache");
+@@ -1235,6 +1314,22 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+ 
+         head = sinfo.idxs[s].back() + 1;
+     }
++
++    host_old_update();
++}
++
++void llama_kv_cache::host_old_update() {
++    if (!host_old_buf) {
++        return;
++    }
++    // one stream: the newest cells are the highest used indices
++    // re-place in steps: when the cells kept ahead run low, or after a rollback beyond one step
++    const int64_t hi = v_cells[0].used_max_p1();
++    if (hi + LLAMA_KV_HOST_OLD_AHEAD/8 <= host_old_hi && hi + 2*LLAMA_KV_HOST_OLD_AHEAD > host_old_hi) {
++        return;
++    }
++    host_old_hi = hi + LLAMA_KV_HOST_OLD_AHEAD;
++    host_old_place(host_old_buf, std::max<int64_t>(0, hi - host_old_window), host_old_hi);
+ }
+ 
+ bool llama_kv_cache::get_can_shift() const {
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index a81cd849..8bfe5585 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -319,6 +319,13 @@ private:
+     // ggml contexts for the KV cache along with the allocated backend buffers:
+     llama_memory_bufs ctxs_bufs;
+ 
++    // LLAMA_KV_HOST_OLD=<cells>: cells older than this many behind the newest live in pinned host memory
++    ggml_backend_buffer_t host_old_buf    = nullptr;
++    int64_t               host_old_window = 0;
++    int64_t               host_old_hi     = 0; // end of the cell range placed on the device
++    int (*host_old_place)(ggml_backend_buffer_t, int64_t, int64_t) = nullptr;
++    void host_old_update();
++
+     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
+     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
+     std::vector<uint32_t> v_heads;

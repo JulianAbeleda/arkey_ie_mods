@@ -1,0 +1,120 @@
+{
+  "schema": "arkey_ie_mods.engines.v1",
+  "about": "One row per inference engine. Everything engine-specific lives here or in engines/<engine>/<version>/mods.json; tools/check.py and the hook read rows and name no engine. A mod is keyed on engine + version + kernel or graph shape, never on a model name. Machine paths (base checkouts, run roots) live in the untracked local.json (see local.example.json).",
+  "rules": [
+    "one switch per mod; switch off = the engine's stock path",
+    "a check mode that runs the stock path beside the mod and aborts on a difference",
+    "output bit-identical to stock, or labelled (quality-gated / untested) with the evidence",
+    "a line budget per patch (measured size, rounded up a little); over budget fails",
+    "gains stated against the same engine's stock build only"
+  ],
+  "appliers": {
+    "git_apply": {
+      "implemented": true,
+      "apply": "git apply <patch> in the source tree, patches in series order",
+      "revert": "git apply -R <patch>, reverse order"
+    },
+    "patch_p1": {
+      "implemented": true,
+      "apply": "patch -p1 --dry-run, then patch -p1, in the installed package folder (site-packages) or a source checkout, patches in series order",
+      "revert": "patch -R -p1 < <patch>"
+    }
+  },
+  "engines": {
+    "llama.cpp": {
+      "status": "active",
+      "versions": [
+        "1.0.0",
+        "7592b61d3",
+        "5193ef1d"
+      ],
+      "base_identity": {
+        "kind": "git_commit",
+        "how": "git rev-parse HEAD of the base checkout (local.json checkouts) equals base.commit; the touched files have no local changes"
+      },
+      "applier": "git_apply",
+      "switch_kinds": {
+        "env": "environment variable read once with getenv; unset or 0 = off"
+      },
+      "switch_literal_regex": "\"((?:LLAMA|GGML)_[A-Z0-9_]*[A-Z0-9])\"",
+      "off_is_stock": "static: every switch literal a patch adds is declared in its row, hunks that remove stock lines are counted against the row; measured: temp-0 text and token counts with the switch off equal the unpatched build (each row's output.evidence)",
+      "tested_tree": "source trees that were built and measured (paths are references resolved through local.json roots); mods.json tested_trees lists which patches each holds",
+      "aliases": [
+        "llama-server",
+        "llama-bench"
+      ],
+      "env_read_regex": "getenv\\(\\s*\\\"([^\\\"]+)\\\"\\s*\\)",
+      "switch_presence": {
+        "env": [
+          "\"{name}\""
+        ]
+      }
+    },
+    "vllm": {
+      "status": "active",
+      "versions": [
+        "0.31.0"
+      ],
+      "base_identity": {
+        "kind": "pip_version_wheel_hash",
+        "how": "package version from the installed dist-info METADATA; the sha256 of its RECORD (names the exact build) when recorded; every touched file's sha256 equals its RECORD entry (unmodified); the wheel's sha256 when a wheel was kept, else a named SKIP"
+      },
+      "applier": "patch_p1",
+      "switch_kinds": {
+        "env": "environment variable",
+        "cli": "server flag",
+        "config": "config key",
+        "none": "no switch: applied = on, patch -R -p1 = stock (a recorded rule exception)"
+      },
+      "off_is_stock": "for a mod without a switch: the patch reverted (patch -R -p1) is stock, checked by the series revert; for a switch: not defined yet",
+      "tested_tree": "the patched site-packages a run used; none is on this machine yet",
+      "aliases": [],
+      "switch_literal_regex": "[\\\"']((?:VLLM)_[A-Z0-9_]*[A-Z0-9])[\\\"']",
+      "env_read_regex": "(?:getenv|environ\\.get)\\(\\s*[\\\"']([^\\\"']+)[\\\"']|environ\\[\\s*[\\\"']([^\\\"']+)[\\\"']\\s*\\]",
+      "switch_presence": {
+        "env": [
+          "\"{name}\"",
+          "'{name}'"
+        ],
+        "cli": [
+          "\"--{name}\"",
+          "'--{name}'"
+        ],
+        "config": [
+          "\"{name}\"",
+          "'{name}'"
+        ]
+      }
+    },
+    "tensorrt-llm": {
+      "status": "planned",
+      "versions": [],
+      "base_identity": null,
+      "applier": null,
+      "switch_kinds": {},
+      "off_is_stock": "not defined yet",
+      "tested_tree": "not defined yet",
+      "aliases": [
+        "tensorrt",
+        "trt-llm"
+      ],
+      "base_identity_note": "not defined until its first mod"
+    }
+  },
+  "lint": {
+    "model_name_regex": "(?i)(qwen\\d+(?:\\.\\d+)?(?![a-z0-9])|flash-?next|deepseek|huihui|unsloth|gemma|mistral|mixtral|nemotron|gpt-oss|\\bkimi\\b|\\bglm-?\\d|\\bphi-?\\d\\b|\\bcoder\\b|\\bllama-?[234](?![a-z0-9]))",
+    "private_regex": "(?i)(co-authored-by|claude-session|session_[a-z0-9]{8,}|noreply@|\\b[a-z0-9._%+-]+@[a-z0-9-]+\\.(?:com|org|net|ai|io|dev)\\b|\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b|/home/[a-z]|(?<![\\w.])~/[a-z])",
+    "other_engines": [
+      "strata",
+      "sglang",
+      "ollama",
+      "exllama",
+      "exllamav2",
+      "mlc-llm",
+      "lmdeploy"
+    ],
+    "why": "rows and patches name no model (an architecture or graph file may be named as evidence of what exercises a mod), no other engine (gains are against the same engine's stock build only) and no private detail",
+    "doc_allow": [],
+    "doc_allow_note": "exact lines of README.md, LICENSE or engines/README.md that may match the lint; empty: the license section and the planned-engines line name only engines that have a row here, which the docs lint allows"
+  }
+}

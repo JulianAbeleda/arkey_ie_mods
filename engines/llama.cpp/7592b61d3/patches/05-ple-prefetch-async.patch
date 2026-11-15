@@ -1,0 +1,43 @@
+Not submitted upstream.
+llama-ple-prefetch-async.patch, 2026-11-11. Base: llama.cpp master 7592b61d3 (src/models/qwen4exp.cpp only). Apply: git apply
+What: LLAMA_PLE_PREFETCH_ASYNC=1 (default off = stock) moves the PLE n-gram row prefetch (madvise WILLNEED per row
+range on the 28.8 GB lazily mmapped table) off the critical path, onto a detached thread. The row indices, the graph and
+the outputs are unchanged.
+Measured (RTX 5090, a MoE GGUF (IQ1_M), -ncmoe 12 -t 8 -b 4096 -ub 4096 --cache-ram 0, LLAMA_WS_PIN_GIB=8,
+LLAMA_SERVER_CKPT_MIN_HEAD=256, on top of pinned-copy-stream v2 + llama-moe-prefill + llama-server-ckpt-min-head; cold
+10k chat text, 3 reps x 2 passes, wall ms medians): baseline 1,873 / 1,935 (passes 1 / 2) -> 1,814 / 1,829, i.e. -58 /
+-106 ms; wall tok/s 5,105 -> 5,397. The timing oracle that removes all PLE prep reaches 1,735 / 1,733.
+Correctness: greedy --temp 0, 4 prompts + the checkpoint-restore test: text and top-5 logprobs bitwise identical to the
+baseline. ~200 more major faults per 10k request (GET_ROWS sometimes faults ahead of the prefetch).
+Caveat: one detached thread per ubatch; a prefetch still running at shutdown only madvises.
+
+--- a/src/models/qwen4exp.cpp	2026-11-11 16:26:05.652088330 -0500
++++ b/src/models/qwen4exp.cpp	2026-11-11 16:26:05.653088330 -0500
+@@ -4,6 +4,8 @@
+ #include "llama-memory-recurrent.h"
+ 
+ #include <algorithm>
++#include <cstdlib>
++#include <thread>
+ #include <cinttypes>
+ 
+ // bad metadata must be catchable: GGML_ASSERT aborts the whole process
+@@ -1358,11 +1360,17 @@
+         }
+     }
+ 
++    // LOCAL PATCH (llama-ple-prefetch-async): LLAMA_PLE_PREFETCH_ASYNC=1 issues the row prefetch (one madvise(WILLNEED)
++    // per row range, ~65k at a 4096-token ubatch, ~36 ms) on a detached thread instead of waiting for it here; the rows,
++    // the graph and the results are unchanged (GET_ROWS faults in any page the prefetch has not reached yet).
++    static const bool ple_async = [] { const char * e = getenv("LLAMA_PLE_PREFETCH_ASYNC"); return e && atoi(e) != 0; }();
+     {
+         ggml_tensor * ple = model.per_layer_tok_embd;
+ 
+         const bool prefetch = model.can_prefetch.count(ple);
+-        if (prefetch) {
++        if (prefetch && ple_async) {
++            std::thread([ple, rows_copy = idx]() { llama_prefetch_rows(ple, rows_copy.data(), rows_copy.size()); }).detach();
++        } else if (prefetch) {
+             llama_prefetch_rows(ple, idx.data(), idx.size());
+         }
+     }

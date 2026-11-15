@@ -1,0 +1,266 @@
+diff --git a/ggml/src/ggml-cuda/fattn-common.cuh b/ggml/src/ggml-cuda/fattn-common.cuh
+index 61b10b93..602e636b 100644
+--- a/ggml/src/ggml-cuda/fattn-common.cuh
++++ b/ggml/src/ggml-cuda/fattn-common.cuh
+@@ -780,6 +780,20 @@ void ggml_cuda_flash_attn_ext_compact_mask(
+ // LLAMA_SPARSE_DIRECT: the sparse MMA kernel reads q8_0 K/V rows by index, without the whole-cache f16 copy
+ bool ggml_cuda_flash_attn_ext_sparse_direct(const ggml_tensor * dst);
+ 
++// LLAMA_KV_STAGE=1 (local mod on LLAMA_SPARSE_DIRECT, off by default): before a sparse call with one list per query,
++// the union of the lists' K/V rows is copied once, contiguously, into device scratch (16 byte loads), the mask is
++// compacted to the union's slots and the lists are rewritten to slots; the attention kernel then runs unchanged on the
++// scratch. Same bytes, same list order: the output is bit-identical. With LLAMA_KV_HOST_OLD each old row then crosses
++// PCIe once per call instead of twice per query that selected it.
++struct ggml_cuda_fattn_stage {
++    ggml_cuda_pool_alloc<char>    K, V;
++    ggml_cuda_pool_alloc<half>    mask;
++    ggml_cuda_pool_alloc<int32_t> slots, cells;
++    int64_t n_max = 0; // rows of scratch = stride of the compacted mask
++};
++bool ggml_cuda_flash_attn_ext_stage(ggml_backend_cuda_context & ctx, const ggml_tensor * dst, const int32_t * lists,
++        int64_t n_lists, int64_t n_kv_max, ggml_cuda_fattn_stage & st);
++
+ template<int D, int ncols1, int ncols2> // D == head size
+ __launch_bounds__(D, 1)
+ static __global__ void flash_attn_stream_k_fixup_uniform(
+@@ -1074,6 +1088,7 @@ void launch_fattn(
+         ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
+ 
+     ggml_cuda_pool_alloc<int>    KV_max(pool);
++    ggml_cuda_fattn_stage        stage; // allocated right after KV_max, freed right before it (the pool is a stack)
+     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
+     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
+ 
+@@ -1174,6 +1189,17 @@ void launch_fattn(
+         ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists, Q->ne[1], ncols1, n_kv_max, main_stream);
+     }
+ 
++    // LLAMA_KV_STAGE: K/V rows of the lists' union in device scratch, lists as slots, mask by slot
++    const char * mask_data = mask ? (const char *) mask->data : nullptr;
++    size_t       nb31      = mask ? mask->nb[1] : 0;
++    if (use_sparse && direct && ncols1 == 1 && !V_is_K_view && nb11 == K->nb[1] && nb21 == V->nb[1] &&
++            ggml_cuda_flash_attn_ext_stage(ctx, dst, KV_max.ptr, int64_t(ntiles_x)*mask->ne[3], n_kv_max, stage)) {
++        K_data    = stage.K.ptr;
++        V_data    = stage.V.ptr;
++        mask_data = (const char *) stage.mask.ptr;
++        nb31      = stage.n_max*sizeof(half);
++    }
++
+     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
+     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
+     //     multiple sequences of possibly different lengths, or kv_rows lists that end with padding.
+@@ -1321,9 +1347,9 @@ void launch_fattn(
+         (const char *) Q->data,
+         K_data,
+         V_data,
+-        mask ? ((const char *) mask->data) : nullptr,
++        mask_data,
+         sinks ? ((const char *) sinks->data) : nullptr,
+-        KV_max.ptr,
++        stage.slots.ptr ? stage.slots.ptr : KV_max.ptr,
+         kv_rows ? (const int *) kv_rows->data : nullptr,
+         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
+         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
+@@ -1331,7 +1357,7 @@ void launch_fattn(
+         K->ne[0], n_kv, K->ne[2], K->ne[3], direct ? -int32_t(nb11) : int32_t(nb11), nb12, nb13,
+         direct ? -int32_t(nb21) : int32_t(nb21), nb22, nb23,
+         mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
+-        mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
++        nb31, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
+     );
+     CUDA_CHECK(cudaGetLastError());
+ 
+diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
+index 51aa29a8..5252936c 100644
+--- a/ggml/src/ggml-cuda/fattn.cu
++++ b/ggml/src/ggml-cuda/fattn.cu
+@@ -1,3 +1,4 @@
++#include <cstring>
+ #include <vector>
+ #include "common.cuh"
+ #include "fattn-common.cuh"
+@@ -813,6 +814,153 @@ bool ggml_cuda_flash_attn_ext_sparse_direct(const ggml_tensor * dst) {
+                            ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 8, 8);
+ }
+ 
++// LLAMA_KV_STAGE (see fattn-common.cuh). LLAMA_KV_STAGE_CHECK=N: every Nth staged call is also run unstaged and the
++// outputs compared bitwise. LLAMA_KV_STAGE_LOG=N: every Nth staged call logs the union size and how many of its rows
++// are more than LLAMA_KV_HOST_OLD cells behind the newest row. Both need GGML_CUDA_DISABLE_GRAPHS=1.
++static thread_local bool kv_stage_off = false;
++
++// one block: the lists' cells set bits of an n_kv bitmap; its rank gives each cell a slot in ascending cell order
++static __global__ void flash_attn_stage_slots(
++        const int32_t * lists, int32_t * slots, int32_t * cells, const int n_lists, const int n_kv_max, const int n_kv, const int n_max) {
++    ggml_cuda_pdl_sync();
++    constexpr int nthreads = 256;
++    extern __shared__ uint32_t stage_smem[];
++    __shared__ int offs[nthreads + 1];
++    const int tid = threadIdx.x;
++    const int nw  = (n_kv + 31) / 32;
++    const int n   = n_lists*n_kv_max;
++    uint32_t * bits = stage_smem;
++    int32_t  * wpre = (int32_t *) (stage_smem + nw);
++
++    for (int i = tid; i < nw; i += nthreads) {
++        bits[i] = 0;
++    }
++    __syncthreads();
++    for (int i = tid; i < n; i += nthreads) {
++        const int32_t c = lists[i];
++        if (c >= 0 && c < n_kv) {
++            atomicOr(&bits[c / 32], 1u << (c % 32));
++        }
++    }
++    __syncthreads();
++    const int wpt = (nw + nthreads - 1) / nthreads;
++    const int w0  = min(tid*wpt, nw);
++    const int w1  = min(w0 + wpt, nw);
++    int cnt = 0;
++    for (int w = w0; w < w1; ++w) {
++        cnt += __popc(bits[w]);
++    }
++    offs[tid + 1] = cnt;
++    __syncthreads();
++    if (tid == 0) {
++        offs[0] = 0;
++        for (int i = 1; i <= nthreads; ++i) {
++            offs[i] += offs[i - 1];
++        }
++    }
++    __syncthreads();
++    int o = offs[tid];
++    for (int w = w0; w < w1; ++w) {
++        wpre[w] = o;
++        for (uint32_t m = bits[w]; m; m &= m - 1) {
++            if (o < n_max) {
++                cells[o] = 32*w + __ffs(m) - 1;
++            }
++            ++o;
++        }
++    }
++    __syncthreads();
++    for (int i = tid; i < n; i += nthreads) {
++        const int32_t c = lists[i];
++        slots[i] = c >= 0 && c < n_kv ? wpre[c / 32] + __popc(bits[c / 32] & ((1u << (c % 32)) - 1)) : -1;
++    }
++    for (int i = tid; i < n_lists; i += nthreads) {
++        slots[n + i] = lists[n + i]; // the live count of each list
++    }
++    if (tid == 0) {
++        cells[n_max] = min(offs[nthreads], n_max);
++    }
++}
++
++// one warp per union row: K and V rows in 16 byte loads, each byte read once; the mask value of each query for the row
++static __global__ void flash_attn_stage_rows(
++        const char * K, const char * V, const half * mask, const int32_t * cells, char * K_st, char * V_st, half * mask_st,
++        const int n_max, const int n_q, const int64_t nb11, const int64_t nb21, const int64_t s31) {
++    ggml_cuda_pdl_sync();
++    const int s    = blockIdx.x*(blockDim.x/32) + threadIdx.x/32;
++    const int lane = threadIdx.x % 32;
++    if (s >= n_max || s >= cells[n_max]) {
++        return;
++    }
++    const int64_t c = cells[s];
++    const uint4 * k_src = (const uint4 *) (K + c*nb11);
++    const uint4 * v_src = (const uint4 *) (V + c*nb21);
++    uint4 * k_dst = (uint4 *) (K_st + s*nb11);
++    uint4 * v_dst = (uint4 *) (V_st + s*nb21);
++    for (int i = lane; i < nb11/16; i += 32) {
++        k_dst[i] = k_src[i];
++    }
++    for (int i = lane; i < nb21/16; i += 32) {
++        v_dst[i] = v_src[i];
++    }
++    for (int q = lane; q < n_q; q += 32) {
++        mask_st[int64_t(q)*n_max + s] = mask[q*s31 + c];
++    }
++}
++
++bool ggml_cuda_flash_attn_ext_stage(ggml_backend_cuda_context & ctx, const ggml_tensor * dst, const int32_t * lists,
++        const int64_t n_lists, const int64_t n_kv_max, ggml_cuda_fattn_stage & st) {
++    static const bool on  = sparse_direct_env("LLAMA_KV_STAGE") != 0;
++    static const int  log = sparse_direct_env("LLAMA_KV_STAGE_LOG");
++    const ggml_tensor * Q = dst->src[0], * K = dst->src[1], * V = dst->src[2], * mask = dst->src[3];
++    const int64_t n_kv  = K->ne[1];
++    const int64_t n_max = std::min(n_kv, n_lists*n_kv_max);
++    const size_t  smem  = (n_kv + 31)/32*2*sizeof(uint32_t);
++    // rows hold every K/V head (the kernel's head offset stays valid), 16 byte aligned; one sequence; the bitmap fits
++    if (!on || kv_stage_off || n_lists != Q->ne[1] || mask->ne[3] != 1 || K->ne[3] != 1 || V->ne[3] != 1 || n_max <= 0 ||
++            n_max > 16384 || smem > 40*1024 || K->nb[1] % 16 != 0 || V->nb[1] % 16 != 0 ||
++            (uintptr_t) K->data % 16 != 0 || (uintptr_t) V->data % 16 != 0 ||
++            K->nb[1] < K->nb[2]*K->ne[2] || V->nb[1] < V->nb[2]*V->ne[2]) {
++        return false;
++    }
++    static bool told = false;
++    if (!told) {
++        told = true;
++        GGML_LOG_WARN("%s: LLAMA_KV_STAGE on: sparse K/V rows staged in device scratch (first call: %lld lists x %lld, n_kv %lld)\n",
++            __func__, (long long) n_lists, (long long) n_kv_max, (long long) n_kv);
++    }
++    cudaStream_t stream = ctx.stream();
++    st.n_max = n_max;
++    st.K.alloc(ctx.pool(), n_max*K->nb[1]);
++    st.V.alloc(ctx.pool(), n_max*V->nb[1]);
++    st.mask.alloc(ctx.pool(), n_max*Q->ne[1]);
++    st.slots.alloc(ctx.pool(), n_lists*n_kv_max + n_lists);
++    st.cells.alloc(ctx.pool(), n_max + 1);
++
++    ggml_cuda_kernel_launch(flash_attn_stage_slots, ggml_cuda_kernel_launch_params(dim3(1, 1, 1), dim3(256, 1, 1), smem, stream),
++        lists, st.slots.ptr, st.cells.ptr, int(n_lists), int(n_kv_max), int(n_kv), int(n_max));
++    ggml_cuda_kernel_launch(flash_attn_stage_rows, ggml_cuda_kernel_launch_params(dim3((n_max + 7)/8, 1, 1), dim3(256, 1, 1), 0, stream),
++        (const char *) K->data, (const char *) V->data, (const half *) mask->data, (const int32_t *) st.cells.ptr,
++        st.K.ptr, st.V.ptr, st.mask.ptr, int(n_max), int(Q->ne[1]), int64_t(K->nb[1]), int64_t(V->nb[1]), int64_t(mask->nb[1]/sizeof(half)));
++
++    static uint64_t n_call = 0;
++    cudaStreamCaptureStatus cs = cudaStreamCaptureStatusNone;
++    if (log > 0 && n_call++ % log == 0 && cudaStreamIsCapturing(stream, &cs) == cudaSuccess && cs == cudaStreamCaptureStatusNone) {
++        static const int64_t window = [] { const char * e = getenv("LLAMA_KV_HOST_OLD"); return e ? atoll(e) : 0; }();
++        std::vector<int32_t> c(n_max + 1);
++        CUDA_CHECK(cudaMemcpyAsync(c.data(), st.cells.ptr, c.size()*sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
++        CUDA_CHECK(cudaStreamSynchronize(stream));
++        const int n_union = c[n_max];
++        int n_old = 0;
++        for (int i = 0; i < n_union; ++i) {
++            n_old += c[i] < c[n_union - 1] - window;
++        }
++        GGML_LOG_WARN("kvstage: n_q %lld n_kv %lld lists %lld x %lld union %d old %d (window %lld)\n", (long long) Q->ne[1],
++            (long long) n_kv, (long long) n_lists, (long long) n_kv_max, n_union, window > 0 ? n_old : 0, (long long) window);
++    }
++    return true;
++}
++
+ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
+     GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
+ 
+@@ -860,6 +1008,30 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
+     static const int check = sparse_direct_env("LLAMA_SPARSE_DIRECT_CHECK");
+     static uint64_t n_call = 0, n_check = 0;
+     static double max_err = 0.0;
++    static const int stage_check = sparse_direct_env("LLAMA_KV_STAGE") != 0 ? sparse_direct_env("LLAMA_KV_STAGE_CHECK") : 0;
++    static uint64_t n_stage_call = 0, n_stage_check = 0;
++    if (stage_check > 0 && !kv_stage_off && dst->src[0]->ne[1] <= 4 && ggml_cuda_flash_attn_ext_sparse_direct(dst) &&
++            n_stage_call++ % stage_check == 0) {
++        const size_t nb = ggml_nbytes(dst);
++        std::vector<uint8_t> a(nb), b(nb);
++        ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
++        CUDA_CHECK(cudaMemcpyAsync(a.data(), dst->data, nb, cudaMemcpyDeviceToHost, ctx.stream()));
++        kv_stage_off = true;
++        ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
++        kv_stage_off = false;
++        CUDA_CHECK(cudaMemcpyAsync(b.data(), dst->data, nb, cudaMemcpyDeviceToHost, ctx.stream()));
++        CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
++        const bool ok = memcmp(a.data(), b.data(), nb) == 0;
++        ++n_stage_check;
++        if (n_stage_check <= 3 || n_stage_check % 200 == 0 || !ok) {
++            GGML_LOG_WARN("kvstage check %llu (%s, q %lld, n_kv %lld): %s\n", (unsigned long long) n_stage_check, dst->name,
++                (long long) dst->src[0]->ne[1], (long long) dst->src[1]->ne[1], ok ? "bit-identical" : "MISMATCH");
++        }
++        if (!ok) {
++            GGML_ABORT("LLAMA_KV_STAGE_CHECK: staged and by-index flash attention differ");
++        }
++        return;
++    }
+     if (check > 0 && ggml_cuda_flash_attn_ext_sparse_direct(dst) && n_call++ % check == 0) {
+         const size_t n = ggml_nelements(dst);
+         std::vector<float> a(n), b(n);

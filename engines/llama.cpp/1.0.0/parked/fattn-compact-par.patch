@@ -1,0 +1,140 @@
+diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
+index 071fd0d..696d0ea 100644
+--- a/ggml/src/ggml-cuda/fattn.cu
++++ b/ggml/src/ggml-cuda/fattn.cu
+@@ -113,6 +113,88 @@ static __global__ void flash_attn_mask_to_sparse_indices(
+     // the dependent grid reads indices, signal once the row is complete
+     ggml_cuda_pdl_lc();
+ }
++
++// LLAMA_FATTN_COMPACT_PAR=1 (local long-context mod, off by default): the same mask -> index list compaction for one
++// query per list, without the serial walk (stock: one 8-warp block per list steps through n_kv in 2,048-value chunks
++// with four block syncs per chunk). Here every warp of a 32-warp block owns a contiguous range: it counts its
++// selected columns, one block sync turns the warp counts into each warp's first slot, and the warp writes its columns.
++// Integer only. The lists (ascending columns, then -1) and the counts are the stock kernel's, word for word.
++// LLAMA_FATTN_COMPACT_PAR_CHECK=N (with GGML_CUDA_DISABLE_GRAPHS=1) also runs the stock kernel on every Nth call
++// and aborts if any list word or count differs.
++__launch_bounds__(1024, 1)
++static __global__ void flash_attn_mask_to_sparse_indices_par(
++        const half * mask_ptr, int32_t * indices_ptr, int32_t * counts_ptr, const int ne30,
++        const int n_kv_max, const int64_t s31, const int64_t s33) {
++    ggml_cuda_pdl_sync();
++
++    constexpr int nwarps          = 32;
++    constexpr int values_per_lane = 8;
++    constexpr int step            = 32*values_per_lane;
++
++    const int warp = threadIdx.x / 32;
++    const int lane = threadIdx.x % 32;
++    const int list = blockIdx.y*gridDim.x + blockIdx.x;
++
++    // half bit patterns: finite <=> the exponent is not all ones, which is what isfinite(__half2float()) tests
++    const uint16_t * mask = (const uint16_t *) (mask_ptr + blockIdx.y*s33 + blockIdx.x*s31);
++    int32_t * indices = indices_ptr + int64_t(list)*n_kv_max;
++
++    const int per_warp = ((ne30 + nwarps - 1)/nwarps + step - 1)/step*step;
++    const int i_begin  = min(warp*per_warp, ne30);
++    const int i_end    = min(i_begin + per_warp, ne30);
++
++    const auto selected = [&](const int i) {
++        return __ballot_sync(0xFFFFFFFFu, (int) (i < i_end && (mask[i] & 0x7C00) != 0x7C00));
++    };
++
++    int warp_count = 0;
++    for (int i0 = i_begin; i0 < i_end; i0 += step) {
++#pragma unroll
++        for (int item = 0; item < values_per_lane; ++item) {
++            warp_count += __popc(selected(i0 + item*32 + lane));
++        }
++    }
++
++    __shared__ int warp_counts[nwarps];
++    if (lane == 0) {
++        warp_counts[warp] = warp_count;
++    }
++    __syncthreads();
++
++    int offset = 0;
++    int total  = 0;
++#pragma unroll
++    for (int iw = 0; iw < nwarps; ++iw) {
++        offset += iw < warp ? warp_counts[iw] : 0;
++        total  += warp_counts[iw];
++    }
++
++    const uint32_t below = (1u << lane) - 1;
++    for (int i0 = i_begin; i0 < i_end; i0 += step) {
++#pragma unroll
++        for (int item = 0; item < values_per_lane; ++item) {
++            const int      i   = i0 + item*32 + lane;
++            const uint32_t sel = selected(i);
++            const int      dst = offset + __popc(sel & below);
++            if (((sel >> lane) & 1) && dst < n_kv_max) {
++                indices[dst] = i;
++            }
++            offset += __popc(sel);
++        }
++    }
++
++    const int count = min(total, n_kv_max);
++    for (int i = count + threadIdx.x; i < n_kv_max; i += blockDim.x) {
++        indices[i] = -1;
++    }
++    if (threadIdx.x == 0) {
++        counts_ptr[list] = count;
++    }
++    __syncthreads();
++
++    // the dependent grid reads indices, signal once the row is complete
++    ggml_cuda_pdl_lc();
++}
+ #endif // !defined(GGML_USE_MUSA)
+ 
+ void ggml_cuda_flash_attn_ext_compact_mask(
+@@ -131,9 +213,46 @@ void ggml_cuda_flash_attn_ext_compact_mask(
+     const auto kernel = ncols1 == 1       ? flash_attn_mask_to_sparse_indices<1, false> :
+                         n_queries % 8 != 0 ? flash_attn_mask_to_sparse_indices<8, true>  :
+                                              flash_attn_mask_to_sparse_indices<8, false>;
++    static const auto env = [](const char * name) { const char * e = getenv(name); return e ? atoi(e) : 0; };
++    static const bool par   = env("LLAMA_FATTN_COMPACT_PAR") != 0;
++    static const int  check = env("LLAMA_FATTN_COMPACT_PAR_CHECK");
++    static uint64_t n_call = 0, n_check = 0;
++    const bool use_par = par && ncols1 == 1 && GGML_CUDA_CC_IS_NVIDIA(ggml_cuda_info().devices[ggml_cuda_get_device()].cc);
++    const size_t n_words = size_t(blocks_num.x)*blocks_num.y*(size_t(n_kv_max) + 1); // lists, then counts (as the caller lays them out)
++    std::vector<int32_t> par_out;
++    if (use_par) {
++        const ggml_cuda_kernel_launch_params launch_params_par(blocks_num, dim3(1024, 1, 1), 0, stream);
++        ggml_cuda_kernel_launch(flash_attn_mask_to_sparse_indices_par, launch_params_par,
++            (const half *) mask->data, indices, counts, int(mask->ne[0]), n_kv_max, s31, s33);
++        CUDA_CHECK(cudaGetLastError());
++        if (check <= 0 || n_call++ % check != 0) {
++            return;
++        }
++        GGML_ASSERT(counts == indices + size_t(blocks_num.x)*blocks_num.y*n_kv_max);
++        par_out.resize(n_words);
++        CUDA_CHECK(cudaMemcpyAsync(par_out.data(), indices, n_words*sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
++        // poison, so that a word the stock kernel leaves unwritten cannot pass as equal
++        CUDA_CHECK(cudaMemsetAsync(indices, 0x5A, n_words*sizeof(int32_t), stream));
++    }
+     ggml_cuda_kernel_launch(kernel, launch_params,
+         (const half *) mask->data, indices, counts, int(mask->ne[0]), n_queries, n_kv_max, s31, s33);
+     CUDA_CHECK(cudaGetLastError());
++    if (use_par) {
++        std::vector<int32_t> ref(n_words);
++        CUDA_CHECK(cudaMemcpyAsync(ref.data(), indices, n_words*sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
++        CUDA_CHECK(cudaStreamSynchronize(stream));
++        size_t n_diff = 0;
++        for (size_t i = 0; i < n_words; ++i) {
++            n_diff += par_out[i] != ref[i];
++        }
++        if (++n_check <= 3 || n_check % 2000 == 0 || n_diff != 0) {
++            GGML_LOG_WARN("compact_par check %llu (lists %u, n_kv %lld, n_kv_max %d): %zu of %zu words differ\n",
++                (unsigned long long) n_check, blocks_num.x*blocks_num.y, (long long) mask->ne[0], n_kv_max, n_diff, n_words);
++        }
++        if (n_diff != 0) {
++            GGML_ABORT("LLAMA_FATTN_COMPACT_PAR_CHECK: parallel and stock index lists differ");
++        }
++    }
+ #endif // !defined(GGML_USE_MUSA)
+ }
+ 

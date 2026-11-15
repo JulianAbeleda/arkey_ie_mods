@@ -1,0 +1,25 @@
+split-kv-verify.patch: TRITON_ATTN keeps its split-KV (3D) kernel for a query of up to 8 tokens.
+Modified by Arkey, 2026: a change to vLLM 0.31.0 (Apache License 2.0; see LICENSES/Apache-2.0.txt).
+Apply in site-packages: patch -p1 --dry-run, then patch -p1.
+
+--- a/vllm/v1/attention/ops/triton_unified_attention.py
++++ b/vllm/v1/attention/ops/triton_unified_attention.py
+@@ -804,6 +804,9 @@
+     return 16 if element_size >= 2 else 32
+ 
+ 
++MAX_3D_QUERY_LEN = 8  # patch: a short multi-token query (a speculative verify) keeps the split-KV path
++
++
+ def unified_attention(
+     q,
+     k,
+@@ -1049,7 +1052,7 @@
+         or softmax_segm_output is None
+         or softmax_segm_max is None
+         or softmax_segm_expsum is None
+-        or max_seqlen_q > 1
++        or (max_seqlen_q > 1 and (max_seqlen_q > MAX_3D_QUERY_LEN or q.shape[0] > seq_threshold_3D))
+         or num_seqs > seq_threshold_3D
+         or is_batch_invariant
+     )

@@ -1,0 +1,574 @@
+Not submitted upstream.
+llama-pinned-copy-stream.patch v2, 2026-11-11. Base: llama.cpp master 7592b61d3. Apply: git apply llama-pinned-copy-stream.patch
+(adds ggml/src/ggml-cuda/weight-stream.cu/.cuh: re-run cmake so the CUDA glob picks them up)
+Design
+  Prefill with experts in host RAM (-cmoe / -ncmoe). In llama_context::sched_copy_experts, a MUL_MAT_ID host weight
+  whose ids cover >= LLAMA_WS_MIN_TOKENS (1024) tokens is uploaded whole, without reading the ids back (no sync), by a
+  CUDA-backend weight streamer (proc addresses ggml_backend_cuda_ws_prefetch / _consume / _pin / _stats). One worker
+  thread issues cudaMemcpyAsync on its own copy stream into a private device slot (4 slots); the compute stream waits
+  on the slot's event and copies slot -> sched dst (D2D, ~1% of time). The order of host weights from the previous
+  large graph is kept, so the next weights upload while the current split computes (wraps into the next ubatch).
+  Source of each upload:
+    v2  LLAMA_WS_PIN_GIB=<GiB> (default 0 = off): at context creation the host *_exps tensors are copied once, whole,
+        in layer order, into one cudaHostAlloc arena of min(budget, host expert bytes); those DMA straight from it.
+    v1  everything else: memcpy mmap -> pinned ring (1 MiB x 8 = 8 MiB, stays in L3) -> DMA.
+  Small batches (decode) take the unchanged stock path. LLAMA_WS=0 disables all of it. Other env: GGML_CUDA_WS_RING_MIB,
+  GGML_CUDA_WS_CHUNK_KIB, GGML_CUDA_WS_SLOTS, GGML_CUDA_WS_THREADS, GGML_CUDA_WS_PAGEABLE, GGML_CUDA_WS_STATS.
+Measured (RTX 5090 PCIe, Ryzen 5800X, 31 GB, a MoE GGUF (IQ1_M), -t 8 -b 4096 -ub 4096 --cache-ram 0, cold
+unique-nonce, engine prompt tok/s, median of 3 reps x 2 passes; wall within 1%)
+                 2.7k: stock / v1 / v2 best (budget)       10k: stock / v1 / v2 best (budget)
+  -ncmoe 12      2,016 / 2,480 / 2,907 (8; all 5.4 GiB)     2,757 / 3,739 / 4,352 (8)  = 1.58x stock
+  -ncmoe 18      1,602 / 2,056 / 2,461 (12; all 8.2 GiB)    2,236 / 3,175 / 3,897 (12) = 1.74x
+  -ncmoe 24      1,292 / 1,689 / 2,057 (12; all 11.1 GiB)   1,844 / 2,742 / 3,527 (12) = 1.91x
+  -cmoe          720 / 1,000 / 1,046 (4)                    1,082 / 1,703 / 1,797 (4)  = 1.66x
+  -cmoe with 8 / 12 GiB pinned COLLAPSES (10k 747 / 303, 2.7k 204 / 98; 18-42k major faults per request): on 31 GB
+  the page cache can no longer hold the unpinned experts + the 28.8 GB n-gram mmap. Keep -cmoe pins <= 4 GiB here.
+  nsys -ncmoe 12 v2 PIN 8, 10k (4,297 tok/s): 17.4 GB pinned H2D on the copy stream at 28.7 GB/s (87% of H2D), 62% of it
+  under kernels, kernel duty 63%. v1 -cmoe 10k: 19.2 GB/s, 27% overlap, duty 20%. Decode (-cmoe, 128 tok): unchanged.
+Correctness: greedy --temp 0, 96 tokens, 4 prompts 2.6k-9.1k tokens: byte-identical to stock (v1, and v2 at PIN 12).
+Evidence: boltbeam-runs/llama-pinned-stream-20261111.md and boltbeam-runs/llama-pinned-stream-20261111/
+
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 848565460..31d49e218 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -2,6 +2,7 @@
+ #include "ggml-impl.h"
+ #include "ggml-backend-impl.h"
+ 
++#include "ggml-cuda/weight-stream.cuh"
+ #include "ggml-cuda/allreduce.cuh"
+ #include "ggml-cuda/common.cuh"
+ #include "ggml-cuda/graph.cuh"
+@@ -6693,6 +6694,19 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+     if (strcmp(name, "ggml_backend_get_features") == 0) {
+         return (void *)ggml_backend_cuda_get_features;
+     }
++    // LOCAL PATCH (llama-pinned-copy-stream)
++    if (strcmp(name, "ggml_backend_cuda_ws_prefetch") == 0) {
++        return (void *)ggml_backend_cuda_ws_prefetch;
++    }
++    if (strcmp(name, "ggml_backend_cuda_ws_consume") == 0) {
++        return (void *)ggml_backend_cuda_ws_consume;
++    }
++    if (strcmp(name, "ggml_backend_cuda_ws_pin") == 0) {
++        return (void *)ggml_backend_cuda_ws_pin;
++    }
++    if (strcmp(name, "ggml_backend_cuda_ws_stats") == 0) {
++        return (void *)ggml_backend_cuda_ws_stats;
++    }
+     return nullptr;
+ }
+ 
+diff --git a/ggml/src/ggml-cuda/weight-stream.cu b/ggml/src/ggml-cuda/weight-stream.cu
+new file mode 100644
+index 000000000..4e92035f9
+--- /dev/null
++++ b/ggml/src/ggml-cuda/weight-stream.cu
+@@ -0,0 +1,339 @@
++// LOCAL PATCH (llama-pinned-copy-stream): never upstreamed.
++// Weight streamer: uploads host-resident weights (mmap / pageable) into private device slots on a dedicated copy
++// stream, staged through a small pinned ring, so the upload of the next weight overlaps the compute of the current one.
++// The consumer waits on the slot's event on the compute stream and copies slot -> dst (D2D), so the scheduler's dst
++// (whose memory the allocator reuses across splits) is only written in stream order.
++//
++// env:
++//   GGML_CUDA_WS_RING_MIB   pinned staging ring size in MiB      (default 8: stays in the 32 MiB L3, capped at 4096)
++//   GGML_CUDA_WS_CHUNK_KIB  staging chunk size in KiB             (default 1024)
++//   GGML_CUDA_WS_THREADS    memcpy threads per chunk              (default 1)
++//   GGML_CUDA_WS_SLOTS      device slots (prefetch depth)         (default 4)
++//   GGML_CUDA_WS_PAGEABLE   1: no pinned ring; copy-stream uploads straight from the pageable source (default 0)
++
++#include "common.cuh"
++#include "weight-stream.cuh"
++#include "ggml-backend-impl.h"
++
++#include <atomic>
++#include <condition_variable>
++#include <cstring>
++#include <deque>
++#include <mutex>
++#include <thread>
++#include <unordered_map>
++#include <vector>
++
++static int ws_env_int(const char * name, int def) {
++    const char * v = getenv(name);
++    return v ? atoi(v) : def;
++}
++
++struct ggml_cuda_ws {
++    enum state_t { FREE, QUEUED, READY };
++    struct slot_t {
++        void *       dev  = nullptr;
++        size_t       cap  = 0;
++        const void * key  = nullptr;
++        const void * host = nullptr;
++        const char * pin  = nullptr;   // pinned copy of host, if any
++        size_t       size = 0;
++        state_t      state = FREE;
++        cudaEvent_t  ready_ev = nullptr;
++        cudaEvent_t  free_ev  = nullptr;
++        bool         free_ev_recorded = false;
++    };
++
++    int device;
++    cudaStream_t copy_stream = nullptr;
++
++    char * pinned = nullptr;
++    size_t chunk  = 0;
++    int    n_chunks = 0;
++    std::vector<cudaEvent_t> chunk_ev;
++    std::vector<bool>        chunk_used;
++    int    next_chunk = 0;
++    int    n_threads  = 1;
++
++    std::vector<slot_t> slots;
++    std::deque<int>     jobs;
++
++    // v2: pinned copies of host weights made once at load (LLAMA_WS_PIN_GIB): host pointer -> pinned copy
++    char * arena = nullptr;
++    size_t arena_size = 0;
++    size_t arena_used = 0;
++    std::unordered_map<const void *, const char *> pinned_copy;
++    std::atomic<uint64_t> bytes_pinned_src{0};
++
++    std::mutex              mtx;
++    std::condition_variable cv;
++    std::thread             worker;
++
++    // stats
++    std::atomic<uint64_t> bytes{0};
++    std::atomic<uint64_t> n_consumed{0};
++    std::atomic<uint64_t> n_miss{0};
++    double wait_s = 0.0;
++    double stage_s = 0.0;
++    double chunkwait_s = 0.0;
++    uint64_t next_report = 0;
++    const bool verbose = getenv("GGML_CUDA_WS_STATS") != nullptr;
++    // GGML_CUDA_WS_PAGEABLE=1: no pinned ring, the copy stream reads the pageable source directly (driver staging)
++    const bool pageable = getenv("GGML_CUDA_WS_PAGEABLE") != nullptr && atoi(getenv("GGML_CUDA_WS_PAGEABLE")) != 0;
++
++    explicit ggml_cuda_ws(int device) : device(device) {
++        ggml_cuda_set_device(device);
++        CUDA_CHECK(cudaStreamCreateWithFlags(&copy_stream, cudaStreamNonBlocking));
++
++        const size_t ring_kib  = (size_t) std::min(4096, std::max(1, ws_env_int("GGML_CUDA_WS_RING_MIB", 8))) << 10;
++        const size_t chunk_kib = (size_t) std::max(64, ws_env_int("GGML_CUDA_WS_CHUNK_KIB", 1024));
++        chunk    = chunk_kib << 10;
++        n_chunks = (int) std::max<size_t>(2, ring_kib / chunk_kib);
++        n_threads = std::max(1, ws_env_int("GGML_CUDA_WS_THREADS", 1));
++        if (pageable) {
++            n_chunks = 0;
++        } else {
++            CUDA_CHECK(cudaHostAlloc((void **) &pinned, chunk*n_chunks, cudaHostAllocPortable));
++        }
++        chunk_ev.resize(n_chunks);
++        chunk_used.assign(n_chunks, false);
++        for (auto & e : chunk_ev) {
++            CUDA_CHECK(cudaEventCreateWithFlags(&e, cudaEventDisableTiming));
++        }
++
++        slots.resize(std::max(1, ws_env_int("GGML_CUDA_WS_SLOTS", 4)));
++        for (auto & s : slots) {
++            CUDA_CHECK(cudaEventCreateWithFlags(&s.ready_ev, cudaEventDisableTiming));
++            CUDA_CHECK(cudaEventCreateWithFlags(&s.free_ev,  cudaEventDisableTiming));
++        }
++
++        GGML_LOG_INFO("%s: weight streamer on device %d: pinned ring %d x %zu KiB, %zu device slots, %d memcpy threads\n",
++            __func__, device, n_chunks, chunk_kib, slots.size(), n_threads);
++
++        worker = std::thread([this] { loop(); });
++        worker.detach(); // lives for the process
++    }
++
++    void stage(char * dst, const char * src, size_t n) {
++        if (n_threads <= 1 || n < ((size_t) 4 << 20)) {
++            memcpy(dst, src, n);
++            return;
++        }
++        std::vector<std::thread> th;
++        const size_t per = ((n + n_threads - 1)/n_threads + 4095) & ~(size_t) 4095;
++        for (int t = 1; t < n_threads; t++) {
++            const size_t a = t*per;
++            if (a >= n) break;
++            const size_t b = std::min(n, a + per);
++            th.emplace_back([=] { memcpy(dst + a, src + a, b - a); });
++        }
++        memcpy(dst, src, std::min(n, per));
++        for (auto & x : th) x.join();
++    }
++
++    void loop() {
++        ggml_cuda_set_device(device);
++        for (;;) {
++            int si;
++            {
++                std::unique_lock<std::mutex> lock(mtx);
++                cv.wait(lock, [this] { return !jobs.empty(); });
++                si = jobs.front();
++                jobs.pop_front();
++            }
++            slot_t & s = slots[si];
++            // the previous consumer's D2D out of this slot must be done before it is overwritten
++            if (s.free_ev_recorded) {
++                CUDA_CHECK(cudaStreamWaitEvent(copy_stream, s.free_ev, 0));
++            }
++            const char * src = (const char *) s.host;
++            if (s.pin) {
++                // pinned copy made at load: DMA straight from it, no staging
++                const size_t piece = (size_t) 64 << 20;
++                for (size_t off = 0; off < s.size; off += piece) {
++                    CUDA_CHECK(cudaMemcpyAsync((char *) s.dev + off, s.pin + off, std::min(piece, s.size - off), cudaMemcpyHostToDevice, copy_stream));
++                }
++                bytes_pinned_src += s.size;
++            } else if (pageable) {
++                // the driver stages pageable memory itself; this thread blocks in it instead of the compute thread
++                const int64_t t0 = ggml_time_us();
++                for (size_t off = 0; off < s.size; off += chunk) {
++                    CUDA_CHECK(cudaMemcpyAsync((char *) s.dev + off, src + off, std::min(chunk, s.size - off), cudaMemcpyHostToDevice, copy_stream));
++                }
++                stage_s += (ggml_time_us() - t0)*1e-6;
++            }
++            for (size_t off = 0; !pageable && !s.pin && off < s.size; off += chunk) {
++                const size_t n = std::min(chunk, s.size - off);
++                const int r = next_chunk;
++                next_chunk = (next_chunk + 1) % n_chunks;
++                if (chunk_used[r]) {
++                    const int64_t t0 = ggml_time_us();
++                    CUDA_CHECK(cudaEventSynchronize(chunk_ev[r]));
++                    chunkwait_s += (ggml_time_us() - t0)*1e-6;
++                }
++                char * stg = pinned + (size_t) r*chunk;
++                const int64_t t0 = ggml_time_us();
++                stage(stg, src + off, n);
++                stage_s += (ggml_time_us() - t0)*1e-6;
++                CUDA_CHECK(cudaMemcpyAsync((char *) s.dev + off, stg, n, cudaMemcpyHostToDevice, copy_stream));
++                CUDA_CHECK(cudaEventRecord(chunk_ev[r], copy_stream));
++                chunk_used[r] = true;
++            }
++            CUDA_CHECK(cudaEventRecord(s.ready_ev, copy_stream));
++            bytes += s.size;
++            if (verbose && bytes >= next_report) {
++                next_report = bytes + (uint64_t) 20e9;
++                fprintf(stderr, "ws_stats: %.1f GB from pinned copy, ", bytes_pinned_src.load()/1e9);
++                fprintf(stderr, "ws_stats: %.1f GB staged, memcpy %.2f s (%.1f GB/s), ring-wait %.2f s, consumer wait %.2f s, consumed %llu, miss %llu\n",
++                    bytes/1e9, stage_s, bytes/1e9/std::max(stage_s, 1e-9), chunkwait_s, wait_s, (unsigned long long) n_consumed.load(), (unsigned long long) n_miss.load());
++            }
++            {
++                std::lock_guard<std::mutex> lock(mtx);
++                s.state = READY;
++            }
++            cv.notify_all();
++        }
++    }
++
++    int find(const void * key) {
++        for (size_t i = 0; i < slots.size(); i++) {
++            if (slots[i].state != FREE && slots[i].key == key) return (int) i;
++        }
++        return -1;
++    }
++
++    // called by the compute thread only
++    bool prefetch(const void * key, const void * host, size_t size) {
++        std::unique_lock<std::mutex> lock(mtx);
++        if (find(key) >= 0) {
++            return true;
++        }
++        int si = -1;
++        for (size_t i = 0; i < slots.size(); i++) {
++            if (slots[i].state == FREE) { si = (int) i; break; }
++        }
++        if (si < 0) {
++            return false;
++        }
++        slot_t & s = slots[si];
++        if (s.cap < size) {
++            // grows only while the first graphs run; cudaFree synchronizes the device
++            lock.unlock();
++            if (s.dev) {
++                if (s.free_ev_recorded) CUDA_CHECK(cudaEventSynchronize(s.free_ev));
++                CUDA_CHECK(cudaFree(s.dev));
++                s.dev = nullptr;
++            }
++            ggml_cuda_set_device(device);
++            cudaError_t err = cudaMalloc(&s.dev, size);
++            if (err != cudaSuccess) {
++                (void) cudaGetLastError();
++                s.dev = nullptr; s.cap = 0;
++                GGML_LOG_WARN("%s: cudaMalloc of a %.1f MiB slot failed, slot disabled\n", __func__, size/1048576.0);
++                return false;
++            }
++            s.cap = size;
++            s.free_ev_recorded = false;
++            lock.lock();
++        }
++        {
++            auto it = pinned_copy.find(host);
++            s.pin = it != pinned_copy.end() ? it->second : nullptr;
++        }
++        s.key = key; s.host = host; s.size = size; s.state = QUEUED;
++        jobs.push_back(si);
++        cv.notify_all();
++        return true;
++    }
++
++    bool consume(const void * key, void * dst, size_t size, cudaStream_t stream) {
++        std::unique_lock<std::mutex> lock(mtx);
++        const int si = find(key);
++        if (si < 0) {
++            n_miss++;
++            return false;
++        }
++        slot_t & s = slots[si];
++        GGML_ASSERT(s.size == size);
++        const int64_t t0 = ggml_time_us();
++        cv.wait(lock, [&s] { return s.state == READY; });
++        wait_s += (ggml_time_us() - t0)*1e-6;
++        CUDA_CHECK(cudaStreamWaitEvent(stream, s.ready_ev, 0));
++        CUDA_CHECK(cudaMemcpyAsync(dst, s.dev, size, cudaMemcpyDeviceToDevice, stream));
++        CUDA_CHECK(cudaEventRecord(s.free_ev, stream));
++        s.free_ev_recorded = true;
++        s.state = FREE;
++        s.key = nullptr;
++        n_consumed++;
++        return true;
++    }
++};
++
++// v2: copy a host weight into the pinned arena (allocated on the first call, budget_bytes). Load time only.
++bool ggml_cuda_ws_pin_impl(ggml_cuda_ws * ws, const void * host, size_t size, size_t budget_bytes) {
++    std::lock_guard<std::mutex> lock(ws->mtx);
++    if (ws->pinned_copy.count(host)) {
++        return true;
++    }
++    if (!ws->arena) {
++        ggml_cuda_set_device(ws->device);
++        if (cudaHostAlloc((void **) &ws->arena, budget_bytes, cudaHostAllocPortable) != cudaSuccess) {
++            (void) cudaGetLastError();
++            ws->arena = nullptr;
++            GGML_LOG_WARN("%s: cudaHostAlloc of %.2f GiB failed, no pinned copies\n", __func__, budget_bytes/1073741824.0);
++            return false;
++        }
++        ws->arena_size = budget_bytes;
++    }
++    const size_t aligned = (size + 4095) & ~(size_t) 4095;
++    if (ws->arena_used + aligned > ws->arena_size) {
++        return false;
++    }
++    char * dst = ws->arena + ws->arena_used;
++    // a few threads: at load nothing else runs
++    const int nt = 4;
++    const size_t per = ((size + nt - 1)/nt + 4095) & ~(size_t) 4095;
++    std::vector<std::thread> th;
++    for (int t = 0; t < nt; t++) {
++        const size_t a = t*per;
++        if (a >= size) break;
++        const size_t b = std::min(size, a + per);
++        th.emplace_back([=] { memcpy(dst + a, (const char *) host + a, b - a); });
++    }
++    for (auto & x : th) x.join();
++    ws->arena_used += aligned;
++    ws->pinned_copy[host] = dst;
++    return true;
++}
++
++static ggml_cuda_ws * ws_get(int device) {
++    static std::mutex m;
++    static ggml_cuda_ws * ws[GGML_CUDA_MAX_DEVICES] = {};
++    std::lock_guard<std::mutex> lock(m);
++    if (!ws[device]) {
++        ws[device] = new ggml_cuda_ws(device);
++    }
++    return ws[device];
++}
++
++bool ggml_backend_cuda_ws_prefetch(ggml_backend_t backend, const void * key, const void * host, size_t size) {
++    auto * ctx = (ggml_backend_cuda_context *) backend->context;
++    return ws_get(ctx->device)->prefetch(key, host, size);
++}
++
++bool ggml_backend_cuda_ws_consume(ggml_backend_t backend, const void * key, struct ggml_tensor * dst) {
++    auto * ctx = (ggml_backend_cuda_context *) backend->context;
++    ggml_cuda_set_device(ctx->device);
++    return ws_get(ctx->device)->consume(key, dst->data, ggml_nbytes(dst), ctx->stream());
++}
++
++void ggml_backend_cuda_ws_stats(ggml_backend_t backend, double * gb, double * wait_s, uint64_t * n_consumed, uint64_t * n_miss) {
++    auto * ctx = (ggml_backend_cuda_context *) backend->context;
++    auto * ws = ws_get(ctx->device);
++    *gb = ws->bytes.load()/1e9; *wait_s = ws->wait_s; *n_consumed = ws->n_consumed.load(); *n_miss = ws->n_miss.load();
++}
++
++bool ggml_backend_cuda_ws_pin(ggml_backend_t backend, const void * host, size_t size, size_t budget_bytes) {
++    auto * ctx = (ggml_backend_cuda_context *) backend->context;
++    return ggml_cuda_ws_pin_impl(ws_get(ctx->device), host, size, budget_bytes);
++}
+diff --git a/ggml/src/ggml-cuda/weight-stream.cuh b/ggml/src/ggml-cuda/weight-stream.cuh
+new file mode 100644
+index 000000000..3a90e33ce
+--- /dev/null
++++ b/ggml/src/ggml-cuda/weight-stream.cuh
+@@ -0,0 +1,8 @@
++// LOCAL PATCH (llama-pinned-copy-stream): never upstreamed.
++#pragma once
++#include "ggml-backend.h"
++
++bool ggml_backend_cuda_ws_prefetch(ggml_backend_t backend, const void * key, const void * host, size_t size);
++bool ggml_backend_cuda_ws_consume (ggml_backend_t backend, const void * key, struct ggml_tensor * dst);
++void ggml_backend_cuda_ws_stats   (ggml_backend_t backend, double * gb, double * wait_s, uint64_t * n_consumed, uint64_t * n_miss);
++bool ggml_backend_cuda_ws_pin     (ggml_backend_t backend, const void * host, size_t size, size_t budget_bytes);
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 670adcc02..ebb627775 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -795,6 +795,55 @@ void llama_context::sched_new(const sched_params & params) {
+             backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), params.max_nodes, params.parallel, params.op_offload));
+ 
+     ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
++
++    // LOCAL PATCH (llama-pinned-copy-stream v2): LLAMA_WS_PIN_GIB > 0 copies host-resident expert tensors (whole
++    // tensors, layer order) once into a pinned arena of that size, so the weight streamer DMAs them without staging
++    {
++        const char * e = getenv("LLAMA_WS_PIN_GIB");
++        const char * w = getenv("LLAMA_WS");
++        const double gib = e ? atof(e) : 0.0;
++        if (gib > 0.0 && !(w && atoi(w) == 0)) {
++            typedef bool (*ws_pin_t)(ggml_backend_t, const void *, size_t, size_t);
++            ggml_backend_t gpu = nullptr;
++            ws_pin_t ws_pin = nullptr;
++            for (auto * b : backend_ptrs) {
++                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(b));
++                if (reg && (ws_pin = (ws_pin_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_ws_pin"))) {
++                    gpu = b;
++                    break;
++                }
++            }
++            if (gpu) {
++                size_t host_bytes = 0;
++                for (const auto & [name, t] : model.tensors_by_name) {
++                    if (t->buffer && t->data && ggml_backend_buffer_is_host(t->buffer) && name.find("_exps") != std::string::npos) {
++                        host_bytes += (ggml_nbytes(t) + 4095) & ~(size_t) 4095;
++                    }
++                }
++                // the arena is never larger than what there is to pin
++                const size_t budget = std::min((size_t) (gib*1073741824.0), host_bytes);
++                size_t done = 0; int n = 0, n_host = 0;
++                const int64_t t0 = ggml_time_us();
++                for (const auto & [name, t] : model.tensors_by_name) {
++                    if (!t->buffer || !t->data || !ggml_backend_buffer_is_host(t->buffer) || name.find("_exps") == std::string::npos) {
++                        continue;
++                    }
++                    n_host++;
++                    if (getenv("LLAMA_WS_PIN_DEBUG")) {
++                        fprintf(stderr, "ws_pin_debug: %s buf %s base %p size %zu data %p nbytes %zu\n", name.c_str(), ggml_backend_buffer_name(t->buffer),
++                            ggml_backend_buffer_get_base(t->buffer), ggml_backend_buffer_get_size(t->buffer), t->data, ggml_nbytes(t));
++                    }
++                    if (done + ggml_nbytes(t) <= budget && ws_pin(gpu, t->data, ggml_nbytes(t), budget)) {
++                        done += ggml_nbytes(t);
++                        n++;
++                    }
++                }
++                LLAMA_LOG_WARN("%s: weight streamer: pinned copies of %d of %d host expert tensors, %.2f GiB of %.2f GiB budget, %.1f s\n",
++                    __func__, n, n_host, done/1073741824.0, gib, (ggml_time_us() - t0)*1e-6);
++                fprintf(stderr, "ws_pin: %d of %d host expert tensors, %.2f GiB, %.1f s\n", n, n_host, done/1073741824.0, (ggml_time_us() - t0)*1e-6);
++            }
++        }
++    }
+     ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
+ 
+     sched_params_cur = params;
+@@ -3206,6 +3255,55 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+         return true;
+     }
+ 
++    // LOCAL PATCH (llama-pinned-copy-stream): large batches route to (nearly) every expert, so the whole tensor is
++    // uploaded without reading the ids back (no sync), by the backend's weight streamer: a pinned staging ring and a
++    // copy stream of its own, which uploads the next host weights (the order of the previous large graph) while this
++    // split computes.  LLAMA_WS=0 disables, LLAMA_WS_MIN_TOKENS (default 1024) is the batch size from which it applies.
++    {
++        typedef bool (*ws_prefetch_t)(ggml_backend_t, const void *, const void *, size_t);
++        typedef bool (*ws_consume_t)(ggml_backend_t, const void *, ggml_tensor *);
++        static const bool    ws_on  = [] { const char * e = getenv("LLAMA_WS"); return e == nullptr || atoi(e) != 0; }();
++        static const int64_t ws_min = [] { const char * e = getenv("LLAMA_WS_MIN_TOKENS"); return e ? (int64_t) atoll(e) : (int64_t) 1024; }();
++        static ggml_backend_reg_t ws_reg = nullptr;
++        static ws_prefetch_t ws_prefetch = nullptr;
++        static ws_consume_t  ws_consume  = nullptr;
++        if (ws_on && ids->ne[1] >= ws_min && ggml_nbytes(src) == ggml_nbytes(dst)) {
++            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
++            if (reg != ws_reg) {
++                ws_reg      = reg;
++                ws_prefetch = (ws_prefetch_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_ws_prefetch");
++                ws_consume  = (ws_consume_t)  ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_ws_consume");
++            }
++            if (ws_prefetch && ws_consume) {
++                static bool logged = false;
++                if (!logged) {
++                    logged = true;
++                    LLAMA_LOG_INFO("%s: weight streamer active for host weights at %lld-token batches (first: %s, %.1f MiB)\n",
++                        __func__, (long long) ids->ne[1], src->name, ggml_nbytes(src)/1048576.0);
++                }
++                st.seq_cur.push_back(src);
++                bool ok = ws_consume(backend, src, dst);
++                if (!ok && ws_prefetch(backend, src, src->data, ggml_nbytes(src))) {
++                    ok = ws_consume(backend, src, dst);
++                }
++                // queue the next host weights while this split computes (stops when the slots are taken)
++                auto it = st.seq_pos.find(src);
++                if (it != st.seq_pos.end()) {
++                    const size_t n = st.seq_prev.size();
++                    for (size_t k = 1; k < n; k++) {
++                        const ggml_tensor * nx = st.seq_prev[(it->second + k) % n];
++                        if (!ws_prefetch(backend, nx, nx->data, ggml_nbytes(nx))) {
++                            break;
++                        }
++                    }
++                }
++                if (ok) {
++                    return true;
++                }
++            }
++        }
++    }
++
+     const int64_t n_expert    = src->ne[2];
+     const size_t  expert_size = src->nb[2];
+ 
+diff --git a/src/llama-context.h b/src/llama-context.h
+index f4061432f..81bba1545 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -15,6 +15,7 @@
+ #include <array>
+ #include <map>
+ #include <vector>
++#include <unordered_map>
+ 
+ struct llama_model;
+ class llama_batch_allocr;
+@@ -418,10 +419,24 @@ private:
+         std::vector<int32_t> ids_data;
+         std::vector<bool>    used;
+ 
++        // LOCAL PATCH (llama-pinned-copy-stream): order of the host weights uploaded whole by the weight streamer
++        // in the previous large-batch graph (the prefetch order of the next one), and in the current one
++        std::vector<const ggml_tensor *> seq_prev;
++        std::vector<const ggml_tensor *> seq_cur;
++        std::unordered_map<const ggml_tensor *, size_t> seq_pos;
++
+         void reset() {
+             ids = nullptr;
+             ids_data.clear();
+             used.clear();
++            if (!seq_cur.empty()) {
++                seq_prev.swap(seq_cur);
++                seq_cur.clear();
++                seq_pos.clear();
++                for (size_t i = 0; i < seq_prev.size(); i++) {
++                    seq_pos[seq_prev[i]] = i;
++                }
++            }
+         }
+     };
+ 

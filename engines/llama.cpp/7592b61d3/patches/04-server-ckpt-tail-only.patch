@@ -1,0 +1,30 @@
+Not submitted upstream.
+llama-server-ckpt-tail-only.patch, 2026-11-11. Base: llama.cpp master 7592b61d3 (tools/server/server-context.cpp only). Apply: git apply
+OPT-IN, DEFAULT OFF: LLAMA_SERVER_CKPT_TAIL_ONLY=1. A FEATURE TRADE-OFF FOR ONE-SHOT WORKLOADS, NOT A FIX.
+What: by default llama-server takes a context checkpoint before the batch that ends within n_ubatch of the prompt end AND
+another before the final few tokens. With the knob on it takes only the second one (one restore point near the end), which saves a state sync plus copy per prompt.
+Measured (RTX 5090, a MoE GGUF (IQ1_M), -ncmoe 12 -t 8 -b 4096 -ub 4096 --cache-ram 0, on top of pinned-copy-stream v2 +
+llama-moe-prefill + llama-server-ckpt-min-head (=256) + llama-ple-prefetch-async + GGML_CUDA_WS_SLOTS=24; cold 10k chat
+text, wall tok/s, n=6): 5,892 [5,752-5,913] -> 6,016 [5,942-6,037].
+Restore test, stated plainly: cache_n 2215 -> 0. A follow-up request that shares the prompt but diverges before its last
+few tokens no longer finds a restore point, and reprocesses the WHOLE prompt. Single-request greedy (4 prompts) is bitwise
+identical.
+Evidence: boltbeam-runs/llama-expert-table-20261111.md ("Close 10k").
+
+--- a/tools/server/server-context.cpp	2026-11-11 19:19:25.569561889 -0500
++++ b/tools/server/server-context.cpp	2026-11-11 19:19:25.577561914 -0500
+@@ -4559,7 +4559,13 @@
+ 
+                     const auto n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
+ 
+-                    const bool near_prompt_end = slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
++                    // LOCAL PATCH (llama-server-ckpt-tail-only): LLAMA_SERVER_CKPT_TAIL_ONLY=1 keeps only the checkpoint
++                    // taken before the prompt's final small batch (its last few tokens), not also the one before the
++                    // batch that ends within n_ubatch of the end: one restore point near the end.
++                    static const bool ckpt_tail_only = [] { const char * e = getenv("LLAMA_SERVER_CKPT_TAIL_ONLY"); return e && atoi(e) != 0; }();
++                    const bool near_prompt_end = ckpt_tail_only
++                        ? slot.task->n_tokens() == slot.prompt.n_tokens()
++                        : slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
+ 
+                     const bool is_user_start = spans.is_user_start(n_tokens_start);
+                     const bool is_last_user_message = n_tokens_start == last_user_pos;

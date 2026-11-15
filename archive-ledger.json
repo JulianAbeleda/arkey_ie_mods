@@ -1,0 +1,43 @@
+{
+ "schema": "arkey_ie_mods.archive_ledger.v1",
+ "entries": [
+  {
+   "id": "llama.cpp/1.0.0/kv-host-old",
+   "sha256": "2d083c9e691bfb17664e2f2fdb141e9608ef985f5edab95db58d056cf53671b2",
+   "switch": "LLAMA_KV_HOST_OLD",
+   "date": "2026-11-14"
+  },
+  {
+   "id": "llama.cpp/1.0.0/kv-staged-gather-a2",
+   "sha256": "f850893db6e13c21b24798f4f70d24e96483f1124a664a75131d39e72cc09e0e",
+   "switch": "LLAMA_KV_STAGE",
+   "date": "2026-11-14"
+  },
+  {
+   "id": "llama.cpp/1.0.0/sparse-direct-half2",
+   "sha256": "5cb0c4c532d56bc6d9b46a872c63d6a409677986a8db0f8fa2b0c89fd9463b30",
+   "switch": null,
+   "date": "2026-11-14"
+  },
+  {
+   "id": "llama.cpp/5193ef1d/iq1m-mmq",
+   "sha256": "19cffb16f7ebfc7532dda9e01cbb0ec9c61af6d18c978727e04f39809960baa3",
+   "switch": null,
+   "date": "2026-11-14"
+  },
+  {
+   "id": "llama.cpp/7592b61d3/ple-pipeline",
+   "sha256": "f7c883d75a31cb3ee817069ed607c9549abf6122b4f6df15705ac70c048f722d",
+   "switch": "LLAMA_PLE_PIPELINE",
+   "date": "2026-11-14"
+  },
+  {
+   "id": "llama.cpp/7592b61d3/ple-pipeline",
+   "sha256": "450d1445a29dc5cc7006532a9d238777c43f08e08ff341fda45fc59051486c0b",
+   "switch": "LLAMA_PLE_PIPELINE",
+   "date": "2026-11-14",
+   "supersedes": "f7c883d75a31cb3ee817069ed607c9549abf6122b4f6df15705ac70c048f722d",
+   "why": "text-only rewrite recorded in the row's scrubbed_from"
+  }
+ ]
+}
