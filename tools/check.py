@@ -45,14 +45,15 @@ ROW_KEYS = {"name", "patch", "engine", "base", "switch", "switch_null_why", "che
             "budget_raised", "depends_on", "output", "gain", "exercised_by", "limits", "rule_exceptions", "static", "scrubbed_from",
             "parked_why", "applies_after"}
 ARCH_KEYS = {"name", "kind", "date", "patch", "switch", "written_on", "why", "evidence", "files", "lines", "sha256", "scrubbed_from"}
-SPEC_KEYS = {"schema", "engine", "version", "base", "about", "budget_rule", "mods", "parked", "archived", "tools", "engine_flags",
+SPEC_KEYS = {"schema", "engine", "version", "base", "about", "budget_rule", "mods", "parked", "archived", "tools", "kernels", "engine_flags",
              "tested_trees", "tested_trees_none", "verified", "also_applies_to"}
 GAIN_KEYS = {"value", "unit", "vs", "conditions", "run", "basis"}
 EVID_KEYS = {"run", "numbers", "match", "gate"}
 TOP_FILES = {".git", ".githooks", ".gitignore", "LICENSE", "LICENSES", "README.md", "engines", "engines.json", "index.json",
              "tools", "local.json", "local.example.json", "archive-ledger.json", "__pycache__"}
-VERSION_ENTRIES = {"mods.json", "patches", "parked", "archive", "tools"}
-INDEX_MOD_KEYS = {"id", "engine", "version", "name", "state", "order", "applier", "base", "switch", "switch_null_why", "check",
+VERSION_ENTRIES = {"mods.json", "patches", "parked", "archive", "tools", "kernels"}
+KERNEL_KEYS = {"name", "dir", "hook", "files", "source", "lines", "budget", "output", "gain", "exercised_by", "limits"}
+INDEX_MOD_KEYS = {"id", "engine", "version", "name", "state", "order", "applier", "base", "switch", "switch_null_why", "check", "check_needs",
                   "marker", "knobs", "output", "patch", "sha256", "lines", "budget", "files", "depends_on", "rule_exceptions"}
 BUDGET_RULES = {"measured": lambda n: n, "ceil_105_10": lambda n: int(math.ceil(n * 1.05 / 10) * 10)}
 
@@ -569,11 +570,12 @@ def check_archive(folder, spec, lint):
 
 def check_files(folder, spec):
     rows = spec.get("mods", []) + spec.get("parked", []) + spec.get("archived", [])
-    known = {m["patch"] for m in rows} | {t["path"] for t in spec.get("tools", [])} | {"archive/README.md"}
+    known = {m["patch"] for m in rows} | {t["path"] for t in spec.get("tools", [])} | {"archive/README.md"} | \
+        {os.path.join(k["dir"], f) for k in spec.get("kernels", []) for f in k["files"]}
     for e in sorted(os.listdir(folder)):
         if e not in VERSION_ENTRIES:
             say("FAIL", f"files   {e} is not part of a version folder ({sorted(VERSION_ENTRIES)})")
-    for sub in ("patches", "parked", "archive", "tools"):
+    for sub in ("patches", "parked", "archive", "tools", "kernels"):
         d = os.path.join(folder, sub)
         for dd, dirs, fs in os.walk(d):
             dirs[:] = [x for x in dirs if x != "__pycache__"]
@@ -581,10 +583,36 @@ def check_files(folder, spec):
                 r = os.path.relpath(os.path.join(dd, f), folder)
                 if r not in known:
                     say("FAIL", f"files   {r} has no row in mods.json")
+    check_kernels(folder, spec)
     for t in spec.get("tools", []):
         p = os.path.join(folder, t["path"])
         ok = os.path.exists(p) and sha256(p) == t["sha256"]
         say("ok" if ok else "FAIL", f"tool    {t['path']} sha256 {t['sha256'][:12]}" + ("" if ok else ": missing or changed"))
+
+
+def check_kernels(folder, spec):
+    """kernels/<name>/: an engine kernel kept as an artifact (a source, its manifest entry for an install hook mod, and
+    built binaries if kept), with the mods' rules: the hook mod's switch turns it on and its check mode checks it; an
+    output label with evidence (identical needs a counted match); a line budget on the source; every file's sha256."""
+    by = {m["name"]: m for m in spec.get("mods", [])}
+    for k in spec.get("kernels", []):
+        bad = [f"unknown keys {sorted(set(k) - KERNEL_KEYS)}"] if set(k) - KERNEL_KEYS else []
+        if not k["dir"].startswith("kernels/") or k["dir"].rstrip("/").split("/")[-1] != k["name"]:
+            bad.append("dir must be kernels/<name>/")
+        if k["hook"] not in by:
+            bad.append(f"hook {k['hook']} is not a series mod of this version")
+        for f, h in k["files"].items():
+            p = os.path.join(folder, k["dir"], f)
+            if not os.path.exists(p) or sha256(p) != h:
+                bad.append(f"{f} missing or changed")
+        src = os.path.join(folder, k["dir"], k["source"])
+        n = sum(1 for _ in open(src, encoding="utf-8", errors="replace")) if os.path.exists(src) else -1
+        if n != k["lines"] or n > k["budget"]:
+            bad.append(f"source {n} lines, row says {k['lines']}, budget {k['budget']}")
+        ev = k["output"].get("evidence") or {}
+        if k["output"].get("label") not in LABELS or not ev.get("numbers") or (k["output"]["label"] == "identical" and not (ev.get("match") or {}).get("of")):
+            bad.append("output label with evidence (identical: a counted match)")
+        say("FAIL" if bad else "ok", f"kernel  {k['name']:22} via {k['hook']}" + ("  " + "; ".join(bad) if bad else ""))
 
 
 def check_docs(reg, lint):
@@ -660,7 +688,7 @@ def build_index(reg):
            "about": "Generated by tools/check.py --write from engines.json and every engines/<engine>/<version>/mods.json; the hook "
                     "fails when it is stale. Read it at a pinned commit of this repo; do not copy rows out of it. Gains, limits, "
                     "conditions and evidence live in each mods.json at the same commit. id = engine/version/name.",
-           "versions": [], "mods": [], "archived": [], "tools": []}
+           "versions": [], "mods": [], "kernels": [], "archived": [], "tools": []}
     for f in folders_all():
         spec = json.load(open(os.path.join(f, "mods.json")))
         e, v = spec["engine"], spec["version"]
@@ -678,7 +706,7 @@ def build_index(reg):
                     "id": f"{e}/{v}/{m['name']}", "engine": e, "version": v, "name": m["name"], "state": state,
                     "order": i + 1 if state == "series" else None, "applier": row.get("applier"), "base": base,
                     "switch": m.get("switch"), "switch_null_why": m.get("switch_null_why"),
-                    "check": (m.get("check") or {}).get("name"), "marker": m.get("marker"),
+                    "check": (m.get("check") or {}).get("name"), "check_needs": (m.get("check") or {}).get("needs", []), "marker": m.get("marker"),
                     "knobs": [x for x in [sw_name(m)] + m.get("reads", []) if x],
                     "output": m["output"]["label"], "patch": os.path.join(rel, m["patch"]), "sha256": sha256(os.path.join(f, m["patch"])),
                     "lines": m["lines"], "budget": m["budget"], "files": m["files"], "depends_on": m["depends_on"],
@@ -687,10 +715,14 @@ def build_index(reg):
             out["archived"].append({"id": f"{e}/{v}/{z['name']}", "engine": e, "version": v, "name": z["name"], "kind": z["kind"],
                                     "switch": z.get("switch"), "date": z["date"], "patch": os.path.join(rel, z["patch"]),
                                     "sha256": z["sha256"], "lines": z["lines"]})
+        for k in spec.get("kernels", []):
+            out["kernels"].append({"id": f"{e}/{v}/kernels/{k['name']}", "engine": e, "version": v, "hook": f"{e}/{v}/{k['hook']}",
+                                   "dir": os.path.join(rel, k["dir"]), "files": k["files"], "output": k["output"]["label"],
+                                   "lines": k["lines"], "budget": k["budget"]})
         for t in spec.get("tools", []):
             out["tools"].append({"id": f"{e}/{v}/{os.path.basename(t['path'])}", "engine": e, "version": v, "path": os.path.join(rel, t["path"]),
                                  "sha256": t["sha256"], "needs": t.get("needs", []), "what": t["what"]})
-    ids = [x["id"] for k in ("mods", "archived", "tools") for x in out[k]]
+    ids = [x["id"] for k in ("mods", "kernels", "archived", "tools") for x in out[k]]
     if len(set(ids)) != len(ids):
         say("FAIL", f"index   ids not unique: {sorted({i for i in ids if ids.count(i) > 1})}")
     for x in out["mods"]:

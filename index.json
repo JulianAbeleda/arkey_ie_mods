@@ -85,6 +85,7 @@
    },
    "switch_null_why": null,
    "check": "LLAMA_KPOOL_CHECK",
+   "check_needs": [],
    "marker": "LLAMA_KPOOL_INCREMENTAL",
    "knobs": [
     "LLAMA_KPOOL_INCREMENTAL"
@@ -130,6 +131,9 @@
    },
    "switch_null_why": null,
    "check": "LLAMA_SPARSE_DIRECT_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
    "marker": "LLAMA_SPARSE_DIRECT",
    "knobs": [
     "LLAMA_SPARSE_DIRECT"
@@ -177,6 +181,7 @@
    },
    "switch_null_why": null,
    "check": "LLAMA_IDX_POOLED_CHECK",
+   "check_needs": [],
    "marker": "LLAMA_IDX_POOLED",
    "knobs": [
     "LLAMA_IDX_POOLED"
@@ -225,6 +230,7 @@
    },
    "switch_null_why": null,
    "check": null,
+   "check_needs": [],
    "marker": "LLAMA_MTP_SHARE_HEAD",
    "knobs": [
     "LLAMA_MTP_SHARE_HEAD"
@@ -274,6 +280,7 @@
    },
    "switch_null_why": null,
    "check": "LLAMA_KPOOL_INPUT_CHECK",
+   "check_needs": [],
    "marker": "LLAMA_KPOOL_INPUT_DEVICE",
    "knobs": [
     "LLAMA_KPOOL_INPUT_DEVICE"
@@ -324,6 +331,7 @@
    },
    "switch_null_why": null,
    "check": "LLAMA_SEQ_RM_CHECK",
+   "check_needs": [],
    "marker": "LLAMA_SEQ_RM_INDEXED",
    "knobs": [
     "LLAMA_SEQ_RM_INDEXED"
@@ -369,6 +377,9 @@
    },
    "switch_null_why": null,
    "check": "LLAMA_FATTN_VEC_SKIP_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
    "marker": "LLAMA_FATTN_VEC_SKIP",
    "knobs": [
     "LLAMA_FATTN_VEC_SKIP"
@@ -418,6 +429,9 @@
    },
    "switch_null_why": null,
    "check": "LLAMA_IDX_INPLACE_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
    "marker": "LLAMA_IDX_INPLACE",
    "knobs": [
     "LLAMA_IDX_INPLACE"
@@ -470,6 +484,9 @@
    },
    "switch_null_why": null,
    "check": "GGML_CUDA_EXT_KERNELS_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
    "marker": "GGML_CUDA_EXT_KERNELS",
    "knobs": [
     "GGML_CUDA_EXT_KERNELS",
@@ -518,6 +535,9 @@
    },
    "switch_null_why": null,
    "check": "LLAMA_FATTN_COMPACT_PAR_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
    "marker": "LLAMA_FATTN_COMPACT_PAR",
    "knobs": [
     "LLAMA_FATTN_COMPACT_PAR"
@@ -557,6 +577,7 @@
    "switch": null,
    "switch_null_why": "default ON, three knobs; stock needs GGML_CUDA_BATCH_GET_STAGING=0 and GGML_CUDA_MMID_PAR_MIN larger than any batch (read from the patch code)",
    "check": null,
+   "check_needs": [],
    "marker": "GGML_CUDA_MMID_PAR_MIN",
    "knobs": [
     "GGML_CUDA_MMID_PAR_MIN",
@@ -610,6 +631,7 @@
    },
    "switch_null_why": null,
    "check": null,
+   "check_needs": [],
    "marker": "GGML_CUDA_WS_RING_MIB",
    "knobs": [
     "LLAMA_WS",
@@ -669,6 +691,7 @@
    },
    "switch_null_why": null,
    "check": null,
+   "check_needs": [],
    "marker": "LLAMA_SERVER_CKPT_MIN_HEAD",
    "knobs": [
     "LLAMA_SERVER_CKPT_MIN_HEAD"
@@ -715,6 +738,7 @@
    },
    "switch_null_why": null,
    "check": null,
+   "check_needs": [],
    "marker": "LLAMA_SERVER_CKPT_TAIL_ONLY",
    "knobs": [
     "LLAMA_SERVER_CKPT_TAIL_ONLY"
@@ -760,6 +784,7 @@
    },
    "switch_null_why": null,
    "check": null,
+   "check_needs": [],
    "marker": "LLAMA_PLE_PREFETCH_ASYNC",
    "knobs": [
     "LLAMA_PLE_PREFETCH_ASYNC"
@@ -801,6 +826,7 @@
    "switch": null,
    "switch_null_why": "a file lookup: adds a search location for -hf MTP sidecars and logs the pick; nothing to switch at run time",
    "check": null,
+   "check_needs": [],
    "marker": "no MTP head (mtp-*.gguf) was found",
    "knobs": [],
    "output": "untested",
@@ -842,6 +868,7 @@
    "switch": null,
    "switch_null_why": "default ON; GGML_CUDA_MMID_PAR_MIN above any batch = stock",
    "check": null,
+   "check_needs": [],
    "marker": "GGML_CUDA_MMID_PAR_MIN",
    "knobs": [
     "GGML_CUDA_MMID_PAR_MIN"
@@ -886,6 +913,7 @@
    "switch": null,
    "switch_null_why": "vLLM has no switch for it: applied = on, patch -R -p1 = stock",
    "check": null,
+   "check_needs": [],
    "marker": "MAX_3D_QUERY_LEN",
    "knobs": [],
    "output": "untested",
@@ -929,6 +957,7 @@
    "switch": null,
    "switch_null_why": "vLLM has no switch for it: applied = on, patch -R -p1 = stock",
    "check": null,
+   "check_needs": [],
    "marker": "ParallelLMHead",
    "knobs": [],
    "output": "untested",
@@ -955,6 +984,7 @@
    ]
   }
  ],
+ "kernels": [],
  "archived": [
   {
    "id": "llama.cpp/1.0.0/kv-host-old",
