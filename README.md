@@ -183,8 +183,9 @@ Parked (may come back) stays in `parked/`.
 An engine kernel is an artifact here too, never in a tool that produced it: `engines/<engine>/<version>/kernels/<name>/`
 holds its source, its manifest entry for the install hook mod (llama.cpp 1.0.0: 09 ext-kernels), built binaries if
 kept, and a `kernels` row in mods.json: hook (the mod whose switch turns it on and whose check mode checks it), files
-with sha256, source lines and budget, an output label with evidence (identical: a counted match), gain vs stock. The
-check verifies each file, the budget and the label; index.json lists them under `kernels`. None yet.
+with sha256, source lines and budget (`source`: one file, or a list when one manifest installs several kernels; lines
+are summed), an output label with evidence (identical: a counted match), gain vs stock. The check verifies each file,
+the budget and the label; index.json lists them under `kernels`.
 
 ## index.json
 

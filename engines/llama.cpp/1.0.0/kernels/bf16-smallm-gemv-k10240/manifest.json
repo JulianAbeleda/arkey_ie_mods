@@ -1,0 +1,181 @@
+{
+ "schema": "boltbeam.kernel_manifest.v1",
+ "engine": {
+  "name": "llama.cpp",
+  "builds": [
+   "b1b770d9"
+  ]
+ },
+ "entries": [
+  {
+   "id": "ark_inject_c1u1",
+   "target": "nvidia_sm120",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        10240,
+        4
+       ],
+       [
+        10240,
+        4
+       ]
+      ],
+      "contiguous": true
+     }
+    ],
+    "outputs": [
+     0
+    ]
+   },
+   "kernel": {
+    "file": "ark_inject_c1u1.cubin",
+    "sha256": "d3a4bd684df58d05eecd25b20657fae7a1a5d4f615edfe8edc2a4e03d64c5959",
+    "symbol": "ark_inject_c1u1",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     4,
+     4,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 0,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "evidence": {
+    "author": "scheduler",
+    "family": "small_m_gemv.v1",
+    "candidate_hash": "f996dd86df995697d07d47ea400e8af536ce5736097c7b97ad70881805a7a965",
+    "compile_flags": [
+     "-O3",
+     "-ftz=true",
+     "-fmad=true"
+    ],
+    "correctness": "reduction order llama.cpp.mmvf.bf16_f32.b256: SASS dependency tree verified (40 FFMA, 5 SHFL, 1 outputs)",
+    "generator": {
+     "repo": "tinygrad-arkey",
+     "commit": "cbd4ca8e3b2c508745055996984256cfe5da0b32",
+     "script": "arkey-pdl-20261115/gen_v2.py"
+    }
+   },
+   "tolerance": 0
+  },
+  {
+   "id": "ark_down_c4u1",
+   "target": "nvidia_sm120",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       320,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        10240,
+        320
+       ],
+       [
+        10240,
+        4
+       ]
+      ],
+      "contiguous": true
+     }
+    ],
+    "outputs": [
+     0
+    ]
+   },
+   "kernel": {
+    "file": "ark_down_c4u1.cubin",
+    "sha256": "4e0049985bb45e151a975b49bd06f693bbc1d4e905bf80fec74ade5d059b7ebf",
+    "symbol": "ark_down_c4u1",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     320,
+     1,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 0,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "evidence": {
+    "author": "scheduler",
+    "family": "small_m_gemv.v1",
+    "candidate_hash": "8fd8a2a44ee7045e2667cc94d83d116f41535bb3218d4a65b995eff5a42692b7",
+    "compile_flags": [
+     "-O3",
+     "-ftz=true",
+     "-fmad=true"
+    ],
+    "correctness": "reduction order llama.cpp.mmvf.bf16_f32.b256: SASS dependency tree verified (32 FFMA, 20 SHFL, 4 outputs)",
+    "generator": {
+     "repo": "tinygrad-arkey",
+     "commit": "cbd4ca8e3b2c508745055996984256cfe5da0b32",
+     "script": "arkey-pdl-20261115/gen_v2.py"
+    }
+   },
+   "tolerance": 0
+  }
+ ]
+}

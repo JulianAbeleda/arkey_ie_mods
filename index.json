@@ -1125,7 +1125,25 @@
    ]
   }
  ],
- "kernels": [],
+ "kernels": [
+  {
+   "id": "llama.cpp/1.0.0/kernels/bf16-smallm-gemv-k10240",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "hook": "llama.cpp/1.0.0/ext-kernels",
+   "dir": "engines/llama.cpp/1.0.0/kernels/bf16-smallm-gemv-k10240/",
+   "files": {
+    "manifest.json": "42cedbe096275a10db8980ae60ceeaf8f72e38809f32ae1c20ef868cd7aa4128",
+    "ark_inject_c1u1.cu": "1653e02baeeb79fcb59d088e87df7ae294d171ac9bdf9c036f7d40fab19e035e",
+    "ark_inject_c1u1.cubin": "d3a4bd684df58d05eecd25b20657fae7a1a5d4f615edfe8edc2a4e03d64c5959",
+    "ark_down_c4u1.cu": "5c6641fa9e0a73c0b584e377a6bc28207d2879d4dc6871c75978502988fe233f",
+    "ark_down_c4u1.cubin": "4e0049985bb45e151a975b49bd06f693bbc1d4e905bf80fec74ade5d059b7ebf"
+   },
+   "output": "identical",
+   "lines": 108,
+   "budget": 120
+  }
+ ],
  "archived": [
   {
    "id": "llama.cpp/1.0.0/kv-host-old",

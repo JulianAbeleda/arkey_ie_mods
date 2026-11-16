@@ -605,8 +605,11 @@ def check_kernels(folder, spec):
             p = os.path.join(folder, k["dir"], f)
             if not os.path.exists(p) or sha256(p) != h:
                 bad.append(f"{f} missing or changed")
-        src = os.path.join(folder, k["dir"], k["source"])
-        n = sum(1 for _ in open(src, encoding="utf-8", errors="replace")) if os.path.exists(src) else -1
+        srcs = [k["source"]] if isinstance(k["source"], str) else k["source"]   # a manifest may install several kernels
+        paths = [os.path.join(folder, k["dir"], x) for x in srcs]
+        n = sum(sum(1 for _ in open(x, encoding="utf-8", errors="replace")) for x in paths) if paths and all(map(os.path.exists, paths)) else -1
+        if any(x not in k["files"] for x in srcs):
+            bad.append("every source must be one of the row's files")
         if n != k["lines"] or n > k["budget"]:
             bad.append(f"source {n} lines, row says {k['lines']}, budget {k['budget']}")
         ev = k["output"].get("evidence") or {}

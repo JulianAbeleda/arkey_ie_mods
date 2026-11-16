@@ -877,7 +877,52 @@
    ]
   }
  ],
- "kernels": [],
+ "kernels": [
+  {
+   "name": "bf16-smallm-gemv-k10240",
+   "dir": "kernels/bf16-smallm-gemv-k10240/",
+   "hook": "ext-kernels",
+   "files": {
+    "manifest.json": "42cedbe096275a10db8980ae60ceeaf8f72e38809f32ae1c20ef868cd7aa4128",
+    "ark_inject_c1u1.cu": "1653e02baeeb79fcb59d088e87df7ae294d171ac9bdf9c036f7d40fab19e035e",
+    "ark_inject_c1u1.cubin": "d3a4bd684df58d05eecd25b20657fae7a1a5d4f615edfe8edc2a4e03d64c5959",
+    "ark_down_c4u1.cu": "5c6641fa9e0a73c0b584e377a6bc28207d2879d4dc6871c75978502988fe233f",
+    "ark_down_c4u1.cubin": "4e0049985bb45e151a975b49bd06f693bbc1d4e905bf80fec74ade5d059b7ebf"
+   },
+   "source": [
+    "ark_inject_c1u1.cu",
+    "ark_down_c4u1.cu"
+   ],
+   "lines": 108,
+   "budget": 120,
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/arkey-pdl-20261115",
+     "numbers": "hook check mode on these files (graphs off, tolerance 0, turns past 98.6k context): inject 70,913 checks, down 71,425 checks, 0 differences, worst 0; switch on vs off: text and n identical 59/59 and draft counts 59/59 in every on arm; with -lv 5 every draft candidate (65,673 lines) and accepted line (7,259) identical (boltbeam-runs/bf16-hc-kernels-20261115)",
+     "match": {
+      "what": "text and n per turn, kernels on vs off",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "0.56",
+    "unit": "ms/step (session mean, 3.2%)",
+    "vs": "same build, hook switch off (stock mul_mat_vec_f)",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3, -ub 128; replaces the BF16 mul_mat_vec of shapes 10240x4 and 10240x320 with 4 activation columns",
+    "run": "boltbeam-runs/arkey-pdl-20261115",
+    "basis": "two pairs off/on in one chain: +0.620, +0.500 ms/step, turn bootstrap 95% [+0.513, +0.615], off-vs-off 0.057; reproduces the earlier +0.548 [+0.530, +0.567] (boltbeam-runs/bf16-hc-kernels-20261115). Timed with the same kernels built sm_120a -use_fast_math; these files are built sm_120 -O3 -ftz -fmad and their SASS is instruction-identical"
+   },
+   "exercised_by": "decode graphs whose mul_mat has a BF16 weight of K 10240 by 4 or 320 rows and 4 fp32 activation columns (the hc inject / hc down rows); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "two shapes only, keyed in manifest.json by op, types and shape; sm_120 only (manifest target nvidia_sm120); one engine build (b1b770d9)",
+    "author: arkey's scheduler (family small_m_gemv.v1, reduction order llama.cpp.mmvf.bf16_f32.b256, verified on SASS); generator tinygrad-arkey cbd4ca8e3, recorded in each manifest entry; regenerating gives these bytes",
+    "the PDL trigger fires at kernel end: firing it after the last global read restored full launch overlap but measured 0.089 ms/step slower (boltbeam-runs/arkey-pdl-20261115)"
+   ]
+  }
+ ],
  "engine_flags": [
   {
    "flags": "-ncmoe 16 --moe-cache-mib 6400",
