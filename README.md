@@ -88,7 +88,8 @@ Limits that bite:
 - 06 missed its own 0.22 ms line (0.19 measured). Kept: positive in 9 of 9 pair-buckets past 32k, 82 lines
   (the nine values are in its row's limits).
 - 09 loads the cubin/PTX named by an opt-in manifest and runs it on the GPU: point it only at kernels you trust.
-  The manifest schema `boltbeam.kernel_manifest.v1` is the format BoltBeam writes.
+  The manifest schema `boltbeam.kernel_manifest.v1` is the format BoltBeam writes. A manifest loads only on a build
+  whose ggml commit matches its `engine.builds` (build with the commit flags under Apply and build).
 - 10 covers prefill batches over 32 tokens through MMQ mul_mat_id with the expert cache on (`--moe-cache-mib`). Cache misses
   are still uploaded one by one, as stock.
 - 11 pins 3.7 GB of host RAM (`--ctx-checkpoints` + 1 buffers of the state size) at the first checkpoint and holds it until
@@ -99,10 +100,22 @@ Limits that bite:
 ### Apply and build
 
 ```
-cd llama.cpp                                  # a clean checkout at b1b770d9
+cd llama.cpp                                  # the base b1b770d9: a clean checkout, or a tree without .git (git archive, tarball)
 for p in /path/arkey_ie_mods/engines/llama.cpp/1.0.0/patches/*.patch; do git apply "$p"; done
-cmake -B build -DGGML_CUDA=ON && cmake --build build -j --target llama-server
+cmake -B build -DGGML_CUDA=ON -DLLAMA_BUILD_COMMIT=b1b770d9 -DGGML_BUILD_COMMIT=b1b770d9 -DGIT_EXE=OFF
+cmake --build build -j --target llama-server
+grep GGML_COMMIT build/ggml/src/ggml-version.h   # must say "b1b770d9"
 ```
+
+The three commit flags are what lets 09 load a kernel. The hook takes a manifest only on a build whose ggml commit
+matches the manifest's `engine.builds`. A tree without .git builds as "unknown", the hook refuses every manifest and
+the engine's own kernels run; the only sign is a WARN line. `-DGGML_BUILD_COMMIT` alone is not enough: the top-level
+CMakeLists.txt sets it from `LLAMA_BUILD_COMMIT`, and ggml/CMakeLists.txt runs `git rev-parse`, whose empty output
+outside a repo replaces it, unless `GIT_EXE` is off. In a git checkout at the base the flags give the same commit.
+
+Verify a kernel loaded: with `GGML_CUDA_EXT_KERNELS` set, the log must say `ext_load: loaded <id>` once per manifest
+entry. `ext_load: ... not used` or `entry ... dropped` means the engine's own kernels run. These lines are WARN level:
+llama-server drops ggml INFO lines at its default verbosity, so a mod's switch and load lines are WARN.
 
 Apply-order dependencies: 05 needs 01 and 03; 07 needs 02; 08 needs 03. The rest (10 and 11 included) apply alone on the base.
 Revert: `git apply -R` in reverse order. With no switch set, the patched build takes the stock path.
@@ -191,7 +204,9 @@ holds its source, its manifest entry for the install hook mod (llama.cpp 1.0.0: 
 kept, and a `kernels` row in mods.json: hook (the mod whose switch turns it on and whose check mode checks it), files
 with sha256, source lines and budget (`source`: one file, or a list when one manifest installs several kernels; lines
 are summed), an output label with evidence (identical: a counted match), gain vs stock. The check verifies each file,
-the budget and the label; index.json lists them under `kernels`.
+the budget and the label; index.json lists them under `kernels`. A kernel's manifest loads only on a build whose ggml
+commit (`GGML_COMMIT` in build/ggml/src/ggml-version.h) matches its `engine.builds`; on any other build, a tree
+without .git configured without the commit flags included, the hook runs the engine's own kernels.
 
 ## index.json
 

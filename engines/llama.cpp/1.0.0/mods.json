@@ -1078,6 +1078,7 @@
    "exercised_by": "decode graphs whose mul_mat has a BF16 weight of K 10240 by 4 or 320 rows and 4 fp32 activation columns (the hc inject / hc down rows); measured on one MoE model with an MTP draft head",
    "limits": [
     "two shapes only, keyed in manifest.json by op, types and shape; sm_120 only (manifest target nvidia_sm120); one engine build (b1b770d9)",
+    "the manifest loads only on a build whose ggml commit (GGML_COMMIT in build/ggml/src/ggml-version.h) matches engine.builds b1b770d9; a tree without .git builds as unknown and the hook runs the engine's own kernels unless configured with -DLLAMA_BUILD_COMMIT=b1b770d9 -DGGML_BUILD_COMMIT=b1b770d9 -DGIT_EXE=OFF (README Apply and build)",
     "author: arkey's scheduler (family small_m_gemv.v1, reduction order llama.cpp.mmvf.bf16_f32.b256, verified on SASS); generator tinygrad-arkey cbd4ca8e3, recorded in each manifest entry; regenerating gives these bytes",
     "the PDL trigger fires at kernel end: firing it after the last global read restored full launch overlap but measured 0.089 ms/step slower (boltbeam-runs/arkey-pdl-20261115)"
    ]
