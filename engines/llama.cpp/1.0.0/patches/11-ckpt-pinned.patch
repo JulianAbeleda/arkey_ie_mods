@@ -1,0 +1,259 @@
+diff --git a/common/common.cpp b/common/common.cpp
+index 657dcdb..07d400c 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -1,4 +1,5 @@
+ #include "ggml.h"
++#include "ggml-backend.h"
+ #include "ggml-cpp.h"
+ #include "gguf.h"
+ 
+@@ -31,6 +32,8 @@
+ #include <sstream>
+ #include <string>
+ #include <thread>
++#include <mutex>
++#include <unordered_map>
+ #include <unordered_set>
+ #include <vector>
+ 
+@@ -2413,6 +2416,106 @@ bool common_prompt_batch_decode(
+     return true;
+ }
+ 
++// LOCAL (ckpt-pinned): LLAMA_CKPT_PINNED=1. A context checkpoint is a new state buffer every time; stock allocates it
++// pageable and the CUDA read then pins, maps and unpins the whole span per save. The pool hands out pinned host buffers
++// (the device's host buffer type) and keeps the buffers of erased checkpoints for the next checkpoint of the same size.
++namespace {
++struct common_state_pool {
++    std::mutex mtx;
++    ggml_backend_buffer_type_t buft = nullptr;
++    std::unordered_map<void *, ggml_backend_buffer_t> live;
++    std::vector<std::pair<size_t, ggml_backend_buffer_t>> idle;
++    size_t n_reserve = 0; // buffers to pin at the first allocation; 0 once done
++    size_t max_idle  = 8;
++};
++constexpr size_t COMMON_STATE_POOL_MIN_BYTES = 1024 * 1024;
++
++common_state_pool * common_state_pool_get() {
++    static common_state_pool * pool = [] () -> common_state_pool * {
++        const char * env = getenv("LLAMA_CKPT_PINNED");
++        if (env == nullptr || atoi(env) == 0) {
++            return nullptr;
++        }
++        auto * res = new common_state_pool(); // never destroyed: checkpoints may outlive static destruction
++        for (size_t i = 0; i < ggml_backend_dev_count() && res->buft == nullptr; i++) {
++            res->buft = ggml_backend_dev_host_buffer_type(ggml_backend_dev_get(i));
++        }
++        LOG_INF("%s: LLAMA_CKPT_PINNED=1, host buffer type = %s\n", __func__, res->buft ? ggml_backend_buft_name(res->buft) : "none (stock path)");
++        return res;
++    }();
++    return pool;
++}
++}
++
++void * common_state_pool_alloc(size_t n_bytes) {
++    auto * pool = n_bytes < COMMON_STATE_POOL_MIN_BYTES ? nullptr : common_state_pool_get();
++    if (pool == nullptr || pool->buft == nullptr) {
++        return nullptr;
++    }
++    std::lock_guard<std::mutex> lock(pool->mtx);
++    ggml_backend_buffer_t buf = nullptr;
++    for (size_t i = 0; i < pool->idle.size(); i++) {
++        if (pool->idle[i].first == n_bytes) {
++            buf = pool->idle[i].second;
++            pool->idle.erase(pool->idle.begin() + i);
++            break;
++        }
++    }
++    if (buf == nullptr) {
++        buf = ggml_backend_buft_alloc_buffer(pool->buft, n_bytes);
++    }
++    if (buf == nullptr) {
++        return nullptr;
++    }
++    if (pool->n_reserve > 0) {
++        // pinned allocations slow the whole host side while they happen: take them all now, not one per checkpoint
++        const int64_t t_start = ggml_time_us();
++        size_t n = 1;
++        for (; n < pool->n_reserve; n++) {
++            ggml_backend_buffer_t cur = ggml_backend_buft_alloc_buffer(pool->buft, n_bytes);
++            if (cur == nullptr) {
++                break;
++            }
++            pool->idle.emplace_back(n_bytes, cur);
++        }
++        pool->max_idle  = std::max(pool->max_idle, n);
++        pool->n_reserve = 0;
++        LOG_INF("%s: LLAMA_CKPT_PINNED reserved %zu buffers of %.3f MiB in %.1f ms\n", __func__, n, n_bytes / 1024.0 / 1024.0, (ggml_time_us() - t_start) / 1000.0);
++    }
++    void * ptr = ggml_backend_buffer_get_base(buf);
++    pool->live[ptr] = buf;
++    return ptr;
++}
++
++void common_state_pool_reserve(size_t n) {
++    static bool done = false; // server thread only
++    auto * pool = done ? nullptr : common_state_pool_get();
++    done = true;
++    if (pool != nullptr) {
++        std::lock_guard<std::mutex> lock(pool->mtx);
++        pool->n_reserve = n;
++    }
++}
++
++bool common_state_pool_free(void * ptr, size_t n_bytes) {
++    auto * pool = common_state_pool_get();
++    if (pool == nullptr) {
++        return false;
++    }
++    std::lock_guard<std::mutex> lock(pool->mtx);
++    const auto it = pool->live.find(ptr);
++    if (it == pool->live.end()) {
++        return false;
++    }
++    if (pool->idle.size() >= pool->max_idle) {
++        ggml_backend_buffer_free(pool->idle.front().second);
++        pool->idle.erase(pool->idle.begin());
++    }
++    pool->idle.emplace_back(n_bytes, it->second);
++    pool->live.erase(it);
++    return true;
++}
++
+ size_t common_prompt_checkpoint::size() const {
+     return data_tgt.size() + data_dft.size() + data_spec.size();
+ }
+diff --git a/common/common.h b/common/common.h
+index 6043ab3..a34adad 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -1310,6 +1310,13 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
+ // prompt utils
+ //
+ 
++// LOCAL (ckpt-pinned): pool of pinned host buffers for sequence state data. Unset LLAMA_CKPT_PINNED = never used (stock).
++// alloc returns nullptr and free returns false when the block is not the pool's.
++void * common_state_pool_alloc(size_t n_bytes);
++bool   common_state_pool_free(void * ptr, size_t n_bytes);
++// pin n buffers at once at the pool's first allocation (its size), so that no later checkpoint waits for a pinned allocation
++void   common_state_pool_reserve(size_t n);
++
+ // leave default-inserted elements uninitialized; callers must fill them before use
+ template <typename T>
+ struct common_no_init_allocator : std::allocator<T> {
+@@ -1319,6 +1326,10 @@ struct common_no_init_allocator : std::allocator<T> {
+     template <typename U> common_no_init_allocator(const common_no_init_allocator<U> &) {}
+ 
+     template <typename U> void construct(U * p) { ::new ((void *) p) U; }
++
++    // LOCAL (ckpt-pinned): LLAMA_CKPT_PINNED=1 takes large blocks from a pool of pinned host buffers that are reused
++    T * allocate(size_t n) { void * p = common_state_pool_alloc(n * sizeof(T)); return p ? (T *) p : std::allocator<T>::allocate(n); }
++    void deallocate(T * p, size_t n) { if (!common_state_pool_free(p, n * sizeof(T))) { std::allocator<T>::deallocate(p, n); } }
+ };
+ 
+ // sequence state data, filled by llama_state_seq_get_data_ext()
+@@ -1340,6 +1351,10 @@ struct common_prompt_checkpoint {
+     // (e.g. eagle3's deferred-boundary g_embd row)
+     std::vector<uint8_t> data_spec;
+ 
++    // LOCAL (ckpt-pinned): LLAMA_CKPT_PINNED_CHECK=1 keeps the same states saved through the stock pageable path
++    std::vector<uint8_t> chk_tgt;
++    std::vector<uint8_t> chk_dft;
++
+     size_t size() const;
+ 
+     bool empty() const;
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index a6059ab..7ea5804 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -2724,6 +2724,64 @@ private:
+         return true;
+     }
+ 
++    // LOCAL (ckpt-pinned): LLAMA_CKPT_PINNED_CHECK=1 - every checkpoint save is also taken through the stock pageable
++    // path and compared; every restore loads the stock copy and the pooled copy and compares the two restored states
++    const bool ckpt_pinned_check = [] { const char * e = getenv("LLAMA_CKPT_PINNED_CHECK"); return e && atoi(e) != 0; }();
++    size_t ckpt_chk_n_save = 0, ckpt_chk_n_restore = 0;
++
++    static std::vector<uint8_t> ckpt_chk_read(llama_context * ctx, llama_seq_id id) {
++        std::vector<uint8_t> res(ctx ? llama_state_seq_get_size_ext(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) : 0);
++        if (ctx) {
++            GGML_ASSERT(llama_state_seq_get_data_ext(ctx, res.data(), res.size(), id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == res.size());
++        }
++        return res;
++    }
++
++    static size_t ckpt_chk_diff(const uint8_t * a, size_t na, const uint8_t * b, size_t nb) {
++        size_t n = na > nb ? na - nb : nb - na;
++        for (size_t i = 0; i < std::min(na, nb); i++) {
++            n += a[i] != b[i];
++        }
++        return n;
++    }
++
++    void ckpt_chk_save(server_slot & slot, common_prompt_checkpoint & cur) {
++        cur.chk_tgt = ckpt_chk_read(ctx_tgt, slot.id);
++        cur.chk_dft = ckpt_chk_read(ctx_dft, slot.id);
++        const size_t d_tgt = ckpt_chk_diff(cur.chk_tgt.data(), cur.chk_tgt.size(), cur.data_tgt.data(), cur.data_tgt.size());
++        const size_t d_dft = ckpt_chk_diff(cur.chk_dft.data(), cur.chk_dft.size(), cur.data_dft.data(), cur.data_dft.size());
++        SLT_INF(slot, "ckpt_pinned check: save %zu n_tokens = %" PRId64 ", tgt %zu bytes, dft %zu bytes, differing bytes vs stock save: tgt %zu, dft %zu\n",
++                ++ckpt_chk_n_save, cur.n_tokens, cur.data_tgt.size(), cur.data_dft.size(), d_tgt, d_dft);
++        if (d_tgt || d_dft) {
++            GGML_ABORT("LLAMA_CKPT_PINNED_CHECK: saved checkpoint differs from the stock save\n");
++        }
++    }
++
++    // called after the checkpoint was restored from its own (pooled) buffers
++    void ckpt_chk_restore(server_slot & slot, const common_prompt_checkpoint & cur) {
++        if (cur.chk_tgt.size() != cur.data_tgt.size()) {
++            return; // not created under the check (e.g. loaded from a slot file)
++        }
++        const auto new_tgt = ckpt_chk_read(ctx_tgt, slot.id);
++        const auto new_dft = ckpt_chk_read(ctx_dft, slot.id);
++        GGML_ASSERT(llama_state_seq_set_data_ext(ctx_tgt, cur.chk_tgt.data(), cur.chk_tgt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == cur.chk_tgt.size());
++        if (ctx_dft && !cur.chk_dft.empty()) {
++            GGML_ASSERT(llama_state_seq_set_data_ext(ctx_dft, cur.chk_dft.data(), cur.chk_dft.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == cur.chk_dft.size());
++        }
++        const auto old_tgt = ckpt_chk_read(ctx_tgt, slot.id);
++        const auto old_dft = ckpt_chk_read(ctx_dft, slot.id);
++        const size_t d_tgt = ckpt_chk_diff(old_tgt.data(), old_tgt.size(), new_tgt.data(), new_tgt.size());
++        const size_t d_dft = ckpt_chk_diff(old_dft.data(), old_dft.size(), new_dft.data(), new_dft.size());
++        const size_t d_blob = ckpt_chk_diff(new_tgt.data(), new_tgt.size(), cur.data_tgt.data(), cur.data_tgt.size());
++        // leave the context as the pooled restore left it
++        GGML_ASSERT(cur.load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) && cur.load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
++        SLT_INF(slot, "ckpt_pinned check: restore %zu n_tokens = %" PRId64 ", restored state %zu + %zu bytes, differing bytes stock vs pooled restore: tgt %zu, dft %zu; read-back vs checkpoint: tgt %zu\n",
++                ++ckpt_chk_n_restore, cur.n_tokens, new_tgt.size(), new_dft.size(), d_tgt, d_dft, d_blob);
++        if (d_tgt || d_dft) {
++            GGML_ABORT("LLAMA_CKPT_PINNED_CHECK: restored state differs from the stock restore\n");
++        }
++    }
++
+     // n_tokens_cur: the number of tokens added to the batch for the current slot
+     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
+         const int id_task = slot.task->id;
+@@ -2781,8 +2839,12 @@ private:
+         //       this is not true for SWA models: https://github.com/ggml-org/llama.cpp/pull/24411#issuecomment-4677983225
+         cur.update_pos(slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
+ 
++        common_state_pool_reserve(params_base.n_ctx_checkpoints + 1); // LOCAL (ckpt-pinned): no-op unless LLAMA_CKPT_PINNED=1
+         cur.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+         cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++        if (ckpt_pinned_check) {
++            ckpt_chk_save(slot, cur);
++        }
+         // stash the draft's speculative state with the checkpoint
+         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
+ 
+@@ -4305,6 +4367,10 @@ private:
+                                     if (!do_reset) {
+                                         const auto & cur = **it;
+ 
++                                        if (ckpt_pinned_check) {
++                                            ckpt_chk_restore(slot, cur);
++                                        }
++
+                                         // restore the draft's speculative state
+                                         common_speculative_set_state(spec.get(), slot.id, cur.data_spec);
+ 

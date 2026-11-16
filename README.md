@@ -10,7 +10,7 @@ Opt-in patches for inference engines. Engine-agnostic and model-agnostic.
 
 | engine | version | mods | state |
 |---|---|---|---|
-| llama.cpp | v1.0.0 (b12359, b1b770d9) | 9 in the series, 1 parked, 3 archived | active |
+| llama.cpp | v1.0.0 (b12359, b1b770d9) | 11 in the series, 1 parked, 3 archived | active |
 | llama.cpp | master 7592b61d3 | 6 in the series, 1 parked, 1 archived | active |
 | llama.cpp | master 5193ef1d | archive only: 1 | - |
 | vLLM | 0.31.0 | 2 in the series, 1 tool | active |
@@ -55,7 +55,7 @@ git config core.hooksPath .githooks          # the hook checks what you stage
 cp local.example.json local.json               # then set this machine's paths (or ARKEY_IE_MODS_LOCAL=/path/to/file)
 ```
 
-## llama.cpp v1.0.0: long-context MoE decode
+## llama.cpp v1.0.0: long-context MoE decode and prefill
 
 Base: tag b12359, commit `b1b770d90d94cad9e9ea5b993bdbc383a522fb28`. CUDA backend.
 Measured on one RTX 5090, one request at a time, a 59-turn session to 128k context, q8_0 KV, MTP draft head k=3.
@@ -72,8 +72,10 @@ Measured on one RTX 5090, one request at a time, a 59-turn session to 128k conte
 | 07 | vector attention kernel skips masked rows | `LLAMA_FATTN_VEC_SKIP=1` | +102 -10 | 0.99 ms/step at 96-128k | identical |
 | 08 | indexer scores pooled q8_0 keys in place | `LLAMA_IDX_INPLACE=1` | +59 -0 | about 0.30 ms/step at about 102k | identical |
 | 09 | external kernel hook | `GGML_CUDA_EXT_KERNELS=/path/manifest.json` | +292 -0 | 0 by itself; installs kernels by op and shape | identical with an identity kernel |
+| 10 | prefill reads cached experts in place | `LLAMA_MOE_INPLACE=1` | +147 -15 | prefill -342 ms/turn [-365, -321] at -ub 128 (-16%) | identical |
+| 11 | context checkpoints in a pinned pool | `LLAMA_CKPT_PINNED=1` | +184 -0 | prefill -152 ms/turn [-168, -140] at 96-128k; on top of 10 at -ub 512: -153 [-157, -149] | identical |
 
-Series total: 9 patches, +1,436 -115 lines. Evidence, conditions and limits per mod: `engines/llama.cpp/1.0.0/mods.json`.
+Series total: 11 patches, +1,767 -130 lines. Evidence, conditions and limits per mod: `engines/llama.cpp/1.0.0/mods.json`.
 
 Limits that bite:
 - 03 aborts on context shift, mid-sequence edits, full slot save/restore and the prompt cache. One sequence only.
@@ -85,6 +87,10 @@ Limits that bite:
   (the nine values are in its row's limits).
 - 09 loads the cubin/PTX named by an opt-in manifest and runs it on the GPU: point it only at kernels you trust.
   The manifest schema `boltbeam.kernel_manifest.v1` is the format BoltBeam writes.
+- 10 covers prefill batches over 32 tokens through MMQ mul_mat_id with the expert cache on (`--moe-cache-mib`). Cache misses
+  are still uploaded one by one, as stock.
+- 11 pins 3.7 GB of host RAM (`--ctx-checkpoints` + 1 buffers of the state size) at the first checkpoint and holds it until
+  exit. That first checkpoint takes about 2.3 s once. 8 MiB of VRAM (measured with 10 at -ub 512).
 
 ### Apply and build
 
@@ -94,7 +100,7 @@ for p in /path/arkey_ie_mods/engines/llama.cpp/1.0.0/patches/*.patch; do git app
 cmake -B build -DGGML_CUDA=ON && cmake --build build -j --target llama-server
 ```
 
-Apply-order dependencies: 05 needs 01 and 03; 07 needs 02; 08 needs 03. The rest apply alone on the base.
+Apply-order dependencies: 05 needs 01 and 03; 07 needs 02; 08 needs 03. The rest (10 and 11 included) apply alone on the base.
 Revert: `git apply -R` in reverse order. With no switch set, the patched build takes the stock path.
 
 ### Check modes
@@ -112,6 +118,8 @@ Set the check switch beside the mod's switch. Rows marked G also need `GGML_CUDA
 | 07 | `LLAMA_FATTN_VEC_SKIP_CHECK=N` | G |
 | 08 | `LLAMA_IDX_INPLACE_CHECK=1` | G |
 | 09 | `GGML_CUDA_EXT_KERNELS_CHECK=1` | G |
+| 10 | `LLAMA_MOE_INPLACE_CHECK=1` | G |
+| 11 | `LLAMA_CKPT_PINNED_CHECK=1` | |
 
 A check run is slow. It is for correctness, not timing.
 

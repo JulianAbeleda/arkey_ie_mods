@@ -8,7 +8,7 @@
   "release": "v1.0.0",
   "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28"
  },
- "about": "Opt-in mods for long-context MoE decode. Series order = list order. Every gain is against this engine's stock code path (the unpatched build, or the same build with the switch off). archived: rejected patches, kept so nothing is lost; never in the series (archive/README.md is generated from the rows).",
+ "about": "Opt-in mods for long-context MoE decode and prefill. Series order = list order. Every gain is against this engine's stock code path (the unpatched build, or the same build with the switch off). archived: rejected patches, kept so nothing is lost; never in the series (archive/README.md is generated from the rows).",
  "budget_rule": "ceil_105_10",
  "mods": [
   {
@@ -607,6 +607,146 @@
     "hunks_removing_stock_lines": 0,
     "note": "purely additive (0 lines removed): one new file, one guarded call site, one build-list line."
    }
+  },
+  {
+   "name": "moe-inplace",
+   "patch": "patches/10-moe-inplace.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_MOE_INPLACE",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_MOE_INPLACE_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_MOE_INPLACE",
+   "files": [
+    "ggml/src/ggml-cuda/common.cuh",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/mmq.cu",
+    "ggml/src/ggml-cuda/mmq.cuh",
+    "src/llama-context.cpp",
+    "src/llama-context.h",
+    "src/llama-moe-cache.cpp",
+    "src/llama-moe-cache.h"
+   ],
+   "lines": {
+    "added": 147,
+    "removed": 15
+   },
+   "budget": {
+    "added": 160,
+    "removed": 15
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/prefill-expert-inplace-20261115",
+     "numbers": "check session (graphs off, 59 turns): 49,392 checks of every prefill MMQ mul_mat_id output of the host expert layers, in place vs staged, 0 bytes differ; -lv 5 off/on pair: 65,673 draft candidate lines and 7,259 accepted lines equal, text sha + n 59/59; 8,015,016 experts read in place = the 8,015,016 stock copied",
+     "match": {
+      "what": "text sha, n, draft_n, accepted per turn, switch on vs off",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "-342 [-365, -321]",
+    "unit": "ms of prefill per turn, turns 2-59 (-16%; 96-128k: -342 [-395, -290]; 0.989 -> 0.829 ms per new token)",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3, -ncmoe 16 --moe-cache-mib 6400, series switches 01-08 on, -ub 128 -b 2048; 2 alternating pairs + off-vs-off (-2.9 ms); decode tok/s unchanged (+0.00% [-0.15, +0.16])",
+    "run": "boltbeam-runs/prefill-expert-inplace-20261115"
+   },
+   "exercised_by": "prefill batches (more than 32 tokens) through MMQ mul_mat_id on host-RAM experts with the engine's MoE expert cache on (--moe-cache-mib with -ncmoe); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "batches over 32 tokens through the MMQ mul_mat_id kernel only; decode and small batches keep the stock path",
+    "experts that miss the cache are still uploaded one by one into the staging copy, as stock (about 116 ms a turn at 100k remains)",
+    "one device-side offset table per staged host expert tensor (2 KB each, kept for the life of the backend context)",
+    "a cold first turn is unchanged (nothing is cached yet)"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 10,
+    "note": "10 hunks rewrite stock lines: the MMQ kernel and its launch take one more argument (x_delta), and its three tile call sites read x + x_delta[zt] when x_delta is set; with the switch unset x_delta is nullptr and the weight base is x, as stock. The MoE cache callback computes the offsets only with the switch on."
+   }
+  },
+  {
+   "name": "ckpt-pinned",
+   "patch": "patches/11-ckpt-pinned.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_CKPT_PINNED",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_CKPT_PINNED_CHECK",
+    "needs": []
+   },
+   "reads": [],
+   "marker": "LLAMA_CKPT_PINNED",
+   "files": [
+    "common/common.cpp",
+    "common/common.h",
+    "tools/server/server-context.cpp"
+   ],
+   "lines": {
+    "added": 184,
+    "removed": 0
+   },
+   "budget": {
+    "added": 200,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/prefill-ckpt-20261115",
+     "numbers": "check session (59 turns): 178 saves each also taken through the stock path and 54 restores each loaded from both copies, 0 differing bytes; -lv 5 off/on pair: 65,673 draft candidate lines and 7,259 accepted lines equal, text + n 59/59; restore test (last and earlier user message edited): 9 requests, 8 restores, equal off vs on. Together with 10 at -ub 512 (prefill-combined-20261115): 66,672 draft candidate lines and 7,370 accepted lines equal, text 59/59",
+     "match": {
+      "what": "text sha, n, draft_n, accepted per turn, switch on vs off",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "-152 [-168, -140]",
+    "unit": "ms of prefill per turn at 96-128k (-7.2%; turns 2-59: -163 [-171, -156]); a save 50.0 -> 4.33 ms, a restore 11.5 -> 4.7 ms",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3, -ncmoe 16 --moe-cache-mib 6400, series switches 01-08 on, -ub 128 -b 2048; 2 alternating pairs + off-vs-off; decode not slower in any bucket. Stacked on 10 at -ub 512 -b 2048: -153 [-157, -149] ms per turn, turns 2-59, vs 10 alone (boltbeam-runs/prefill-combined-20261115)",
+    "run": "boltbeam-runs/prefill-ckpt-20261115"
+   },
+   "exercised_by": "llama-server context checkpoints (three a prompt) on a CUDA device with a pinned host buffer type; any model whose state saves are 1 MiB or more",
+   "limits": [
+    "costs 3.7 GB of pinned host RAM (33 x 113 MiB here: --ctx-checkpoints + 1 buffers of the state size) from the first checkpoint until the process exits",
+    "the first checkpoint of a server's life takes about 2.3 s once (all pool buffers are pinned at once)",
+    "costs 8 MiB of VRAM (measured stacked on 10 at -ub 512)",
+    "a checkpoint of another size or past the reserved count is pinned when first needed (slower host CUDA calls while that happens); buffers under 1 MiB and hosts without a pinned host buffer type take the stock path",
+    "the check mode doubles checkpoint memory"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "purely additive (0 lines removed): the pool is behind the state buffer allocator and is never entered with the switch unset; 65 of the 70 server lines are the check mode."
+   }
   }
  ],
  "parked": [
@@ -785,6 +925,44 @@
     "patches/06-seq-rm-indexed.patch",
     "patches/09-ext-kernels.patch",
     "archive/kv-host-old.patch"
+   ]
+  },
+  {
+   "id": "prefill-expert-inplace",
+   "path": "boltbeam-runs/prefill-expert-inplace-20261115/src-inplace",
+   "what": "a snapshot of the source the in-place expert reads (10) were built and measured on (the folder's src/ moved on to later follow-ups)",
+   "contains": "01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement)",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/07-fattn-vec-skip.patch",
+    "patches/08-idx-inplace.patch",
+    "parked/fattn-compact-par.patch",
+    "archive/kv-host-old.patch",
+    "patches/10-moe-inplace.patch"
+   ]
+  },
+  {
+   "id": "prefill-ckpt",
+   "path": "boltbeam-runs/prefill-ckpt-20261115/src",
+   "what": "the tree the pinned checkpoint pool (11) was built and measured on alone",
+   "contains": "01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement)",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/07-fattn-vec-skip.patch",
+    "patches/08-idx-inplace.patch",
+    "parked/fattn-compact-par.patch",
+    "archive/kv-host-old.patch",
+    "patches/11-ckpt-pinned.patch"
    ]
   }
  ],

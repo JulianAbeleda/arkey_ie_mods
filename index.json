@@ -14,7 +14,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08)",
+    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement)",
     "entries": [
      {
       "id": "mods-series-verify",
@@ -529,6 +529,109 @@
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": []
+  },
+  {
+   "id": "llama.cpp/1.0.0/moe-inplace",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "moe-inplace",
+   "state": "series",
+   "order": 10,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_MOE_INPLACE",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "LLAMA_MOE_INPLACE_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
+   "marker": "LLAMA_MOE_INPLACE",
+   "knobs": [
+    "LLAMA_MOE_INPLACE"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/10-moe-inplace.patch",
+   "sha256": "aee3d494625201bb3dc3b66ccdfcdd3ec975a7816b238f5b7595eaa8d267ff15",
+   "lines": {
+    "added": 147,
+    "removed": 15
+   },
+   "budget": {
+    "added": 160,
+    "removed": 15
+   },
+   "files": [
+    "ggml/src/ggml-cuda/common.cuh",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/mmq.cu",
+    "ggml/src/ggml-cuda/mmq.cuh",
+    "src/llama-context.cpp",
+    "src/llama-context.h",
+    "src/llama-moe-cache.cpp",
+    "src/llama-moe-cache.h"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": []
+  },
+  {
+   "id": "llama.cpp/1.0.0/ckpt-pinned",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "ckpt-pinned",
+   "state": "series",
+   "order": 11,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_CKPT_PINNED",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "LLAMA_CKPT_PINNED_CHECK",
+   "check_needs": [],
+   "marker": "LLAMA_CKPT_PINNED",
+   "knobs": [
+    "LLAMA_CKPT_PINNED"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/11-ckpt-pinned.patch",
+   "sha256": "8bd1e75ea28508b70d0aecbbfce6b9a912f11b14155373407ebf02c3ef5e4e70",
+   "lines": {
+    "added": 184,
+    "removed": 0
+   },
+   "budget": {
+    "added": 200,
+    "removed": 0
+   },
+   "files": [
+    "common/common.cpp",
+    "common/common.h",
+    "tools/server/server-context.cpp"
    ],
    "depends_on": {
     "apply": [],
