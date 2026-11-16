@@ -36,6 +36,22 @@
        }
       ],
       "side_number": "V1 decode 206.6 tok/s session (single run, 450 W, M); the measured arms L1-L3 were 208.0-208.4 with the parked compaction on"
+     },
+     {
+      "id": "mods-series-verify-0111",
+      "date": "2026-11-15",
+      "tree": "boltbeam-runs/mods-series-verify-0111-20261115/src",
+      "contains": "exactly the series 01-11 on the base (git archive b1b770d9 + git apply 01..11 in order, patch-shas.txt); no parked patch, no archived kv-host-old code, no other prefill follow-up code (strings of the built libraries hold none of their switches)",
+      "build": "same configure as mods-series-verify-20261115/build.sh (CUDA, CMAKE_CUDA_ARCHITECTURES=120, Release, LLAMA_CURL/UI/MTMD off, GGML_NATIVE on); target llama-server; llama-server sha256 3405d4dae198, libggml-cuda 4d92ce744a36, libllama 237a32119b14, libllama-common a10646baea0b",
+      "runs": "boltbeam-runs/mods-series-verify-0111-20261115 (arm.sh, cmp.py, rres-V1.json, srv-V1.log, q.log); references = the measured arms of prefill-combined-20261115 (rres-N1/N2 timed, rres-LB -lv 5), built from a tree with 01-08 + 10 + 11 + parked compaction + archived kv-host-old code and the unset cold-fill follow-up",
+      "results": [
+       {
+        "compare": "series build, switches 01-08 + 10 + 11 on, 09 off (V1) vs the measured combined arms N1, N2 and LB (parked compaction on there)",
+        "setup": "59-turn session to 128k (-c 131072, q8_0 KV, -ncmoe 16 -ub 512 -b 2048 --moe-cache-mib 6400, draft-mtp n-max 3, -ctkd/-ctvd q8_0), temp 0, same driver sess.py and session as the references",
+        "numbers": "text sha, n, draft_n, accepted identical on 59/59 turns against each of N1, N2 and LB; pool reserved 33 buffers of 112.584 MiB in 1,832 ms at the first checkpoint"
+       }
+      ],
+      "side_number": "V1 decode 204.3 tok/s session (single untimed run, 450 W, M); the measured combined arms were 205.4 mean"
      }
     ]
    }
