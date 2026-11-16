@@ -747,6 +747,78 @@
     "hunks_removing_stock_lines": 0,
     "note": "purely additive (0 lines removed): the pool is behind the state buffer allocator and is never entered with the switch unset; 65 of the 70 server lines are the check mode."
    }
+  },
+  {
+   "name": "topk-fused",
+   "patch": "patches/12-topk-fused.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_TOPK_FUSED",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_TOPK_FUSED_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [
+    "GGML_CUDA_PDL"
+   ],
+   "marker": "LLAMA_TOPK_FUSED",
+   "files": [
+    "ggml/src/ggml-cuda/top-k.cu"
+   ],
+   "lines": {
+    "added": 314,
+    "removed": 1
+   },
+   "budget": {
+    "added": 330,
+    "removed": 1
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/decode-topk-fused-20261115",
+     "numbers": "check session (59 turns, graphs off): 166,000+ fused calls each compared with the stock kernels and a host reference (picks above the threshold as a set, tie slots word for word in order), total diff 0, verify rows 4 x up to 32,320 columns and the 1-row sampler over 248,320; -lv 5 off/on pair: 65,790 draft candidate lines and 7,268 accepted lines equal, text + n 59/59; 6 timed arms: text sha, n, draft_n, accepted 59/59 equal",
+     "match": {
+      "what": "text sha, n, draft_n, accepted per turn, switch on vs off",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "0.303 [0.174, 0.433]",
+    "unit": "ms/step decode, session (+1.93% tok/s, 213.1 -> 217.2); 96-128k: 0.323 [0.267, 0.380]",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3, backend sampler (-bs), series switches 01-08 + 10 + 11 on, generated kernels (09) loaded, -ub 1024 -b 2048 -ncmoe 16 --moe-cache-mib 6336; 3 alternating pairs, 95% t-interval over pairs; off-vs-off max 0.102 session, 0.046 at 96-128k; <64k buckets inside noise, none harmed",
+    "run": "boltbeam-runs/decode-topk-fused-20261115"
+   },
+   "exercised_by": "ggml_top_k calls that take the CUDA radix path with at most 8 rows (and rows <= SM count): the indexer's per-layer top-k at decode and draft, and, on builds without CUB DeviceTopK (CCCL < 3.4.3), the backend sampler's top-k over the vocabulary",
+   "limits": [
+    "CUDA only: compiled out on HIP and MUSA builds (warp size 32, cudaStreamCreate), which keep the stock path",
+    "only calls with rows <= 8 and rows x blocks <= SM count use it (an in-kernel barrier needs every block resident); larger calls (prefill) keep the stock path",
+    "residency is derived from the SM count, not checked: not for MPS thread-percentage limits or green contexts (the barrier could hang); a faulted launch leaves the row state set and later calls on that stream hang",
+    "row state is keyed by stream handle only: a process that destroys a stream and gets the same handle on another GPU would reuse a buffer on the wrong device (single-GPU runs measured)",
+    "the order of picks above the threshold is the atomicAdd order, as in stock (no fixed order); ties fill the last slots in ascending column order, as in stock",
+    "keeps 8 x 128 bytes of zeroed device state per stream for the life of the process",
+    "the check mode needs GGML_CUDA_DISABLE_GRAPHS=1 (it syncs the stream) and does not enforce it",
+    "measured gain is 70% of the derived 0.46 ms/step at ~100k"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 1,
+    "note": "one stock line changed: the stock top_k_radix_cuda is renamed top_k_radix_stock_cuda and a new top_k_radix_cuda dispatches to it unless the switch is set. Not provable statically."
+   }
   }
  ],
  "parked": [
@@ -1008,6 +1080,26 @@
     "parked/fattn-compact-par.patch",
     "archive/kv-host-old.patch",
     "patches/11-ckpt-pinned.patch"
+   ]
+  },
+  {
+   "id": "decode-topk-fused",
+   "path": "boltbeam-runs/decode-topk-fused-20261115/src-s",
+   "what": "the tree the fused radix top-k (12) was built and measured on",
+   "contains": "exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it)",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/07-fattn-vec-skip.patch",
+    "patches/08-idx-inplace.patch",
+    "patches/09-ext-kernels.patch",
+    "patches/10-moe-inplace.patch",
+    "patches/11-ckpt-pinned.patch",
+    "patches/12-topk-fused.patch"
    ]
   }
  ],

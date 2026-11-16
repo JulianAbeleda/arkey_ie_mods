@@ -74,8 +74,9 @@ Measured on one RTX 5090, one request at a time, a 59-turn session to 128k conte
 | 09 | external kernel hook | `GGML_CUDA_EXT_KERNELS=/path/manifest.json` | +292 -0 | 0 by itself; installs kernels by op and shape | identical with an identity kernel |
 | 10 | prefill reads cached experts in place | `LLAMA_MOE_INPLACE=1` | +147 -15 | prefill -342 ms/turn [-365, -321] at -ub 128 (-16%) | identical |
 | 11 | context checkpoints in a pinned pool | `LLAMA_CKPT_PINNED=1` | +184 -0 | prefill -152 ms/turn [-168, -140] at 96-128k; on top of 10 at -ub 512: -153 [-157, -149] | identical |
+| 12 | radix top-k of a few rows in one launch | `LLAMA_TOPK_FUSED=1` | +314 -1 | 0.30 ms/step [0.17, 0.43] session (+1.9%); 0.32 [0.27, 0.38] at 96-128k | identical |
 
-Series total: 11 patches, +1,767 -130 lines. Evidence, conditions and limits per mod: `engines/llama.cpp/1.0.0/mods.json`.
+Series total: 12 patches, +2,081 -131 lines. Evidence, conditions and limits per mod: `engines/llama.cpp/1.0.0/mods.json`.
 
 Limits that bite:
 - 03 aborts on context shift, mid-sequence edits, full slot save/restore and the prompt cache. One sequence only.

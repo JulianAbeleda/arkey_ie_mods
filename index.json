@@ -14,7 +14,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement)",
+    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it)",
     "entries": [
      {
       "id": "mods-series-verify",
@@ -648,6 +648,55 @@
     "common/common.cpp",
     "common/common.h",
     "tools/server/server-context.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": []
+  },
+  {
+   "id": "llama.cpp/1.0.0/topk-fused",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "topk-fused",
+   "state": "series",
+   "order": 12,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_TOPK_FUSED",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "LLAMA_TOPK_FUSED_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
+   "marker": "LLAMA_TOPK_FUSED",
+   "knobs": [
+    "LLAMA_TOPK_FUSED",
+    "GGML_CUDA_PDL"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/12-topk-fused.patch",
+   "sha256": "7180edee9d81bb42815c0e596dfceee057299ef6636e657a302b183c30d54563",
+   "lines": {
+    "added": 314,
+    "removed": 1
+   },
+   "budget": {
+    "added": 330,
+    "removed": 1
+   },
+   "files": [
+    "ggml/src/ggml-cuda/top-k.cu"
    ],
    "depends_on": {
     "apply": [],
