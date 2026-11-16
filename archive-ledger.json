@@ -38,6 +38,12 @@
    "date": "2026-11-14",
    "supersedes": "f7c883d75a31cb3ee817069ed607c9549abf6122b4f6df15705ac70c048f722d",
    "why": "text-only rewrite recorded in the row's scrubbed_from"
+  },
+  {
+   "id": "llama.cpp/1.0.0/graph-recapture",
+   "sha256": "342cb4d7e3df984807510de5b8907d74f73238923a813ba4f3dadcdc926965d7",
+   "switch": "GGML_CUDA_GRAPH_RECAPTURE",
+   "date": "2026-11-16"
   }
  ]
 }

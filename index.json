@@ -14,7 +14,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it)",
+    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone)",
     "entries": [
      {
       "id": "mods-series-verify",
@@ -705,6 +705,56 @@
    "rule_exceptions": []
   },
   {
+   "id": "llama.cpp/1.0.0/graph-slots",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "graph-slots",
+   "state": "series",
+   "order": 13,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_GRAPH_SLOTS",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "LLAMA_GRAPH_SLOTS",
+   "knobs": [
+    "LLAMA_GRAPH_SLOTS",
+    "GGML_CUDA_GRAPH_OPT"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/13-graph-slots.patch",
+   "sha256": "d67bba104ba83d0ba7dc7b18050bd25d27239309d0662a025dc106873799c802",
+   "lines": {
+    "added": 102,
+    "removed": 0
+   },
+   "budget": {
+    "added": 110,
+    "removed": 0
+   },
+   "files": [
+    "src/llama-context.cpp",
+    "src/llama-context.h"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "check"
+   ]
+  },
+  {
    "id": "llama.cpp/1.0.0/fattn-compact-par",
    "engine": "llama.cpp",
    "version": "1.0.0",
@@ -1237,6 +1287,21 @@
    "lines": {
     "added": 107,
     "removed": 12
+   }
+  },
+  {
+   "id": "llama.cpp/1.0.0/graph-recapture",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "graph-recapture",
+   "kind": "rejected",
+   "switch": "GGML_CUDA_GRAPH_RECAPTURE",
+   "date": "2026-11-16",
+   "patch": "engines/llama.cpp/1.0.0/archive/graph-recapture.patch",
+   "sha256": "342cb4d7e3df984807510de5b8907d74f73238923a813ba4f3dadcdc926965d7",
+   "lines": {
+    "added": 13,
+    "removed": 1
    }
   },
   {

@@ -31,3 +31,12 @@ Written on: the run's working tree (01 + an earlier cut of 02's half 1, base com
 Half 2 of sparse-direct: index lists straight from top-k, no mask scan (under 02's switch LLAMA_SPARSE_DIRECT, so no switch of its own). Bit-exact once the lists were ordered, but -1.0% [-1.3, -0.6] on the 128k session against half 1 alone (worse under 96k, zero at 96-128k), and it frees nothing because the n_kv mask is still built. Dropped before 02 was cut.
 
 Evidence: boltbeam-runs/sparse-direct-20261114 (README.md 'Half 2 ... DROP')
+
+## graph-recapture (rejected, 2026-11-16)
+
+`archive/graph-recapture.patch`, +13 -1, sha256 `342cb4d7e3df9848`, `GGML_CUDA_GRAPH_RECAPTURE`.
+Written on: 1.0.0 + 01-11 + 13 (also applies alone on the base); the graph-slots tested tree holds it after 13.
+
+A warm CUDA graph whose node count is unchanged but whose node properties changed (KV / pool widths crossing a padding bucket) is captured and updated at once instead of one eager run plus a capture on the next call. Identical output, but no gain: the eager step goes, the crossing step takes the capture plus the re-instantiates (cudaGraphExecUpdate fails on 24 of 28 chunks), and both switches together gained 0.159 ms/step against 0.193 for graph-slots alone. Its code is in the graph-slots tested tree (switch unset in the shipped measurements): tested_trees apply this archived copy, pinned by sha256, only to reach byte equality.
+
+Evidence: boltbeam-runs/graph-reuse-20261116 (README.md sections 4-5)

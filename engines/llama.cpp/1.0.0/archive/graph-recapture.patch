@@ -1,0 +1,32 @@
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 43658e1..d021b12 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -5450,6 +5450,11 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
+         const bool graph_reused     = cgraph->uid != 0 && cgraph->uid == graph->uid;
+         const bool graph_compatible = graph_reused || ggml_cuda_graph_check_compability(cgraph);
+         if (graph_compatible) {
++            // GGML_CUDA_GRAPH_RECAPTURE (unset = stock): a warm graph whose node count is unchanged but whose node
++            // properties changed (KV / pool widths crossing a padding bucket) is captured and its instances updated at
++            // once, instead of one eager run plus a capture on the next call
++            static const bool recapture = ggml_cuda_env_flag("GGML_CUDA_GRAPH_RECAPTURE");
++            const bool same_size = graph->node_props.size() == (size_t) cgraph->n_nodes;
+             const bool properties_changed = ggml_cuda_graph_update_required(cuda_ctx, cgraph);
+ 
+             if (!graph->warmup_complete) {
+@@ -5465,7 +5470,14 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
+                 // else: properties changed or first call - execute directly (use_cuda_graph stays false)
+             } else {
+                 // Post-warmup: normal CUDA graph operation
+-                if (properties_changed) {
++                if (properties_changed && recapture && same_size && !graph->instances.empty()) {
++                    static int n_recapture = 0;
++                    if (n_recapture++ == 0) {
++                        GGML_LOG_WARN("%s: graph_recapture: on (first changed warm graph captured at once)\n", __func__);
++                    }
++                    use_cuda_graph = true;
++                    cuda_graph_update_required = true;
++                } else if (properties_changed) {
+                     // Properties changed - reset warmup, execute directly until stable again
+                     graph->warmup_complete = false;
+                     if (ggml_cuda_graph_debug_enabled()) {

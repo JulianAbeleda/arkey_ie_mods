@@ -10,7 +10,7 @@ Opt-in patches for inference engines. Engine-agnostic and model-agnostic.
 
 | engine | version | mods | state |
 |---|---|---|---|
-| llama.cpp | v1.0.0 (b12359, b1b770d9) | 11 in the series, 1 parked, 3 archived | active |
+| llama.cpp | v1.0.0 (b12359, b1b770d9) | 13 in the series, 1 parked, 4 archived | active |
 | llama.cpp | master 7592b61d3 | 6 in the series, 1 parked, 1 archived | active |
 | llama.cpp | master 5193ef1d | archive only: 1 | - |
 | vLLM | 0.31.0 | 2 in the series, 1 tool | active |
@@ -75,8 +75,9 @@ Measured on one RTX 5090, one request at a time, a 59-turn session to 128k conte
 | 10 | prefill reads cached experts in place | `LLAMA_MOE_INPLACE=1` | +147 -15 | prefill -342 ms/turn [-365, -321] at -ub 128 (-16%) | identical |
 | 11 | context checkpoints in a pinned pool | `LLAMA_CKPT_PINNED=1` | +184 -0 | prefill -152 ms/turn [-168, -140] at 96-128k; on top of 10 at -ub 512: -153 [-157, -149] | identical |
 | 12 | radix top-k of a few rows in one launch | `LLAMA_TOPK_FUSED=1` | +314 -1 | 0.30 ms/step [0.17, 0.43] session (+1.9%); 0.32 [0.27, 0.38] at 96-128k | identical |
+| 13 | draft context keeps a graph per small ubatch size | `LLAMA_GRAPH_SLOTS=1` | +102 -0 | 0.19 ms/step [0.13, 0.26] session (+1.2%); every bucket clears | identical |
 
-Series total: 12 patches, +2,081 -131 lines. Evidence, conditions and limits per mod: `engines/llama.cpp/1.0.0/mods.json`.
+Series total: 13 patches, +2,183 -131 lines. Evidence, conditions and limits per mod: `engines/llama.cpp/1.0.0/mods.json`.
 
 Limits that bite:
 - 03 aborts on context shift, mid-sequence edits, full slot save/restore and the prompt cache. One sequence only.
@@ -92,6 +93,8 @@ Limits that bite:
   are still uploaded one by one, as stock.
 - 11 pins 3.7 GB of host RAM (`--ctx-checkpoints` + 1 buffers of the state size) at the first checkpoint and holds it until
   exit. That first checkpoint takes about 2.3 s once. 8 MiB of VRAM (measured with 10 at -ub 512).
+- 13 covers MTP draft contexts only and is measured at N=1 (about 4 MiB). N>1 costs about 60 MiB more and ran out of
+  memory at 128k. Slot buffers are not in memory_breakdown. No check mode. Off when `GGML_CUDA_GRAPH_OPT` is set.
 
 ### Apply and build
 
@@ -121,6 +124,8 @@ Set the check switch beside the mod's switch. Rows marked G also need `GGML_CUDA
 | 09 | `GGML_CUDA_EXT_KERNELS_CHECK=1` | G |
 | 10 | `LLAMA_MOE_INPLACE_CHECK=1` | G |
 | 11 | `LLAMA_CKPT_PINNED_CHECK=1` | |
+| 12 | `LLAMA_TOPK_FUSED_CHECK=1` | G |
+| 13 | none | |
 
 A check run is slow. It is for correctness, not timing.
 
@@ -135,7 +140,7 @@ A check run is slow. It is for correctness, not timing.
 
 Parallel mask compaction (`LLAMA_FATTN_COMPACT_PAR`). Identical output. 0.10 ms/step for 119 lines,
 a third of the derived gain. `parked/fattn-compact-par.patch` applies after the series.
-Rejected patches (KV host old, staged gather a2, sparse-direct half 2) are in `archive/`.
+Rejected patches (KV host old, staged gather a2, sparse-direct half 2, graph recapture) are in `archive/`.
 
 ## llama.cpp master 7592b61d3: MoE prefill
 
