@@ -49,7 +49,7 @@ SPEC_KEYS = {"schema", "engine", "version", "base", "about", "budget_rule", "mod
              "tested_trees", "tested_trees_none", "verified", "also_applies_to"}
 GAIN_KEYS = {"value", "unit", "vs", "conditions", "run", "basis"}
 EVID_KEYS = {"run", "numbers", "match", "gate"}
-TOP_FILES = {".git", ".githooks", ".gitignore", "LICENSE", "LICENSES", "README.md", "engines", "engines.json", "index.json",
+TOP_FILES = {".git", ".githooks", ".gitignore", "DETAILS.md", "LICENSE", "LICENSES", "README.md", "engines", "engines.json", "index.json",
              "tools", "local.json", "local.example.json", "archive-ledger.json", "__pycache__", "benchmarks"}
 VERSION_ENTRIES = {"mods.json", "patches", "parked", "archive", "tools", "kernels"}
 KERNEL_KEYS = {"name", "dir", "hook", "files", "source", "lines", "budget", "output", "gain", "exercised_by", "limits"}
@@ -639,18 +639,22 @@ def benchmark_files(bad=None):
 
 
 def check_docs(reg, lint):
-    """README.md, LICENSE, engines/README.md and every folder-level string of mods.json: no private detail, no engine
+    """README.md, DETAILS.md, LICENSE, engines/README.md and every folder-level string of mods.json: no private detail, no engine
     outside engines.json (lint.doc_allow lists exact lines that may still match). Model names are allowed in README.md
     and benchmarks/ (owner, 2026-11-17: they describe what was measured); mods, patches and mods.json stay model-agnostic."""
     print("\ndocs")
     allow = set((reg.get("lint") or {}).get("doc_allow", []))
+    # the top README may link a published comparison: it may name an engine that has a benchmarks/*/vs-<engine> file
+    compared = sorted({os.path.basename(r)[3:].rsplit(".", 1)[0].lower() for r in benchmark_files()
+                       if os.path.basename(r).startswith("vs-")})
     n = 0
-    for rel in ("README.md", "LICENSE", "engines/README.md"):
+    for rel in ("README.md", "DETAILS.md", "LICENSE", "engines/README.md"):
         p = os.path.join(ROOT, rel)
         for i, line in enumerate(open(p, encoding="utf-8") if os.path.exists(p) else [], 1):
             if line.strip() in allow:
                 continue
-            for x in lint.text(None, line, models=rel == "LICENSE" or rel.startswith("engines/")):
+            for x in lint.text(None, line, models=rel == "LICENSE" or rel.startswith("engines/"),
+                               allow=compared if rel == "README.md" else ()):
                 say("FAIL", f"docs    {rel}:{i}: {x}")
                 n += 1
     for rel in benchmark_files():
@@ -670,7 +674,7 @@ def check_docs(reg, lint):
                 say("FAIL", f"docs    {os.path.relpath(f, ROOT)}/mods.json (folder fields): {x}")
                 n += 1
     if not n:
-        say("ok", "docs    README.md, LICENSE, engines/README.md, benchmarks/ and folder fields pass the lint")
+        say("ok", "docs    README.md, DETAILS.md, LICENSE, engines/README.md, benchmarks/ and folder fields pass the lint")
 
 
 def check_layout(reg):
