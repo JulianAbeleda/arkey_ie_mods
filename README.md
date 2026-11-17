@@ -79,6 +79,30 @@ Measured on one RTX 5090, one request at a time, a 59-turn session to 128k conte
 
 Series total: 13 patches, +2,183 -131 lines. Evidence, conditions and limits per mod: `engines/llama.cpp/1.0.0/mods.json`.
 
+All 13 on, with the setup below, against stock v1.0.0 on the same 128k session (3 paired runs, RTX 5090 at 450 W,
+31 GiB RAM): decode 77 -> 226 tok/s (2.93x; 3.39x at 96-128k), prefill 2.61 -> 0.83 s a turn, time to first token
+2.71 -> 0.94 s, whole session 485 -> 166 s (2.92x). The mods are identical to stock except 04 (draft only). The
+setup's settings change rounding, so the setup is quality-gated: a next-token distribution gate (0 of 18 replies past
+the stock noise floor) and MMLU-Pro and LiveCodeBench non-inferiority against stock (both pass).
+
+Recommended setup (stock flags beside the mods):
+
+```
+-ub 1024 -ncmoe 16 --moe-cache-mib <from boltbeam tune> -lm none -ctkd q8_0 -ctvd q8_0
+```
+
+`-lm none` reads the host experts into RAM at load instead of mapping them. It matters when the model files are larger
+than RAM: mapped, the first prompt read evicted expert pages back from disk. Output identical. The cost is RAM held
+from load. The cache size depends on free VRAM: `boltbeam tune` and `boltbeam offload` derive it, the prefill chunk and
+the expert placement for the machine.
+
+BoltBeam 0.3.26 applies the series: `boltbeam screen mods` builds the pinned engine with it (a llama.cpp tree without
+.git included), checks each mod is on, and refuses a build whose kernels did not load.
+
+First generated kernel: `kernels/bf16-smallm-gemv-k10240/` installs through 09. Two BF16 small-batch GEMV kernels
+(K 10240, 4 activation columns), written by arkey's scheduler, not by hand. -0.56 ms/step [0.51, 0.62] (3.2%) vs the
+hook off; identical (59/59 turns, 0 differences in about 142k check-mode comparisons). sm_120, build b1b770d9 only.
+
 Limits that bite:
 - 03 aborts on context shift, mid-sequence edits, full slot save/restore and the prompt cache. One sequence only.
 - 04 has no check mode. It changes what the draft proposes, never what the target computes.
@@ -144,8 +168,11 @@ A check run is slow. It is for correctness, not timing.
 
 ### Engine flags in the measured setup (stock flags, not patches)
 
-- `-ncmoe 16 --moe-cache-mib 6400`: the stock expert cache. Changes reply text. Depends on request history.
-  Distribution gate inside the noise floor. Benchmark verdict pending.
+- `-ncmoe 16 --moe-cache-mib N`: the stock expert cache. Changes reply text. Depends on request history.
+  Distribution gate inside the noise floor.
+- `-ub 1024`: prefill chunk. Changes rounding. Passed the distribution gate and MMLU-Pro and LiveCodeBench
+  non-inferiority against stock, with the cache and 01-13 on.
+- `-lm none`: host experts read into RAM at load. Next-token distributions identical, 4,608 of 4,608 positions.
 - `-ctkd q8_0 -ctvd q8_0`: draft KV at q8_0. Changes the draft only. A net VRAM loss on stock (+110 MiB);
   a gain only with 02 on.
 
@@ -242,7 +269,7 @@ Tested trees (llama.cpp 1.0.0), byte-equal on the touched files, no other file d
 - `mask-indexer`: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept
   measurement). It is not a series-only tree: 09 is missing and two extra patches are in it.
 - `ext-kernel-hook`: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08).
-No tree holds exactly the series 01-09. A series-only build is recorded in mods.json `verified` when it exists.
+Series-only builds (01-09 and 01-11 on the base, nothing else) are recorded in mods.json `verified`.
 
 It does not prove that a hunk which rewrites stock lines keeps stock behaviour with the switch off.
 That is a run-time fact: the evidence is in each row, and the byte-equality check ties the patches to the measured trees.

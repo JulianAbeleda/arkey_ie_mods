@@ -1088,7 +1088,7 @@
   {
    "flags": "-ncmoe 16 --moe-cache-mib 6400",
    "what": "stock expert cache; part of the measured setup, not a patch",
-   "output": "changes reply text; depends on request history; distribution gate inside the noise floor; benchmark verdict pending",
+   "output": "changes reply text; depends on request history; distribution gate inside the noise floor; with -ub 1024 and 01-13 on, MMLU-Pro and LiveCodeBench non-inferiority vs stock pass (BoltBeam 0.3.26)",
    "run": "boltbeam-runs/quality-gate-x16-20261114"
   },
   {
