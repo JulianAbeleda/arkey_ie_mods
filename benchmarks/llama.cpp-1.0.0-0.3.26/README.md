@@ -108,3 +108,5 @@ VRAM at 128k on this machine; on another, take what `boltbeam tune` derives.
 
 Not published: the 59-turn session itself and the driver that sends it. Any long multi-turn session at batch 1
 exercises the same paths; the numbers above hold only for this one.
+
+Against another engine on the same session and machine: [vs-strata.md](vs-strata.md).

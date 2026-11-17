@@ -275,19 +275,19 @@ class Lint:
         if not self.model or not self.private:
             say("FAIL", "lint    engines.json lint.model_name_regex and lint.private_regex are required")
 
-    def foreign(self, engine, text):
+    def foreign(self, engine, text, allow=()):
         t = text.lower()
         names = ([n for e, ns in self.names.items() if e != engine for n in ns] if engine else []) + self.others
-        own = self.names.get(engine, [])
+        own = self.names.get(engine, []) + list(allow)
         return sorted({n for n in names if n not in own and re.search(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])", t)})
 
-    def text(self, engine, text, models=True):
+    def text(self, engine, text, models=True, allow=()):
         bad = []
         if models and self.model and (m := self.model.search(text)):
             bad.append(f"model name '{m.group(0)}'")
         if self.private and (m := self.private.search(text)):
             bad.append(f"private detail '{m.group(0)}'")
-        if f := self.foreign(engine, text):
+        if f := self.foreign(engine, text, allow):
             bad.append(f"another engine named: {f}")
         return bad
 
@@ -619,7 +619,9 @@ def check_kernels(folder, spec):
 
 
 def benchmark_files(bad=None):
-    """benchmarks/<name>/ holds README.md and .json files only (a benchmark record: method, results, summaries)."""
+    """benchmarks/<name>/ holds README.md and .json files only (a benchmark record: method, results, summaries).
+    A file named vs-<engine>.md or vs-<engine>.json is a comparison against that one engine; files in a folder that
+    holds one may name that engine (so the folder's README can link it), and no other."""
     top, out = os.path.join(ROOT, "benchmarks"), []
     for d in sorted(os.listdir(top)) if os.path.isdir(top) else []:
         if not os.path.isdir(os.path.join(top, d)):
@@ -629,10 +631,10 @@ def benchmark_files(bad=None):
         if "README.md" not in names and bad is not None:
             bad.append(f"benchmarks/{d} has no README.md")
         for f in names:
-            if f == "README.md" or f.endswith(".json"):
+            if f in ("README.md",) or f.endswith(".json") or (f.startswith("vs-") and f.endswith(".md")):
                 out.append(f"benchmarks/{d}/{f}")
             elif bad is not None:
-                bad.append(f"benchmarks/{d}/{f} is not README.md or .json")
+                bad.append(f"benchmarks/{d}/{f} is not README.md, vs-<engine>.md or .json")
     return out
 
 
@@ -654,8 +656,10 @@ def check_docs(reg, lint):
     for rel in benchmark_files():
         p = os.path.join(ROOT, rel)
         lines = [s_ for s_ in strings(json.load(open(p)))] if rel.endswith(".json") else open(p, encoding="utf-8")
+        here = os.path.dirname(p)
+        allow = sorted({f[3:].rsplit(".", 1)[0].lower() for f in os.listdir(here) if f.startswith("vs-")})
         for i, line in enumerate(lines, 1):
-            for x in lint.text(None, line, models=False):
+            for x in lint.text(None, line, models=False, allow=allow):
                 say("FAIL", f"docs    {rel}:{i}: {x}")
                 n += 1
     for f in folders_all():
