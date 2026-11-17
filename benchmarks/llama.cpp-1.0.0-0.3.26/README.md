@@ -82,10 +82,10 @@ cmake -B build -DGGML_CUDA=ON -DLLAMA_BUILD_COMMIT=b1b770d9 -DGGML_BUILD_COMMIT=
 cmake --build build -j --target llama-server
 ```
 
-Or let BoltBeam do it (04 is quality-gated, so name the label):
+Or let BoltBeam do it (BoltBeam 0.3.27 or later; it builds all 13 by default):
 
 ```
-boltbeam screen mods --engine llama.cpp --apply --label quality-gated
+boltbeam mods apply
 boltbeam tune MODEL.gguf --engine llama.cpp --context 131072     # derives -ub, -ncmoe, --moe-cache-mib, -lm
 ```
 
