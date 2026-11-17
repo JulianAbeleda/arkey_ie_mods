@@ -79,13 +79,14 @@ Measured on one RTX 5090, one request at a time, a 59-turn session to 128k conte
 
 Series total: 13 patches, +2,183 -131 lines. Evidence, conditions and limits per mod: `engines/llama.cpp/1.0.0/mods.json`.
 
+### Test machine
+
 All 13 on, with the setup below, against stock v1.0.0 on the same 128k session (3 paired runs, RTX 5090 at 450 W,
 31 GiB RAM): decode 77 -> 226 tok/s (2.93x; 3.39x at 96-128k), prefill 2.61 -> 0.83 s a turn, time to first token
 2.71 -> 0.94 s, whole session 485 -> 166 s (2.92x). The mods are identical to stock except 04 (draft only). The
 setup's settings change rounding, so the setup is quality-gated: a next-token distribution gate (0 of 18 replies past
 the stock noise floor) and MMLU-Pro and LiveCodeBench non-inferiority against stock (both pass).
 
-Test machine:
 - GPU: NVIDIA GeForce RTX 5090 32 GB, power cap 450 W for timed runs. PCIe 4.0 x16 (host-to-device 28.3 GB/s pinned,
   11.5 GB/s pageable, measured).
 - CPU: AMD Ryzen 7 5800X (8 cores). RAM: 32 GB DDR4-2667 (2 x 16 GB; 31 GiB usable). Board: ASRock B550M-ITX/ac.
@@ -93,7 +94,9 @@ Test machine:
 - Workload: a 1.9-bit pruned MoE coding model + its MTP draft head, one request at a time, 59-turn
   coding session to about 129k tokens, temperature 0.
 
-Recommended setup (stock flags beside the mods):
+### Recommended setup
+
+Stock flags beside the mods:
 
 ```
 -ub 1024 -ncmoe 16 --moe-cache-mib <from boltbeam tune> -lm none -ctkd q8_0 -ctvd q8_0
@@ -104,14 +107,18 @@ than RAM: mapped, the first prompt read evicted expert pages back from disk. Out
 from load. The cache size depends on free VRAM: `boltbeam tune` and `boltbeam offload` derive it, the prefill chunk and
 the expert placement for the machine.
 
-BoltBeam 0.3.26 applies the series: `boltbeam screen mods` builds the pinned engine with it (a llama.cpp tree without
-.git included), checks each mod is on, and refuses a build whose kernels did not load.
+[BoltBeam](https://github.com/JulianAbeleda/BoltBeam-Public) 0.3.26 applies the series: `boltbeam screen mods`
+builds the pinned engine with it (a llama.cpp tree without .git included), checks each mod is on, and refuses a build
+whose kernels did not load.
 
-First generated kernel: `kernels/bf16-smallm-gemv-k10240/` installs through 09. Two BF16 small-batch GEMV kernels
+### First generated kernel
+
+`kernels/bf16-smallm-gemv-k10240/` installs through 09. Two BF16 small-batch GEMV kernels
 (K 10240, 4 activation columns), written by arkey's scheduler, not by hand. -0.56 ms/step [0.51, 0.62] (3.2%) vs the
 hook off; identical (59/59 turns, 0 differences in about 142k check-mode comparisons). sm_120, build b1b770d9 only.
 
-Limits that bite:
+### Limits that bite
+
 - 03 aborts on context shift, mid-sequence edits, full slot save/restore and the prompt cache. One sequence only.
 - 04 has no check mode. It changes what the draft proposes, never what the target computes.
 - 07 covers one-query calls only (the draft passes, q8_0 KV).
