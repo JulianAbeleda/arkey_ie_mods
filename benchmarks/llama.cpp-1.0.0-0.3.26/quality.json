@@ -1,0 +1,143 @@
+{
+ "schema": "arkey_ie_mods.benchmark_quality.v1",
+ "arms": {
+  "stock": "stock llama.cpp v1.0.0",
+  "mods": "the measured setup (series 01-13 + -ub 1024 -b 2048 -ncmoe 16 --moe-cache-mib 6240)",
+  "noise": "stock + -b 8 -ub 8 (a change that must not matter; sets the churn allowance)"
+ },
+ "distribution_gate": {
+  "what": "every next-token distribution of 18 replies, teacher-forced (4,608 positions), mods setup vs stock",
+  "floor": "18 floor pairs that differ only by rounding stock already accepts (CPU vs GPU, cache size, batch size); 3 more were bit-identical and excluded",
+  "unit": "reply (flips cluster within replies: overdispersion p = 4.65e-230)",
+  "line_nats": 5.9193,
+  "line_is": "the widest top-1 flip gap of any floor reply",
+  "rule": "fail if 2 or more test replies have a top-1 flip gap above the line (false-fail probability under no difference <= 0.0026); fixed before the run",
+  "result": {
+   "replies_above_line": 0,
+   "widest_test_gap_nats": 5.9027,
+   "verdict": "holds"
+  },
+  "lm_none": "-lm none vs the same setup without it: distributions identical at 4,608 of 4,608 positions; 59 session replies identical"
+ },
+ "benchmarks": {
+  "rule": "non-inferiority of mods vs stock with allowance psi0 = the churn of the noise arm against stock; one-sided z 1.645; pass iff upper <= 0, fail iff lower > 0; fixed before any row. Release passes iff both pass",
+  "MMLU-Pro": {
+   "items": 150,
+   "thinking": "on",
+   "stock": {
+    "correct": 103,
+    "n": 150,
+    "pct": 68.7,
+    "ci95_pct": [
+     60.9,
+     75.5
+    ],
+    "finish": {
+     "stop": 134,
+     "length": 1,
+     "cycle": 15
+    }
+   },
+   "mods": {
+    "correct": 104,
+    "n": 150,
+    "pct": 69.3,
+    "ci95_pct": [
+     61.5,
+     76.2
+    ],
+    "finish": {
+     "stop": 132,
+     "length": 2,
+     "cycle": 16
+    }
+   },
+   "noise": {
+    "correct": 100,
+    "n": 150,
+    "pct": 66.7,
+    "ci95_pct": [
+     58.8,
+     73.7
+    ],
+    "finish": {
+     "stop": 129,
+     "length": 0,
+     "cycle": 21
+    }
+   },
+   "discordant": {
+    "stock_only": 3,
+    "mods_only": 4,
+    "mcnemar_exact_p": 1.0
+   },
+   "psi0": 0.1133,
+   "mean_u": -0.14,
+   "se": 0.04,
+   "upper": -0.0742,
+   "lower": -0.2058,
+   "verdict": "pass",
+   "sensitivity_cycle_as_truncation": "inconclusive (truncation 14.0% > 5%)"
+  },
+  "LiveCodeBench": {
+   "items": 140,
+   "stock": {
+    "correct": 69,
+    "n": 140,
+    "pct": 49.3,
+    "ci95_pct": [
+     41.1,
+     57.5
+    ],
+    "finish": {
+     "stop": 82,
+     "length": 1,
+     "cycle": 57
+    }
+   },
+   "mods": {
+    "correct": 73,
+    "n": 140,
+    "pct": 52.1,
+    "ci95_pct": [
+     43.9,
+     60.2
+    ],
+    "finish": {
+     "stop": 94,
+     "length": 3,
+     "cycle": 43
+    }
+   },
+   "noise": {
+    "correct": 112,
+    "n": 140,
+    "pct": 80.0,
+    "ci95_pct": [
+     72.6,
+     85.8
+    ],
+    "finish": {
+     "stop": 119,
+     "length": 4,
+     "cycle": 17
+    }
+   },
+   "discordant": {
+    "stock_only": 21,
+    "mods_only": 25,
+    "mcnemar_exact_p": 0.659
+   },
+   "psi0": 0.45,
+   "mean_u": -0.1714,
+   "se": 0.0543,
+   "upper": -0.082,
+   "lower": -0.2608,
+   "verdict": "pass",
+   "caveat": "the noise arm was not noise-like (80% vs stock 49%, 17 vs 57 looping replies), so its 45-point allowance is inflated; the direct comparison is the meaningful one: 73 vs 69, McNemar p 0.66, no sign of harm or gain",
+   "sensitivity_cycle_as_truncation": "inconclusive (truncation 41.4% > 5%)"
+  }
+ },
+ "finish_cycle": "a reply that loops until the length cap; the pre-registered rule counts it as an answer",
+ "verdict": "pass (MMLU-Pro pass, LiveCodeBench pass; distribution gate holds)"
+}

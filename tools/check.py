@@ -3,8 +3,8 @@
 engines.json, mod facts are rows in mods.json, machine paths are in the untracked local config (local.json).
 
 Repo
-  0 layout    every folder and file under engines/ and at the top level is known; engines.json versions equal the
-              folders; mod names are unique per folder and ids (engine/version/name) unique overall
+  0 layout    every folder and file under engines/, benchmarks/ and at the top level is known; engines.json
+              versions equal the folders; mod names are unique per folder and ids (engine/version/name) unique overall
 Per folder
   1 base      the base is the recorded one and the touched files are unmodified (engines.json base_identity.kind)
   2 series    every patch applies in order on a clean copy of the base; the series reverts to the base bytes
@@ -50,7 +50,7 @@ SPEC_KEYS = {"schema", "engine", "version", "base", "about", "budget_rule", "mod
 GAIN_KEYS = {"value", "unit", "vs", "conditions", "run", "basis"}
 EVID_KEYS = {"run", "numbers", "match", "gate"}
 TOP_FILES = {".git", ".githooks", ".gitignore", "LICENSE", "LICENSES", "README.md", "engines", "engines.json", "index.json",
-             "tools", "local.json", "local.example.json", "archive-ledger.json", "__pycache__"}
+             "tools", "local.json", "local.example.json", "archive-ledger.json", "__pycache__", "benchmarks"}
 VERSION_ENTRIES = {"mods.json", "patches", "parked", "archive", "tools", "kernels"}
 KERNEL_KEYS = {"name", "dir", "hook", "files", "source", "lines", "budget", "output", "gain", "exercised_by", "limits"}
 INDEX_MOD_KEYS = {"id", "engine", "version", "name", "state", "order", "applier", "base", "switch", "switch_null_why", "check", "check_needs",
@@ -618,6 +618,24 @@ def check_kernels(folder, spec):
         say("FAIL" if bad else "ok", f"kernel  {k['name']:22} via {k['hook']}" + ("  " + "; ".join(bad) if bad else ""))
 
 
+def benchmark_files(bad=None):
+    """benchmarks/<name>/ holds README.md and .json files only (a benchmark record: method, results, summaries)."""
+    top, out = os.path.join(ROOT, "benchmarks"), []
+    for d in sorted(os.listdir(top)) if os.path.isdir(top) else []:
+        if not os.path.isdir(os.path.join(top, d)):
+            bad is not None and bad.append(f"benchmarks/{d} is not a benchmark folder")
+            continue
+        names = sorted(os.listdir(os.path.join(top, d)))
+        if "README.md" not in names and bad is not None:
+            bad.append(f"benchmarks/{d} has no README.md")
+        for f in names:
+            if f == "README.md" or f.endswith(".json"):
+                out.append(f"benchmarks/{d}/{f}")
+            elif bad is not None:
+                bad.append(f"benchmarks/{d}/{f} is not README.md or .json")
+    return out
+
+
 def check_docs(reg, lint):
     """README.md, LICENSE, engines/README.md and every folder-level string of mods.json: no model name, no private
     detail, no engine outside engines.json (lint.doc_allow lists exact lines that may still match)."""
@@ -632,6 +650,13 @@ def check_docs(reg, lint):
             for x in lint.text(None, line):
                 say("FAIL", f"docs    {rel}:{i}: {x}")
                 n += 1
+    for rel in benchmark_files():
+        p = os.path.join(ROOT, rel)
+        lines = [s_ for s_ in strings(json.load(open(p)))] if rel.endswith(".json") else open(p, encoding="utf-8")
+        for i, line in enumerate(lines, 1):
+            for x in lint.text(None, line):
+                say("FAIL", f"docs    {rel}:{i}: {x}")
+                n += 1
     for f in folders_all():
         spec = json.load(open(os.path.join(f, "mods.json")))
         rest = {k: v for k, v in spec.items() if k not in ("mods", "parked", "archived")}
@@ -640,7 +665,7 @@ def check_docs(reg, lint):
                 say("FAIL", f"docs    {os.path.relpath(f, ROOT)}/mods.json (folder fields): {x}")
                 n += 1
     if not n:
-        say("ok", "docs    README.md, LICENSE, engines/README.md and folder fields pass the lint")
+        say("ok", "docs    README.md, LICENSE, engines/README.md, benchmarks/ and folder fields pass the lint")
 
 
 def check_layout(reg):
@@ -652,6 +677,7 @@ def check_layout(reg):
     for e in sorted(os.listdir(os.path.join(ROOT, "tools"))):
         if e not in ("check.py", "__pycache__"):
             bad.append(f"tools/{e} is not part of the repo layout")
+    benchmark_files(bad)
     top = os.path.join(ROOT, "engines")
     for e in sorted(os.listdir(top)):
         d = os.path.join(top, e)

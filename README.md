@@ -43,6 +43,7 @@ engines/<engine>/<version>/
     tools/                        helper scripts a mod needs (not patches)
 index.json                        generated: every mod, archived patch and tool, for consumers
 archive-ledger.json               append-only: every patch ever archived (id, sha256, switch); archived never comes back
+benchmarks/<engine>-<version>-<run>/  a benchmark record: README.md (method, results, reproduce) + .json summaries
 local.example.json                copy to local.json (gitignored): this machine's base checkouts and run roots
 tools/check.py                    the one check; standard library only; names no engine; --write regenerates the exports
 .githooks/pre-commit              runs it on the staged content
@@ -93,6 +94,9 @@ the stock noise floor) and MMLU-Pro and LiveCodeBench non-inferiority against st
 - NVIDIA driver 595.99.02, CUDA 13.2, Linux 6.8 (Ubuntu).
 - Workload: a 1.9-bit pruned MoE coding model + its MTP draft head, one request at a time, 59-turn
   coding session to about 129k tokens, temperature 0.
+
+Method, every run, the quality gates and the commands to reproduce:
+[benchmarks/llama.cpp-1.0.0-0.3.26](benchmarks/llama.cpp-1.0.0-0.3.26/README.md).
 
 ### Recommended setup
 
