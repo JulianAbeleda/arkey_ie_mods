@@ -3,7 +3,64 @@
 Everything beyond applying the mods and reading the benchmarks: per-mod limits, check modes, the repo's rules,
 its layout and the check. The [README](README.md) has how to apply and the numbers.
 
-## llama.cpp v1.0.0
+## llama.cpp v1.0.0: each mod
+
+"vs off" = the same build with the switch unset, which is the stock path.
+
+| # | lines | gain vs stock | output |
+|---|---|---|---|
+| 01 | +95 -32 | 88 -> 118.5 tok/s, 128k session (vs the stock build) | identical |
+| 02 | +103 -4 | +4.3% [3.3, 5.2] session; +8% at 96-128k (vs off) | identical |
+| 03 | +299 -19 | -424 MiB VRAM; speed unchanged | identical |
+| 04 | +45 -4 | -340 MiB VRAM; about -1% decode speed | quality-gated: target bit-identical, draft changes |
+| 05 | +359 -45 | 0.585 ms/step [0.484, 0.686] at 96-128k (+3.1%) | identical |
+| 06 | +82 -1 | 0.19 ms/step [0.02, 0.36], flat with depth | identical |
+| 07 | +102 -10 | 0.99 ms/step at 96-128k | identical |
+| 08 | +59 -0 | about 0.30 ms/step at about 102k | identical |
+| 09 | +292 -0 | 0 by itself; installs kernels by op and shape | identical with an identity kernel |
+| 10 | +147 -15 | prefill -342 ms/turn [-365, -321] at -ub 128 (-16%) | identical |
+| 11 | +184 -0 | prefill -152 ms/turn [-168, -140] at 96-128k; on top of 10 at -ub 512: -153 [-157, -149] | identical |
+| 12 | +314 -1 | 0.30 ms/step [0.17, 0.43] session (+1.9%); 0.32 [0.27, 0.38] at 96-128k | identical |
+| 13 | +102 -0 | 0.19 ms/step [0.13, 0.26] session (+1.2%); every bucket clears | identical |
+| kernel | 2 kernels | -0.56 ms/step [0.51, 0.62] (3.2%) vs the hook off | identical (59/59 turns, ~142k check comparisons) |
+
+Series total: +2,183 -131 lines. Evidence and conditions per mod: `engines/llama.cpp/1.0.0/mods.json`.
+
+## llama.cpp master 7592b61d3: each mod
+
+One RTX 5090, a MoE GGUF, prefill, one request at a time.
+
+| # | mod | lines | gain vs stock | output |
+|---|---|---|---|---|
+| 01 | MoE routing sort, MMQ tile knob, pinned staging | +274 -6 | 10k 5,924 -> 6,455 tok/s | identical |
+| 02 | host-RAM experts on a pinned copy stream | +474 -0 | 10k at -ncmoe 12: 2,757 -> 4,352 tok/s | identical |
+| 03 | no checkpoint at a user start in the prompt head | +9 -1 | 10k 4,551 -> 5,278 (vs off) | untested |
+| 04 | keep only the tail checkpoint | +7 -1 | 10k 5,892 -> 6,016 (vs off) | identical (one request) |
+| 05 | PLE row prefetch on a thread | +9 -1 | 10k 5,105 -> 5,397 (vs off) | identical |
+| 06 | MTP sidecar found in an `mtp/` subfolder | +32 -5 | none claimed | untested |
+
+## vLLM 0.31.0: each mod
+
+| # | mod | lines | gain vs stock | output |
+|---|---|---|---|---|
+| 01 | split-kv-verify: TRITON_ATTN keeps the split-KV kernel for a verify of up to 8 tokens | +4 -1 | MTP k=2 at ~3k context: 51 -> ~90 tok/s (self-reported) | untested (5e-4 vs the 2D kernel) |
+| 02 | quark-lm-head: Quark quantizes an lm_head the config does not exclude | +7 -1 | 0 by itself; lets vLLM load an int4-head checkpoint | untested |
+
+Measured on 0.31.0+rocm723, 2 x R9700 (self-reported, no raw files kept).
+
+## How to apply: llama.cpp master 7592b61d3
+
+Base: `7592b61d3b53ca5b39a25a03508fa1246b78c579`. Apply `engines/llama.cpp/7592b61d3/patches/*.patch` in order with
+`git apply`. Each also applies alone on v1.0.0. Written before the one-switch rule: 01 and 02 are on by default
+(`LLAMA_WS=0` turns 02 off), 03-05 have switches (`LLAMA_SERVER_CKPT_MIN_HEAD=N`, `LLAMA_SERVER_CKPT_TAIL_ONLY=1`,
+`LLAMA_PLE_PREFETCH_ASYNC=1`), 06 is a file lookup.
+
+## How to apply: vLLM 0.31.0
+
+In vLLM's `site-packages`: `patch -p1 --dry-run < X.patch`, then without `--dry-run`. Revert: `patch -R -p1`.
+No switch: applied = on. `tools/quark_lm_head_int4.py SRC DST` builds the int4-head checkpoint 02 loads.
+
+## llama.cpp v1.0.0: limits and checks
 
 ### Limits that bite
 
