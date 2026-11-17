@@ -281,9 +281,9 @@ class Lint:
         own = self.names.get(engine, [])
         return sorted({n for n in names if n not in own and re.search(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])", t)})
 
-    def text(self, engine, text):
+    def text(self, engine, text, models=True):
         bad = []
-        if self.model and (m := self.model.search(text)):
+        if models and self.model and (m := self.model.search(text)):
             bad.append(f"model name '{m.group(0)}'")
         if self.private and (m := self.private.search(text)):
             bad.append(f"private detail '{m.group(0)}'")
@@ -637,8 +637,9 @@ def benchmark_files(bad=None):
 
 
 def check_docs(reg, lint):
-    """README.md, LICENSE, engines/README.md and every folder-level string of mods.json: no model name, no private
-    detail, no engine outside engines.json (lint.doc_allow lists exact lines that may still match)."""
+    """README.md, LICENSE, engines/README.md and every folder-level string of mods.json: no private detail, no engine
+    outside engines.json (lint.doc_allow lists exact lines that may still match). Model names are allowed in README.md
+    and benchmarks/ (owner, 2026-11-17: they describe what was measured); mods, patches and mods.json stay model-agnostic."""
     print("\ndocs")
     allow = set((reg.get("lint") or {}).get("doc_allow", []))
     n = 0
@@ -647,14 +648,14 @@ def check_docs(reg, lint):
         for i, line in enumerate(open(p, encoding="utf-8") if os.path.exists(p) else [], 1):
             if line.strip() in allow:
                 continue
-            for x in lint.text(None, line):
+            for x in lint.text(None, line, models=rel == "LICENSE" or rel.startswith("engines/")):
                 say("FAIL", f"docs    {rel}:{i}: {x}")
                 n += 1
     for rel in benchmark_files():
         p = os.path.join(ROOT, rel)
         lines = [s_ for s_ in strings(json.load(open(p)))] if rel.endswith(".json") else open(p, encoding="utf-8")
         for i, line in enumerate(lines, 1):
-            for x in lint.text(None, line):
+            for x in lint.text(None, line, models=False):
                 say("FAIL", f"docs    {rel}:{i}: {x}")
                 n += 1
     for f in folders_all():

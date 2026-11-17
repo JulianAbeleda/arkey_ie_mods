@@ -92,7 +92,7 @@ the stock noise floor) and MMLU-Pro and LiveCodeBench non-inferiority against st
   11.5 GB/s pageable, measured).
 - CPU: AMD Ryzen 7 5800X (8 cores). RAM: 32 GB DDR4-2667 (2 x 16 GB; 31 GiB usable). Board: ASRock B550M-ITX/ac.
 - NVIDIA driver 595.99.02, CUDA 13.2, Linux 6.8 (Ubuntu).
-- Workload: a 1.9-bit pruned MoE coding model + its MTP draft head, one request at a time, 59-turn
+- Workload: Qwen3.8-Flash-Next GSQ-RCO Coder IQ1_M (ISTA-DASLab; 1.9 bits per original parameter, 256 of 512 experts kept) + its MTP draft head, one request at a time, 59-turn
   coding session to about 129k tokens, temperature 0.
 
 Method, every run, the quality gates and the commands to reproduce:

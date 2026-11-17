@@ -15,6 +15,9 @@ Setups:
   --moe-cache-mib 6240 -lm none --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-n-ubatch 128 -bs
   --cache-ram 0 -np 1 -t 8 --temp 0 --no-warmup -fit off`.
 
+Model: Qwen3.8-Flash-Next GSQ-RCO Coder IQ1_M (ISTA-DASLab, huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF)
+with its MTP draft head (tuned-A, built from unsloth's MTP head with llama-quantize).
+
 Workload: one 59-turn coding session that grows to 129.3k tokens, sent one turn at a time, temperature 0. The same
 session file for every run. Each turn's reply length is fixed, so both setups generate the same token counts.
 
