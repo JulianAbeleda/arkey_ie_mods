@@ -7,7 +7,20 @@ On a 128k-token coding chat, all of them together make llama.cpp **2.92x faster*
 
 ## Install
 
-Needs an NVIDIA GPU, CUDA and CMake. Four commands:
+Needs an NVIDIA GPU, CUDA and CMake. Two commands:
+
+```
+brew install JulianAbeleda/tap/boltbeam
+boltbeam mods apply
+```
+
+`boltbeam mods apply` fetches this repo at the commit BoltBeam pins into BoltBeam's own folder (a clone you name in
+`BOLTBEAM_IE_MODS` is used instead), says what it fetches and from where, then builds the patches into a copy of the llama.cpp
+source BoltBeam runs (`--src` to name another) and checks each one is on.
+
+### By hand
+
+Four commands:
 
 ```
 git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp && git checkout b12359    # = v1.0.0
