@@ -14,7 +14,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone)",
+    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone); ship-prefill: exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order)",
     "entries": [
      {
       "id": "mods-series-verify",
@@ -745,6 +745,109 @@
    "files": [
     "src/llama-context.cpp",
     "src/llama-context.h"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "check"
+   ]
+  },
+  {
+   "id": "llama.cpp/1.0.0/tokenize-incr",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "tokenize-incr",
+   "state": "series",
+   "order": 14,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_TOKENIZE_INCR",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "LLAMA_TOKENIZE_INCR_CHECK",
+   "check_needs": [
+    "LLAMA_TOKENIZE_INCR"
+   ],
+   "marker": "LLAMA_TOKENIZE_INCR",
+   "knobs": [
+    "LLAMA_TOKENIZE_INCR"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/14-tokenize-incr.patch",
+   "sha256": "e6194bf71a08513051a233350f18a298d215b1c96a4d238b6fa7b81a73494abe",
+   "lines": {
+    "added": 109,
+    "removed": 1
+   },
+   "budget": {
+    "added": 120,
+    "removed": 1
+   },
+   "files": [
+    "tools/server/server-common.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": []
+  },
+  {
+   "id": "llama.cpp/1.0.0/ple-prefetch",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "ple-prefetch",
+   "state": "series",
+   "order": 15,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_PLE_PREFETCH_TURN",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "LLAMA_PLE_PREFETCH_TURN",
+   "knobs": [
+    "LLAMA_PLE_PREFETCH_TURN"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/15-ple-prefetch.patch",
+   "sha256": "cfca6c738c7f2509311d7680b4a0f39a3035a8c1162fb7703d7a134c90680aea",
+   "lines": {
+    "added": 115,
+    "removed": 0
+   },
+   "budget": {
+    "added": 130,
+    "removed": 0
+   },
+   "files": [
+    "include/llama.h",
+    "src/llama-mmap.cpp",
+    "src/llama-mmap.h",
+    "src/llama-model.cpp",
+    "src/llama-model.h",
+    "src/models/models.h",
+    "src/models/qwen4exp.cpp",
+    "tools/server/server-context.cpp"
    ],
    "depends_on": {
     "apply": [],

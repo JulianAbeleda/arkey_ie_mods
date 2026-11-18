@@ -3,7 +3,7 @@
 Patches that make llama.cpp faster on long chats with big mixture-of-experts models. Each one is off until you turn it
 on, and off means plain llama.cpp.
 
-On a 128k-token coding chat, all of them together make llama.cpp **2.92x faster** than stock, with the same answers.
+On a 128k-token coding chat, the first 13 together make llama.cpp **2.92x faster** than stock, with the same answers.
 
 ## Install
 
@@ -39,6 +39,7 @@ Turn every patch on and start the server:
 export LLAMA_KPOOL_INCREMENTAL=1 LLAMA_SPARSE_DIRECT=1 LLAMA_IDX_POOLED=1 LLAMA_MTP_SHARE_HEAD=1 \
   LLAMA_KPOOL_INPUT_DEVICE=1 LLAMA_SEQ_RM_INDEXED=1 LLAMA_FATTN_VEC_SKIP=1 LLAMA_IDX_INPLACE=1 \
   LLAMA_MOE_INPLACE=1 LLAMA_CKPT_PINNED=1 LLAMA_TOPK_FUSED=1 LLAMA_GRAPH_SLOTS=1 \
+  LLAMA_TOKENIZE_INCR=1 LLAMA_PLE_PREFETCH_TURN=1 \
   GGML_CUDA_EXT_KERNELS=/path/to/arkey_ie_mods/engines/llama.cpp/1.0.0/kernels/bf16-smallm-gemv-k10240/manifest.json
 
 build/bin/llama-server -m MODEL.gguf -md DRAFT.gguf -c 131072 -fa on -ngl 99 \
@@ -53,7 +54,8 @@ To go back to stock, unset the variables. Each patch, what it does and its limit
 
 ## Benchmarks
 
-Stock llama.cpp v1.0.0 against the same version with all patches on, on the same 59-turn, 128k-token coding chat,
+Stock llama.cpp v1.0.0 against the same version with patches 01-13 on (14 and 15 came later; their gains are in
+[DETAILS.md](DETAILS.md)), on the same 59-turn, 128k-token coding chat,
 3 runs each:
 
 | | stock | with mods | |

@@ -22,9 +22,11 @@ its layout and the check. The [README](README.md) has how to apply and the numbe
 | 11 | +184 -0 | prefill -152 ms/turn [-168, -140] at 96-128k; on top of 10 at -ub 512: -153 [-157, -149] | identical |
 | 12 | +314 -1 | 0.30 ms/step [0.17, 0.43] session (+1.9%); 0.32 [0.27, 0.38] at 96-128k | identical |
 | 13 | +102 -0 | 0.19 ms/step [0.13, 0.26] session (+1.2%); every bucket clears | identical |
+| 14 | +109 -1 | TTFT -79.7 ms/turn [-40.5, -118.9], turns 2-59; tokenize -123 ms at 96-128k | identical |
+| 15 | +115 -0 | prefill -58.2 ms/turn [-50.2, -66.1], turns 2-59; -80.8 under 32k | identical |
 | kernel | 2 kernels | -0.56 ms/step [0.51, 0.62] (3.2%) vs the hook off | identical (59/59 turns, ~142k check comparisons) |
 
-Series total: +2,183 -131 lines. Evidence and conditions per mod: `engines/llama.cpp/1.0.0/mods.json`.
+Series total: +2,407 -132 lines. Evidence and conditions per mod: `engines/llama.cpp/1.0.0/mods.json`.
 
 ## llama.cpp master 7592b61d3: each mod
 
@@ -80,6 +82,12 @@ No switch: applied = on. `tools/quark_lm_head_int4.py SRC DST` builds the int4-h
   exit. That first checkpoint takes about 2.3 s once. 8 MiB of VRAM (measured with 10 at -ub 512).
 - 13 covers MTP draft contexts only and is measured at N=1 (about 4 MiB). N>1 costs about 60 MiB more and ran out of
   memory at 128k. Slot buffers are not in memory_breakdown. No check mode. Off when `GGML_CUDA_GRAPH_OPT` is set.
+- 14 shortens the wait before prefill (template + tokenize), not prefill or decode. Stock path when the prompt holds no
+  control token, special-token parsing is off or the vocab adds EOS. It keeps the last call's pieces only: with -np > 1
+  interleaved chats reuse less (still exact).
+- 15 works only where the per-layer token-embedding table is lazily mapped (the qwen4exp graph); every other
+  architecture is a no-op. One detached background thread for the process lifetime. A read-ahead hint: the gain depends
+  on the page cache and storage. No check mode.
 
 ### Check modes
 
@@ -100,6 +108,8 @@ Set the check switch beside the mod's switch. Rows marked G also need `GGML_CUDA
 | 11 | `LLAMA_CKPT_PINNED_CHECK=1` | |
 | 12 | `LLAMA_TOPK_FUSED_CHECK=1` | G |
 | 13 | none | |
+| 14 | `LLAMA_TOKENIZE_INCR_CHECK=1` | |
+| 15 | none | |
 
 A check run is slow. It is for correctness, not timing.
 

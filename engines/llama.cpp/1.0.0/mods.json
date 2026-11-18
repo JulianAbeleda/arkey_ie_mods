@@ -889,6 +889,145 @@
     "hunks_removing_stock_lines": 0,
     "note": "purely additive (0 lines removed): every added call site is behind gslot_max > 0, which stays 0 with the switch unset. No check switch: rule exception, recorded here."
    }
+  },
+  {
+   "name": "tokenize-incr",
+   "patch": "patches/14-tokenize-incr.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_TOKENIZE_INCR",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_TOKENIZE_INCR_CHECK",
+    "needs": [
+     "LLAMA_TOKENIZE_INCR"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_TOKENIZE_INCR",
+   "files": [
+    "tools/server/server-common.cpp"
+   ],
+   "lines": {
+    "added": 109,
+    "removed": 1
+   },
+   "budget": {
+    "added": 120,
+    "removed": 1
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/ship-prefill-20261118 (ab-ID: untimed identity session; ab-SCR: timed screen)",
+     "numbers": "ab-ID (this patch, built as the series 01-15): off vs on (LLAMA_TOKENIZE_INCR=1 + LLAMA_TOKENIZE_INCR_CHECK=1 + LLAMA_PLE_PREFETCH_TURN=1), 59-turn session to 129k, recorded history: reply sha256 59/59 equal; 60 check calls (59 turns + warm-up), piecewise == full tokenization on every one (up to 128,856 tokens), 0 failures; server exits in 2.8 s, not killed. ab-SCR turns 40-59: 20/20 equal. Unit test (earlier build of the same code): 7 vocabs x 5 templates x 8 turns x add_special on/off = 560 cases, 0 failures. Earlier version (first-token cut, 4096-byte threshold), 3 timed pairs: text 59/59 x3",
+     "match": {
+      "what": "reply sha256 per turn, both switches + LLAMA_TOKENIZE_INCR_CHECK=1 on vs off; and the check's piecewise == full tokenization on every call",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "-79.7 [-40.5, -118.9]",
+    "unit": "ms TTFT per turn, turns 2-59 (pre-server -76.9 [-74.2, -79.7]; at 96-128k pre-server -123.0 [-116.6, -129.4]); prefill and decode unchanged. Shipped version, one timed pair at turns 40-59 (stacked with 15): pre-server 170 -> 46 ms (-124), TTFT -186 ms",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 59-turn session to 128k context (recorded history), MoE model on the engine's qwen4exp graph with an MTP draft head k=3, q8_0 KV, backend sampler (-bs), series switches 01-13 on, -ub 1024 -b 2048 -ncmoe 16 --moe-cache-mib 6240 -lm none; 3 alternating pairs, 95% t-interval over pairs, on the earlier version of this patch (cut at the first token, 4096-byte threshold; tokens identical by construction and by the check); the shipped version confirmed by one pair of a deep-turn screen (turns 40-59, both 14 and 15 on)",
+    "run": "boltbeam-runs/prefill-gap-20261117 (job_R pairs 1-3, pairs-R-S.out); boltbeam-runs/ship-prefill-20261118 (ab-SCR)"
+   },
+   "exercised_by": "llama-server string prompts (the chat template's output) that hold control-token text, on a multi-turn chat whose history repeats from request to request",
+   "limits": [
+    "TTFT only (template + tokenize before the server's prefill); prompt processing and decode are unchanged",
+    "stock path when the prompt holds no control token of the vocab, when special-token parsing is off, or when the vocab adds EOS",
+    "the cache holds the pieces of the last call only (one prompt's text and tokens); with -np > 1 interleaved conversations reuse less (exact either way; how much less is unmeasured)",
+    "exact because the tokenizer splits at special tokens before BPE; control tokens with lstrip/rstrip attributes are not used as cut points"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 1,
+    "note": "one stock line rewritten: the string-prompt call of common_tokenize goes through tokenize_incr, whose first statement returns common_tokenize unchanged when LLAMA_TOKENIZE_INCR is unset."
+   }
+  },
+  {
+   "name": "ple-prefetch",
+   "patch": "patches/15-ple-prefetch.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_PLE_PREFETCH_TURN",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_PLE_PREFETCH_TURN",
+   "files": [
+    "include/llama.h",
+    "src/llama-mmap.cpp",
+    "src/llama-mmap.h",
+    "src/llama-model.cpp",
+    "src/llama-model.h",
+    "src/models/models.h",
+    "src/models/qwen4exp.cpp",
+    "tools/server/server-context.cpp"
+   ],
+   "lines": {
+    "added": 115,
+    "removed": 0
+   },
+   "budget": {
+    "added": 130,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/ship-prefill-20261118 (ab-ID: untimed identity session; ab-SCR: timed screen)",
+     "numbers": "ab-ID (this patch, built as the series 01-15): off vs on (LLAMA_PLE_PREFETCH_TURN=1 with 14 + its check), 59-turn session to 129k, recorded history: reply sha256 59/59 equal; server exits in 2.8 s, not killed (the earlier version hung at exit: fixed). ab-SCR turns 40-59: 20/20 equal. Earlier version (hook before the checkpoint restore, at n_past - 64), 3 timed pairs: text 59/59 x3, decode x1.000",
+     "match": {
+      "what": "reply sha256 per turn, both switches on vs off",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "-58.2 [-50.2, -66.1]",
+    "unit": "ms of prefill per turn, turns 2-59; <32k -80.8 [-74.4, -87.2], 32-64k -65.1, 64-96k -43.0 [-30.5, -55.6], 96-128k -45.8 [-38.1, -53.4]; turn 1 -196 ms; decode x1.000. Shipped version: untimed identity session warm turns 818 -> 761 ms (-57), one timed pair at turns 40-59 (stacked with 14): 874 -> 812 ms (-62)",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 59-turn session to 128k context (recorded history), MoE model on the engine's qwen4exp graph with an MTP draft head k=3, q8_0 KV, backend sampler (-bs), series switches 01-13 on, -ub 1024 -b 2048 -ncmoe 16 --moe-cache-mib 6240 -lm none; 3 alternating pairs, 95% t-interval over pairs, on the earlier version of this patch (same row hashing; hook at n_past - 64 before the checkpoint restore); the shipped version (hook after the restore, at n_past) confirmed by one pair of a deep-turn screen (turns 40-59, both 14 and 15 on)",
+    "run": "boltbeam-runs/prefill-gap-20261117 (job_R pairs 1-3, pairs-R-U.out); boltbeam-runs/ship-prefill-20261118 (ab-ID, ab-SCR)"
+   },
+   "exercised_by": "models whose per-layer token-embedding table is a lazily mapped tensor read through the mmap (the qwen4exp graph's PLE rows); llama-server prompts of more than one prefill pass",
+   "limits": [
+    "a model-level hook (llama_model::prefetch_inputs): only the qwen4exp graph overrides it; every other architecture is a no-op (by construction, not run on another architecture)",
+    "only when the table is lazily mapped (the condition the graph's own prefetch uses); a table in RAM or VRAM gets nothing",
+    "one background thread for the process lifetime, started at the first hint; it is detached and never joined",
+    "a hint (madvise MADV_WILLNEED): gains depend on the page cache and storage; the first pass's own rows still wait as stock",
+    "no check mode: no byte the model reads changes"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the mod only issues an OS read-ahead hint (madvise) on a background thread; no computed value or read byte changes, so there is nothing to compare. Identity rests on the full-session text match."
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "purely additive (0 lines removed): the server calls the hook only with LLAMA_PLE_PREFETCH_TURN set; the base-class hook is empty."
+   }
   }
  ],
  "parked": [
@@ -1210,6 +1349,29 @@
     "patches/11-ckpt-pinned.patch",
     "patches/13-graph-slots.patch",
     "archive/graph-recapture.patch"
+   ]
+  },
+  {
+   "id": "ship-prefill",
+   "path": "boltbeam-runs/ship-prefill-20261118/src",
+   "what": "the tree tokenize-incr (14) and ple-prefetch (15) were built and checked on (identity session and timed screen)",
+   "contains": "exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order)",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/07-fattn-vec-skip.patch",
+    "patches/08-idx-inplace.patch",
+    "patches/09-ext-kernels.patch",
+    "patches/10-moe-inplace.patch",
+    "patches/11-ckpt-pinned.patch",
+    "patches/12-topk-fused.patch",
+    "patches/13-graph-slots.patch",
+    "patches/14-tokenize-incr.patch",
+    "patches/15-ple-prefetch.patch"
    ]
   }
  ],
