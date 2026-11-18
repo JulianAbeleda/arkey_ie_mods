@@ -13,6 +13,7 @@
  "mods": [
   {
    "name": "kpool-incremental",
+   "title": "k-pool layout updated from the edit point",
    "patch": "patches/01-kpool-incremental.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -74,6 +75,7 @@
   },
   {
    "name": "sparse-direct",
+   "title": "sparse attention reads q8_0 K/V rows by index",
    "patch": "patches/02-sparse-direct.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -140,6 +142,7 @@
   },
   {
    "name": "idx-pooled",
+   "title": "indexer cache keeps pooled keys only",
    "patch": "patches/03-idx-pooled.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -206,6 +209,7 @@
   },
   {
    "name": "mtp-share-head",
+   "title": "draft head reads the target's output projection",
    "patch": "patches/04-mtp-share-head.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -272,6 +276,7 @@
   },
   {
    "name": "kpool-input-device",
+   "title": "k-pool inputs live on the device",
    "patch": "patches/05-kpool-input-device.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -339,6 +344,7 @@
   },
   {
    "name": "seq-rm-indexed",
+   "title": "seq_rm walks an index, not the cache",
    "patch": "patches/06-seq-rm-indexed.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -401,6 +407,7 @@
   },
   {
    "name": "fattn-vec-skip",
+   "title": "vector attention kernel skips masked rows",
    "patch": "patches/07-fattn-vec-skip.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -470,6 +477,7 @@
   },
   {
    "name": "idx-inplace",
+   "title": "indexer scores pooled q8_0 keys in place",
    "patch": "patches/08-idx-inplace.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -542,6 +550,7 @@
   },
   {
    "name": "ext-kernels",
+   "title": "external kernel hook",
    "patch": "patches/09-ext-kernels.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -610,6 +619,7 @@
   },
   {
    "name": "moe-inplace",
+   "title": "prefill reads cached experts in place",
    "patch": "patches/10-moe-inplace.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -683,6 +693,7 @@
   },
   {
    "name": "ckpt-pinned",
+   "title": "context checkpoints in a pinned pool",
    "patch": "patches/11-ckpt-pinned.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -750,6 +761,7 @@
   },
   {
    "name": "topk-fused",
+   "title": "radix top-k of a few rows in one launch",
    "patch": "patches/12-topk-fused.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -822,6 +834,7 @@
   },
   {
    "name": "graph-slots",
+   "title": "draft context keeps a graph per small ubatch size",
    "patch": "patches/13-graph-slots.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -892,6 +905,7 @@
   },
   {
    "name": "tokenize-incr",
+   "title": "server tokenizes only the prompt's new part",
    "patch": "patches/14-tokenize-incr.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
@@ -958,6 +972,7 @@
   },
   {
    "name": "ple-prefetch",
+   "title": "per-layer embedding rows read ahead on a thread",
    "patch": "patches/15-ple-prefetch.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",

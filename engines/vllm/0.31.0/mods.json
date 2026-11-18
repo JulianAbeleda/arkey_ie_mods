@@ -16,6 +16,7 @@
  "mods": [
   {
    "name": "split-kv-verify",
+   "title": "TRITON_ATTN keeps the split-KV kernel for a verify of up to 8 tokens",
    "patch": "patches/01-split-kv-verify.patch",
    "engine": "vllm",
    "base": "0.31.0",
@@ -84,6 +85,7 @@
   },
   {
    "name": "quark-lm-head",
+   "title": "Quark quantizes an lm_head the config does not exclude",
    "patch": "patches/02-quark-lm-head.patch",
    "engine": "vllm",
    "base": "0.31.0",

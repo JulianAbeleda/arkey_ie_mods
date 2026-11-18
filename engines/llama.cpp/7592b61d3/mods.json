@@ -14,6 +14,7 @@
  "mods": [
   {
    "name": "moe-prefill",
+   "title": "MoE routing sort, MMQ tile knob, pinned staging",
    "patch": "patches/01-moe-prefill.patch",
    "engine": "llama.cpp",
    "base": "7592b61d3",
@@ -95,6 +96,7 @@
   },
   {
    "name": "pinned-copy-stream",
+   "title": "host-RAM experts on a pinned copy stream",
    "patch": "patches/02-pinned-copy-stream.patch",
    "engine": "llama.cpp",
    "base": "7592b61d3",
@@ -189,6 +191,7 @@
   },
   {
    "name": "server-ckpt-min-head",
+   "title": "no checkpoint at a user start in the prompt head",
    "patch": "patches/03-server-ckpt-min-head.patch",
    "engine": "llama.cpp",
    "base": "7592b61d3",
@@ -260,6 +263,7 @@
   },
   {
    "name": "server-ckpt-tail-only",
+   "title": "keep only the tail checkpoint",
    "patch": "patches/04-server-ckpt-tail-only.patch",
    "engine": "llama.cpp",
    "base": "7592b61d3",
@@ -332,6 +336,7 @@
   },
   {
    "name": "ple-prefetch-async",
+   "title": "PLE row prefetch on a thread",
    "patch": "patches/05-ple-prefetch-async.patch",
    "engine": "llama.cpp",
    "base": "7592b61d3",
@@ -419,6 +424,7 @@
   },
   {
    "name": "mtp-sidecar-subfolder",
+   "title": "MTP sidecar found in an `mtp/` subfolder",
    "patch": "patches/06-mtp-sidecar-subfolder.patch",
    "engine": "llama.cpp",
    "base": "7592b61d3",

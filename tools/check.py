@@ -14,7 +14,7 @@ Per folder
   5 switch    the switch, check and marker are in the patch's added lines (per the engine's switch_presence
               templates); every switch-shaped or env-read literal a patch adds is declared; no archived switch or
               archived sha256 is in the series or parked; the count of hunks that remove stock lines equals the row
-  5b rows     known keys only; output label in {identical, quality-gated, untested} with its evidence (identical:
+  5b rows     known keys only; a series mod has a one-line title (parked may); output label in {identical, quality-gated, untested} with its evidence (identical:
               a counted match, quality-gated: a gate); a rule_exceptions entry for every missing check, missing
               switch or switch that is on by default; no model name and no other engine's name in a row or a patch
               header or added line (engines.json lint)
@@ -42,7 +42,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 fails, skips = [], []
 LOCAL, GIT = {}, None
 LABELS = {"identical", "quality-gated", "untested"}
-ROW_KEYS = {"name", "patch", "engine", "base", "switch", "switch_null_why", "check", "reads", "marker", "files", "lines", "budget",
+ROW_KEYS = {"name", "title", "patch", "engine", "base", "switch", "switch_null_why", "check", "reads", "marker", "files", "lines", "budget",
             "budget_raised", "depends_on", "output", "gain", "exercised_by", "limits", "rule_exceptions", "static", "scrubbed_from",
             "parked_why", "applies_after"}
 ARCH_KEYS = {"name", "kind", "date", "patch", "switch", "written_on", "why", "evidence", "files", "lines", "sha256", "scrubbed_from"}
@@ -54,8 +54,9 @@ TOP_FILES = {".git", ".githooks", ".gitignore", "DETAILS.md", "LICENSE", "LICENS
              "tools", "local.json", "local.example.json", "archive-ledger.json", "__pycache__", "benchmarks"}
 VERSION_ENTRIES = {"mods.json", "patches", "parked", "archive", "tools", "kernels"}
 KERNEL_KEYS = {"name", "dir", "hook", "files", "source", "lines", "budget", "output", "gain", "exercised_by", "limits"}
-INDEX_MOD_KEYS = {"id", "engine", "version", "name", "state", "order", "applier", "base", "switch", "switch_null_why", "check", "check_needs",
+INDEX_MOD_KEYS = {"id", "engine", "version", "name", "title", "state", "order", "applier", "base", "switch", "switch_null_why", "check", "check_needs",
                   "marker", "knobs", "output", "patch", "sha256", "lines", "budget", "files", "depends_on", "rule_exceptions"}
+TITLE_MAX = 80  # a mod's title: what it changes, in one line (a consumer's list shows it first)
 BUDGET_RULES = {"measured": lambda n: n, "ceil_105_10": lambda n: int(math.ceil(n * 1.05 / 10) * 10)}
 
 
@@ -337,6 +338,9 @@ def check_row(m, spec, engine_row, lint, rel):
         bad.append(f"switch kind {m['switch'].get('kind')} not in the engine's switch_kinds")
     if not m.get("marker"):
         bad.append("no marker")
+    title = m.get("title")
+    if title is not None and (not isinstance(title, str) or not title.strip() or "\n" in title or len(title) > TITLE_MAX):
+        bad.append(f"title must be one line of 1-{TITLE_MAX} characters")
     bad += [f"row text: {x}" for s in strings({k: v for k, v in m.items() if k not in ("files", "patch", "scrubbed_from")}) for x in lint.text(spec["engine"], s)][:3]
     return bad
 
@@ -421,7 +425,7 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
             bad.append("file list differs from the row")
         say("FAIL" if bad else "ok", f"lines   {m['name']:22} +{a:<4} -{r:<3} budget +{b['added']:<4} -{b['removed']:<3} files {len(files)}" + ("  " + "; ".join(bad) if bad else ""))
         sw, ck = sw_name(m), (m.get("check") or {}).get("name")
-        bad = check_row(m, spec, engine_row, lint, rel)
+        bad = check_row(m, spec, engine_row, lint, rel) + ["a series mod needs a title"] * (m in spec.get("mods", []) and not m.get("title"))
         for nm, k in ((sw, (m.get("switch") or {}).get("kind")), (ck, (m.get("check") or {}).get("kind"))):
             if nm:
                 p = present(engine_row, k, nm, text)
@@ -764,7 +768,7 @@ def build_index(reg):
         for state, rows in (("series", spec.get("mods", [])), ("parked", spec.get("parked", []))):
             for i, m in enumerate(rows):
                 out["mods"].append({
-                    "id": f"{e}/{v}/{m['name']}", "engine": e, "version": v, "name": m["name"], "state": state,
+                    "id": f"{e}/{v}/{m['name']}", "engine": e, "version": v, "name": m["name"], "title": m.get("title"), "state": state,
                     "order": i + 1 if state == "series" else None, "applier": row.get("applier"), "base": base,
                     "switch": m.get("switch"), "switch_null_why": m.get("switch_null_why"),
                     "check": (m.get("check") or {}).get("name"), "check_needs": (m.get("check") or {}).get("needs", []), "marker": m.get("marker"),
