@@ -197,7 +197,9 @@ base, applier and `verified` (tree: byte-equal to a measured tree, or none, with
 a stable `id` (engine/version/name), state (series / parked), order, applier, switch, check, `marker` (a literal the
 patch adds: proves it is in a build), `knobs`, output label, patch path, sha256, lines, budget, files, depends_on,
 rule exceptions. Then `archived` and `tools`. Gains, limits and evidence live in mods.json at the same commit.
-Consumers read it at a pinned commit of this repo.
+`requires`: the oldest consumer version that reads it (`boltbeam`, from engines.json `requires`; the check fails on
+one that is not a dotted version or has no why). A consumer reads the index at one commit of this repo, a pin or the
+newest commit whose schema it reads and whose `requires` it meets, and records which.
 
 ## The check
 
