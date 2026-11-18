@@ -1,0 +1,52 @@
+{
+ "schema": "arkey_ie_mods.stack_budget.v1",
+ "about": "Caps on the whole series (tools/check.py check 10 stack). A crossing means: refactor (one extension point plus rows) or get an Owner-approved raise. A raise appends {from, to, measured, why, date, approved: 'Owner-approved YYYY-MM-DD'} to the metric's raised list, to = the value measured after review cuts, and sets cap to it. Lowering a cap: re-derive set.",
+ "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}",
+ "caps": {
+  "total_lines": {
+   "cap": 20,
+   "set": {
+    "measured": 13,
+    "mods": 2,
+    "date": "2026-11-18"
+   },
+   "raised": []
+  },
+  "mods_per_file": {
+   "cap": 2,
+   "set": {
+    "measured": 1,
+    "mods": 2,
+    "date": "2026-11-18"
+   },
+   "raised": []
+  },
+  "overlap_hunks_per_file": {
+   "cap": 0,
+   "set": {
+    "measured": 0,
+    "mods": 2,
+    "date": "2026-11-18"
+   },
+   "raised": []
+  },
+  "depth": {
+   "cap": 2,
+   "set": {
+    "measured": 1,
+    "mods": 2,
+    "date": "2026-11-18"
+   },
+   "raised": []
+  },
+  "stacked_hunks": {
+   "cap": 0,
+   "set": {
+    "measured": 0,
+    "mods": 2,
+    "date": "2026-11-18"
+   },
+   "raised": []
+  }
+ }
+}

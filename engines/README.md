@@ -24,6 +24,10 @@ exercised_by, limits, rule_exceptions [{rule, why}], static`.
 - A changed line count or budget needs `budget_raised [{from, to, why, date}]`.
 - A file rewritten to remove a model name, another engine or a private detail records `scrubbed_from {sha256, what}`.
 
+A version with series mods also needs `stack_budget.json` (schema `arkey_ie_mods.stack_budget.v1`): one cap per
+stack metric, each `{cap, set {measured, mods, date}, raised []}`. The check prints the derived caps when it is
+missing (DETAILS.md, Stack budget).
+
 Optional lists: `parked` (rows like mods, not in the series), `archived` (decommissioned or rejected: name, kind,
 switch, written_on, why, evidence, date, files, lines, sha256; files in `archive/`; also in `archive-ledger.json`),
 `tools` (path, sha256, needs, what), `tested_trees` [{id, path, what, contains, apply}] or `tested_trees_none {why}`,

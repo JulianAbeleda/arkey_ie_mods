@@ -164,6 +164,7 @@ engines.json                      one row per engine: base identity, applier, sw
 engines/README.md                 what adding an engine or a version requires
 engines/<engine>/<version>/
     mods.json                     one row per mod; parked, archived, tools, engine flags, tested trees
+    stack_budget.json             caps on the whole series (check 10 stack) and the Owner-approved raises
     patches/NN-name.patch         the series, in order
     parked/                       correct but weak, or a record kept beside the series; may come back
     archive/                      decommissioned or rejected patches; never applied (archive/README.md is generated)
@@ -173,6 +174,7 @@ archive-ledger.json               append-only: every patch ever archived (id, sh
 benchmarks/<engine>-<version>-<run>/  a benchmark record: README.md (method, results, reproduce) + .json summaries
 local.example.json                copy to local.json (gitignored): this machine's base checkouts and run roots
 tools/check.py                    the one check; standard library only; names no engine; --write regenerates the exports
+tools/test_check.py               its tests (python3 -m unittest discover -s tools -p 'test_*.py'); the hook runs them
 .githooks/pre-commit              runs it on the staged content
 ```
 
@@ -227,7 +229,8 @@ It verifies, per engine folder:
 - rows: known keys, an output label with its evidence, a rule exception for each rule a mod breaks, no model name,
   no other engine, no private detail (rows, patch headers and added lines);
 - base + patches is byte-equal to the trees that were built and measured (what each holds is below);
-- archived patches match their sha256 and the ledger; every file has a row; index.json and archive/README.md are fresh.
+- archived patches match their sha256 and the ledger; every file has a row; index.json and archive/README.md are fresh;
+- the whole series is within its stack caps (below), and a stack health summary prints.
 
 A missing local checkout, tree or history is a named SKIP. The hook runs on the staged content. On the maintainer's
 machine three SKIPs remain, each a fact `--strict` refuses to hide:
@@ -244,6 +247,35 @@ Series-only builds (01-09 and 01-11 on the base, nothing else) are recorded in m
 It does not prove that a hunk which rewrites stock lines keeps stock behaviour with the switch off.
 That is a run-time fact: the evidence is in each row, and the byte-equality check ties the patches to the measured trees.
 It compiles nothing and runs nothing on a GPU.
+## Stack budget
+
+Per-mod budgets keep each patch lean; they do not stop the stack from growing into many mods editing the same engine
+code. `engines/<engine>/<version>/stack_budget.json` caps the whole series:
+
+| metric | what |
+|---|---|
+| `total_lines` | added + removed lines over the series |
+| `mods_per_file` | the most mods that patch one engine file |
+| `overlap_hunks_per_file` | the most hunks in one file whose lines (context included) another mod's hunk already covers |
+| `depth` | the longest `depends_on.apply` chain, in mods |
+| `stacked_hunks` | hunks whose context or removed lines are another mod's added lines: mods stacked on mods |
+
+The check applies the series' hunks to a model of each file (placed like `git apply`; with the base checkout it
+reproduces the patched files exactly) to know which mod added and which hunks covered each line.
+
+Each cap is derived from a measurement, `set {measured, mods, date}`: cap = measured + ceil(measured / series mods),
+room for one more average mod. A crossing fails and names the files, functions and mods, and the refactor it points at:
+when many mods patch the same code, replace them with one extension point (a hook patch) plus rows, as the ext-kernel
+hook did for kernels. If the owner accepts the growth instead, append to the metric's `raised`
+`{from, to, measured, why, date, approved: "Owner-approved YYYY-MM-DD"}` with to = the value measured after review
+cuts, and set `cap` to it. The check refuses a cap that is neither derived nor the last raise, a raise to anything but
+its measured value, a new raise or a new or changed `set` whose measured value is not today's, a cap raised against
+HEAD without a new raise, and a raise removed against HEAD. The approval is a recorded string, not a signature: review
+of the raise commit is what ties it to the owner. A measured 0 gives a cap of 0 (the first such crossing needs a raise).
+
+Today's hot spots in llama.cpp v1.0.0, the first refactor candidates: `src/models/qwen4exp.cpp` (6 mods),
+`src/llama-memory-hybrid-idx.cpp` (4 mods, 15 overlapping hunks: 01, 03, 05, 08) and `src/llama-context.cpp` (4 mods).
+
 ## License
 
 - This repository's own material (tools/, the json rows, the docs, the added lines of each patch, the tools/ scripts

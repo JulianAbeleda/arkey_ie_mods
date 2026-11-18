@@ -28,6 +28,11 @@ Per folder
   9 exports   index.json and each archive/README.md equal what the rows generate (--write regenerates them and
               appends new archived rows to the ledger); index.json requires is engines.json requires (the oldest
               consumer version that reads it: requires.boltbeam a dotted version, with a why)
+  10 stack    the whole series against stack_budget.json: total lines, the most mods on one file, the most overlapping
+              hunks in one file, the longest depends_on.apply chain, hunks stacked on another mod's added lines; a
+              crossing names the files, functions and mods and the extension point to introduce; a cap is derived
+              (measured + ceil(measured / series mods)) or an Owner-approved raise to the measured value; a stack
+              health summary prints on every run
 
 What this does NOT prove: that a hunk which removes or rewrites stock lines keeps the stock behaviour with the switch
 off. That is a run-time fact. Its evidence is each row's output.evidence and check 6. Nothing here compiles or runs
@@ -52,7 +57,7 @@ GAIN_KEYS = {"value", "unit", "vs", "conditions", "run", "basis"}
 EVID_KEYS = {"run", "numbers", "match", "gate"}
 TOP_FILES = {".git", ".githooks", ".gitignore", "DETAILS.md", "LICENSE", "LICENSES", "README.md", "engines", "engines.json", "index.json",
              "tools", "local.json", "local.example.json", "archive-ledger.json", "__pycache__", "benchmarks"}
-VERSION_ENTRIES = {"mods.json", "patches", "parked", "archive", "tools", "kernels"}
+VERSION_ENTRIES = {"mods.json", "stack_budget.json", "patches", "parked", "archive", "tools", "kernels"}
 KERNEL_KEYS = {"name", "dir", "hook", "files", "source", "lines", "budget", "output", "gain", "exercised_by", "limits"}
 INDEX_MOD_KEYS = {"id", "engine", "version", "name", "title", "state", "order", "applier", "base", "switch", "switch_null_why", "check", "check_needs",
                   "marker", "knobs", "output", "patch", "sha256", "lines", "budget", "files", "depends_on", "rule_exceptions"}
@@ -460,9 +465,12 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
     if not spec.get("tested_trees") and not (spec.get("tested_trees_none") or {}).get("why"):
         say("FAIL", "tree    a folder with mods needs tested_trees or tested_trees_none {why}")
 
-    # needs the base checkout from here on
+    # 10 stack (reads the base checkout's text when there is one, to place hunks exactly)
     touched = sorted({f for i in info.values() for f in i[0]})
     checkout = checkout_of(spec["engine"], spec["version"])
+    check_stack(folder, spec, checkout if checkout and os.path.isdir(checkout) else None, head_json(f"{rel}/stack_budget.json"))
+
+    # needs the base checkout from here on
     if not checkout or not os.path.isdir(checkout):
         say("SKIP", f"base    setup: no base checkout for {spec['engine']}/{spec['version']} (local.json checkouts{': ' + checkout if checkout else ''}); apply, deps and tree checks not run")
         return
@@ -551,6 +559,273 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
             say("FAIL", f"tree    {t['id']}: {len(diff)} of {len(files)} files differ: {', '.join(diff)}")
         elif not other and not extra:
             say("ok", f"tree    {t['id']}: byte-equal on the {len(files)} touched files ({t['contains']}); the other {len(tracked) - len(set(files) & set(tracked))} base files equal; no extra files")
+
+
+# 10 stack: the health of the whole series, not one patch. A cap per metric in stack_budget.json beside mods.json.
+
+STACK_METRICS = {  # name: (what, the refactor a crossing suggests)
+    "total_lines": ("added + removed lines over the series",
+                    "fold mods that patch the same code into one extension point (a hook patch) plus rows, or archive a weak mod"),
+    "mods_per_file": ("the most mods that patch one engine file",
+                      "introduce one extension point in that file (a hook patch) and turn the mods into rows it reads"),
+    "overlap_hunks_per_file": ("the most hunks in one file whose lines (context included) another mod's hunk already covers",
+                               "the mods edit the same region: replace them with one hook there plus rows"),
+    "depth": ("the longest depends_on.apply chain, in mods",
+              "a mod that needs another mod's code to apply is a hook in disguise: make the base mod an extension point"),
+    "stacked_hunks": ("hunks whose context or removed lines are another mod's added lines (mods stacked on mods)",
+                      "each one breaks when the mod under it changes: merge the pair or expose what the upper mod needs as a hook"),
+}
+STACK_KEYS = {"schema", "about", "margin_rule", "caps"}
+CAP_KEYS = {"cap", "set", "raised"}
+SET_KEYS = {"measured", "mods", "date"}
+RAISE_KEYS = {"from", "to", "measured", "why", "date", "approved"}
+APPROVED_RE = re.compile(r"Owner-approved \d{4}-\d{2}-\d{2}$")
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}$")
+
+
+def stack_margin(measured, mods):
+    """the cap a measurement sets: room for one more average mod. cap = measured + ceil(measured / series mods)."""
+    return measured + (-(-measured // mods) if mods else 0)
+
+
+def hunks(path):
+    """[(file, [(old_start, old_len, new_start, new_len, function, [(kind, text)])])] in patch order; a hunk's body is
+    read by its header's counts, so a removed line that starts with '-- ' is not taken for a file header."""
+    out, cur, h, left, old = [], None, None, [0, 0], None
+    with open(path, encoding="utf-8", errors="surrogateescape") as fh:
+        text = fh.readlines()
+    for line in text:
+        if h is not None and line.startswith("\\"):  # '\ No newline at end of file': not a line, the hunk goes on
+            continue
+        if h is not None and (left[0] or left[1]) and (line[:1] in (" ", "+", "-") or line in ("\n", "\r\n")):
+            k = line[0] if line[:1] in (" ", "+", "-") else " "  # an empty line is context whose space was stripped
+            h[5].append((k, line[1:].rstrip("\n") if k == line[:1] else ""))
+            left[0] -= k != "+"
+            left[1] -= k != "-"
+            continue
+        h = None
+        if line.startswith("--- "):
+            old = line[4:].split("\t")[0].strip()
+        elif line.startswith("+++ "):
+            f = line[4:].split("\t")[0].strip()
+            f = old if f == "/dev/null" else f  # a deleted file keeps its path
+            cur = (f[2:] if f.startswith(("a/", "b/")) else f, [])
+            out.append(cur)
+        elif line.startswith("@@") and cur is not None:
+            m = re.match(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)", line)
+            h = (int(m.group(1)), int(m.group(2) or 1), int(m.group(3)), int(m.group(4) or 1), m.group(5).strip(), [])
+            left = [h[1], h[3]]
+            cur[1].append(h)
+    return out
+
+
+def stack_measure(mods, folder, base=None):
+    """Apply the series' hunks to a model of each file: per line its text (when known), the mod that added it and the
+    mods whose hunks covered it. Hunks are placed like git apply: at their line, else the nearest offset where every
+    known line matches (the base checkout, when given, makes every base line known)."""
+    model, complete, per_file, problems = {}, {}, {}, []
+    stacked, by_func = [], {}
+    for m in mods:
+        for f, hs in hunks(os.path.join(folder, m["patch"])):
+            if f not in model:
+                p = os.path.join(base, f) if base else None
+                whole = bool(p and os.path.isfile(p)) or (hs and hs[0][0] == 0 and hs[0][1] == 0)  # every line known
+                known = []
+                if p and os.path.isfile(p):
+                    with open(p, encoding="utf-8", errors="surrogateescape") as fh:
+                        known = fh.read().split("\n")
+                if known and known[-1] == "":
+                    known.pop()
+                model[f] = [[t, None, set()] for t in known]
+                complete[f] = whole
+            lines = model[f]
+            st = per_file.setdefault(f, {"mods": [], "overlap": 0})
+            if m["name"] not in st["mods"]:
+                st["mods"].append(m["name"])
+            delta = shift = 0
+            for os_, ol, ns, nl, func, body in hs:
+                old = [(k, t) for k, t in body if k != "+"]
+                want = (os_ - 1 if ol else os_) + delta + shift
+                place = None
+                for off in sorted(range(-len(lines) - 1, len(lines) + 2), key=abs):
+                    q = want + off
+                    if q < 0 or (complete[f] and q + len(old) > len(lines)):
+                        continue
+                    while len(lines) < q + len(old):
+                        lines.append([None, None, set()])
+                    if all(lines[q + i][0] is None or lines[q + i][0] == t for i, (_, t) in enumerate(old)):
+                        place = q
+                        break
+                if place is None:
+                    problems.append(f"{m['patch']}: cannot place the hunk at {f}:{os_} on the series before it")
+                    continue
+                shift += place - want
+                region = lines[place:place + len(old)]
+                others = {x for ln in region for x in ln[2]} - {m["name"]}
+                owners = {ln[1] for ln in region} - {None, m["name"]}
+                if others:
+                    st["overlap"] += 1
+                if owners:
+                    stacked.append((m["name"], f, func, sorted(owners)))
+                by_func.setdefault((f, func or "(file scope)"), set()).add(m["name"])
+                new, i = [], 0
+                for k, t in body:
+                    if k == " ":
+                        new.append([t, region[i][1], region[i][2] | {m["name"]}])
+                    if k != "+":
+                        i += 1
+                    if k == "+":
+                        new.append([t, m["name"], {m["name"]}])
+                lines[place:place + len(old)] = new
+                delta += len(new) - len(old)
+    return per_file, stacked, by_func, problems
+
+
+def stack_depth(mods):
+    by = {m["name"]: m for m in mods}
+    memo = {}
+
+    def chain(n, seen=()):
+        if n not in memo:
+            deps = [d for d in by[n]["depends_on"]["apply"] if d in by and d not in seen]
+            memo[n] = max((chain(d, seen + (n,)) for d in deps), key=len, default=[]) + [n]
+        return memo[n]
+    return max((chain(m["name"]) for m in mods), key=len, default=[])
+
+
+def stack_values(spec, folder, base=None):
+    mods = spec.get("mods", [])
+    per_file, stacked, by_func, problems = stack_measure(mods, folder, base)
+    total = sum(m["lines"]["added"] + m["lines"]["removed"] for m in mods)
+    hot = sorted(per_file.items(), key=lambda kv: (-len(kv[1]["mods"]), -kv[1]["overlap"], kv[0]))
+    chain = stack_depth(mods)
+    vals = {"total_lines": total,
+            "mods_per_file": max((len(v["mods"]) for v in per_file.values()), default=0),
+            "overlap_hunks_per_file": max((v["overlap"] for v in per_file.values()), default=0),
+            "depth": len(chain),
+            "stacked_hunks": len(stacked)}
+    return vals, {"per_file": per_file, "hot": hot, "chain": chain, "stacked": stacked, "by_func": by_func, "problems": problems}
+
+
+def stack_authorized(name, e):
+    """the cap an entry may hold, or the reasons it holds none: the last Owner-approved raise, else the derived set."""
+    bad = [f"{name}: unknown keys {sorted(set(e) - CAP_KEYS)}"] if set(e) - CAP_KEYS else []
+    s = e.get("set") or {}
+    if set(s) - SET_KEYS or not isinstance(s.get("measured"), int) or not isinstance(s.get("mods"), int) or not DATE_RE.match(str(s.get("date", ""))):
+        return None, bad + [f"{name}: set needs {{measured, mods, date}} (the measurement the derived cap comes from)"]
+    cap = stack_margin(s["measured"], s["mods"])
+    for r in e.get("raised") or []:
+        miss = [k for k in ("from", "to", "measured", "why", "date", "approved") if r.get(k) in (None, "")]
+        if set(r) - RAISE_KEYS or miss:
+            bad.append(f"{name}: a raise needs {{from, to, measured, why, date, approved}}" + (f" (missing {miss})" if miss else ""))
+            continue
+        if not APPROVED_RE.match(str(r["approved"])):
+            bad.append(f"{name}: raise approved {r['approved']!r} is not 'Owner-approved YYYY-MM-DD'")
+        if r["from"] != cap:
+            bad.append(f"{name}: raise from {r['from']}, the cap before it is {cap}")
+        if r["to"] != r["measured"]:
+            bad.append(f"{name}: raise to {r['to']} is not its measured value {r['measured']} (a cap rises only to what was measured after review cuts)")
+        cap = r["to"]
+    return cap, bad
+
+
+def stack_raise_hint(rel, name, val, cap):
+    return (f"to accept it instead: the owner approves, then {rel}/stack_budget.json caps.{name}.raised gets "
+            f"{{\"from\": {cap}, \"to\": {val}, \"measured\": {val}, \"why\": \"...\", \"date\": \"YYYY-MM-DD\", "
+            f"\"approved\": \"Owner-approved YYYY-MM-DD\"}} and cap {val}")
+
+
+def check_stack(folder, spec, base=None, head=None):
+    """10 stack: per version folder, the series' total lines, file hot spots, dependency depth and mods stacked on
+    mods against the caps in stack_budget.json; a cap rises only by an Owner-approved raise to the measured value."""
+    rel = os.path.relpath(folder, ROOT)
+    mods = spec.get("mods", [])
+    p = os.path.join(folder, "stack_budget.json")
+    if not mods:
+        if os.path.exists(p):
+            say("FAIL", "stack   stack_budget.json in a folder with no series")
+        return
+    vals, why = stack_values(spec, folder, base)
+    for x in why["problems"]:
+        say("FAIL", f"stack   {x}")
+    if not os.path.exists(p):
+        say("FAIL", f"stack   {rel}/stack_budget.json missing; derived caps for today's series (cap = measured + ceil(measured / "
+                    f"{len(mods)} mods)): " + ", ".join(f"{k} {v} -> {stack_margin(v, len(mods))}" for k, v in vals.items()))
+        return
+    try:
+        with open(p) as fh:
+            sb = json.load(fh)
+    except ValueError as x:
+        say("FAIL", f"stack   {rel}/stack_budget.json is not JSON: {x}")
+        return
+    caps = sb.get("caps") or {}
+    bad = [f"unknown keys {sorted(set(sb) - STACK_KEYS)}"] * bool(set(sb) - STACK_KEYS)
+    bad += [f"caps must be exactly {sorted(STACK_METRICS)}"] * (set(caps) != set(STACK_METRICS))
+    head_caps = (head or {}).get("caps") or {}
+    for name in sorted(set(caps) & set(STACK_METRICS)):
+        e = caps[name]
+        auth, b = stack_authorized(name, e)
+        bad += b
+        h = head_caps.get(name)
+        s = e.get("set") or {}
+        if s != (h or {}).get("set") and (s.get("measured"), s.get("mods")) != (vals[name], len(mods)):
+            bad.append(f"{name}: set {{measured {s.get('measured')}, mods {s.get('mods')}}} is new against HEAD and is not "
+                       f"today's measurement {{measured {vals[name]}, mods {len(mods)}}}")
+        new = (e.get("raised") or [])[len((h or {}).get("raised") or []):]
+        bad += [f"{name}: new raise measured {r.get('measured')} is not today's value {vals[name]}" for r in new
+                if isinstance(r, dict) and r.get("measured") != vals[name]]
+        if auth is not None and e.get("cap") != auth:
+            bad.append(f"{name}: cap {e.get('cap')} is not the derived or last raised value {auth}")
+        h = head_caps.get(name)
+        if h and isinstance(e.get("cap"), int) and isinstance(h.get("cap"), int) and e["cap"] > h["cap"]:
+            hr, r = h.get("raised") or [], e.get("raised") or []
+            if not (len(r) > len(hr) and r[:len(hr)] == hr and r[-1].get("from") == h["cap"]):
+                bad.append(f"{name}: cap {h['cap']} -> {e['cap']} against HEAD without a new Owner-approved raise from {h['cap']}")
+        if h and (h.get("raised") or []) != (e.get("raised") or [])[:len(h.get("raised") or [])]:
+            bad.append(f"{name}: raised entries are append-only against HEAD")
+    for b in bad:
+        say("FAIL", f"stack   {rel}/stack_budget.json {b}")
+    if bad:
+        return
+    hot, top = why["hot"], why["hot"][0] if why["hot"] else (None, {"mods": []})
+
+    def funcs(f):
+        fs = sorted(((len(ms), fn, sorted(ms)) for (ff, fn), ms in why["by_func"].items() if ff == f and len(ms) > 1), reverse=True)
+        return "; ".join(f"{n} mods patch {f}/{fn} ({', '.join(ms)})" for n, fn, ms in fs[:3]) or f"no one function: the mods spread over {f}"
+
+    for name, (what, fix) in STACK_METRICS.items():
+        val, cap = vals[name], caps[name]["cap"]
+        if val <= cap:
+            continue
+        if name == "mods_per_file":
+            over = [(f, v) for f, v in hot if len(v["mods"]) > cap]
+            detail = " | ".join(f"refactor: {len(v['mods'])} mods patch {f} ({', '.join(v['mods'])}); {funcs(f)}; introduce an extension point" for f, v in over)
+        elif name == "overlap_hunks_per_file":
+            over = sorted(((f, v) for f, v in why["per_file"].items() if v["overlap"] > cap), key=lambda kv: -kv[1]["overlap"])
+            detail = " | ".join(f"refactor: {v['overlap']} overlapping hunks in {f} from {len(v['mods'])} mods ({', '.join(v['mods'])}); {funcs(f)}; introduce an extension point" for f, v in over)
+        elif name == "depth":
+            detail = "chain " + " -> ".join(reversed(why["chain"])) + f"; make {why['chain'][0]} an extension point the others are rows of"
+        elif name == "stacked_hunks":
+            pairs = {}
+            for upper, f, fn, lows in why["stacked"]:
+                for lo in lows:
+                    pairs.setdefault((upper, lo), set()).add(f"{f}/{fn or '(file scope)'}")
+            detail = "; ".join(f"{u} on {lo} at {', '.join(sorted(w))}" for (u, lo), w in sorted(pairs.items()))
+        else:
+            detail = f"hottest file {top[0]} ({len(top[1]['mods'])} mods: {', '.join(top[1]['mods'])})" if top[0] else ""
+        say("FAIL", f"stack   {name} {val} > cap {cap} ({what}). Suggested refactor: {fix}. {detail}. {stack_raise_hint(rel, name, val, cap)}")
+    # the summary: printed on every run, never fails
+    print(f"  stack health ({len(mods)} series mods; cap = measured + ceil(measured / mods) unless Owner-approved)")
+    for name in STACK_METRICS:
+        val, cap = vals[name], caps[name]["cap"]
+        print(f"    {name:23} {val:>6} / cap {cap:<6} headroom {cap - val}")
+    for f, v in hot[:3]:
+        print(f"    hot spot  {f}: {len(v['mods'])} mods ({', '.join(v['mods'])}), {v['overlap']} overlapping hunks")
+    print(f"    deepest   {' -> '.join(reversed(why['chain'])) if why['chain'] else 'none'}")
+    tight = min(mods, key=lambda m: m["budget"]["added"] - m["lines"]["added"])
+    print(f"    per-mod   budgets checked under lines (budget_rule); tightest {tight['name']} +{tight['lines']['added']} of +{tight['budget']['added']}")
+    if not any(vals[n] > caps[n]["cap"] for n in STACK_METRICS):
+        say("ok", f"stack   every metric within its cap")
 
 
 def check_archive(folder, spec, lint):
@@ -689,7 +964,7 @@ def check_layout(reg):
         if e not in TOP_FILES:
             bad.append(f"top-level {e} is not part of the repo layout")
     for e in sorted(os.listdir(os.path.join(ROOT, "tools"))):
-        if e not in ("check.py", "__pycache__"):
+        if e not in ("check.py", "test_check.py", "__pycache__"):
             bad.append(f"tools/{e} is not part of the repo layout")
     benchmark_files(bad)
     top = os.path.join(ROOT, "engines")
