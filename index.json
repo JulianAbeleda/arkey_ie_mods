@@ -17,7 +17,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone); ship-prefill: exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order); ship-residency: exactly the series 01-18 on the base (git archive b1b770d9 + git apply 01..18 in order, patch-shas.txt)",
+    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone); ship-prefill: exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order); ship-residency: exactly the series 01-18 on the base (git archive b1b770d9 + git apply 01..18 in order, patch-shas.txt); region-fusion: 01-13 + 19 on the base (the 0.3.26 source tree ncmoe-few-20261116 + this patch)",
     "entries": [
      {
       "id": "mods-series-verify",
@@ -1034,6 +1034,58 @@
    ]
   },
   {
+   "id": "llama.cpp/1.0.0/ext-kernels-window",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "ext-kernels-window",
+   "title": "kernel hook takes a window of nodes: one generated kernel for a region",
+   "state": "series",
+   "order": 19,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": null,
+   "switch_null_why": "extends ext-kernels (09): engaged by the same GGML_CUDA_EXT_KERNELS when its manifest is a boltbeam.kernel_manifest.v2 with multi-node entries; unset = stock, a v1 manifest = 09's behaviour",
+   "check": null,
+   "check_needs": [],
+   "marker": "GGML_CUDA_EXT_KERNELS_DUMP",
+   "knobs": [
+    "GGML_CUDA_EXT_KERNELS_DUMP",
+    "GGML_CUDA_PDL"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/19-ext-kernels-window.patch",
+   "sha256": "fe9ba38d253d074537e33880001bed84699195ce4b59a6b745bfa787edd9fb33",
+   "lines": {
+    "added": 271,
+    "removed": 63
+   },
+   "budget": {
+    "added": 290,
+    "removed": 63
+   },
+   "files": [
+    "ggml/src/ggml-cuda/ext-kernels.cpp",
+    "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ],
+   "depends_on": {
+    "apply": [
+     "ext-kernels"
+    ],
+    "run": [
+     "ext-kernels"
+    ]
+   },
+   "rule_exceptions": [
+    "switch",
+    "check"
+   ]
+  },
+  {
    "id": "llama.cpp/1.0.0/fattn-compact-par",
    "engine": "llama.cpp",
    "version": "1.0.0",
@@ -1530,6 +1582,25 @@
    "output": "identical",
    "lines": 108,
    "budget": 120
+  },
+  {
+   "id": "llama.cpp/1.0.0/kernels/region-chain-k2560-k10240",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "hook": "llama.cpp/1.0.0/ext-kernels-window",
+   "dir": "engines/llama.cpp/1.0.0/kernels/region-chain-k2560-k10240/",
+   "files": {
+    "manifest.json": "4fde5a74c5a950df75f00812348338f6044cfad342aa918a65292d8816fdfe2b",
+    "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
+    "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
+    "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
+    "region_inject_tail.cubin": "71427bcf12349ae7739f10f51194781aa49dd5cb3d33405668a2402cc46dbef7",
+    "region_shexp_gate.cu": "9431445de298fe847daa40aa2782c90d1a98122b318fdf99884c0948fb8cb1e8",
+    "region_shexp_gate.cubin": "04710377a8db741ad3739758e243aeaf242e6e07da2c4de8b3527df49d6d3e56"
+   },
+   "output": "identical",
+   "lines": 131,
+   "budget": 140
   }
  ],
  "archived": [

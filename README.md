@@ -40,11 +40,14 @@ export LLAMA_KPOOL_INCREMENTAL=1 LLAMA_SPARSE_DIRECT=1 LLAMA_IDX_POOLED=1 LLAMA_
   LLAMA_KPOOL_INPUT_DEVICE=1 LLAMA_SEQ_RM_INDEXED=1 LLAMA_FATTN_VEC_SKIP=1 LLAMA_IDX_INPLACE=1 \
   LLAMA_MOE_INPLACE=1 LLAMA_CKPT_PINNED=1 LLAMA_TOPK_FUSED=1 LLAMA_GRAPH_SLOTS=1 \
   LLAMA_TOKENIZE_INCR=1 LLAMA_PLE_PREFETCH_TURN=1 \
-  GGML_CUDA_EXT_KERNELS=/path/to/arkey_ie_mods/engines/llama.cpp/1.0.0/kernels/bf16-smallm-gemv-k10240/manifest.json
+  GGML_CUDA_EXT_KERNELS=/path/to/arkey_ie_mods/engines/llama.cpp/1.0.0/kernels/region-chain-k2560-k10240/manifest.json
 
 build/bin/llama-server -m MODEL.gguf -md DRAFT.gguf -c 131072 -fa on -ngl 99 \
   -ctk q8_0 -ctv q8_0 -ctkd q8_0 -ctvd q8_0 -ub 1024 -ncmoe 16 -lm none --moe-cache-mib 6240
 ```
+
+The region manifest needs 19 (`ext-kernels-window`). It holds the one-op kernels of `bf16-smallm-gemv-k10240` plus three
+generated regions, several engine nodes in one kernel each: decode +1.29% over the one-op manifest, identical text.
 
 `--moe-cache-mib` is how much spare GPU memory goes to caching experts. 6240 fits a 32 GB card at 128k;
 [BoltBeam](https://github.com/JulianAbeleda/BoltBeam-Public) works out the right number for yours:

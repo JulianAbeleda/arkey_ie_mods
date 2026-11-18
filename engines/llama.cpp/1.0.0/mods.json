@@ -1258,6 +1258,81 @@
     "hunks_removing_stock_lines": 0,
     "note": "purely additive (0 lines removed): the callback is installed only with LLAMA_DRAFT_ROUTE_COUNT set to a non-empty path and a draft model."
    }
+  },
+  {
+   "name": "ext-kernels-window",
+   "title": "kernel hook takes a window of nodes: one generated kernel for a region",
+   "patch": "patches/19-ext-kernels-window.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": null,
+   "switch_null_why": "extends ext-kernels (09): engaged by the same GGML_CUDA_EXT_KERNELS when its manifest is a boltbeam.kernel_manifest.v2 with multi-node entries; unset = stock, a v1 manifest = 09's behaviour",
+   "check": null,
+   "reads": [
+    "GGML_CUDA_EXT_KERNELS_DUMP",
+    "GGML_CUDA_PDL"
+   ],
+   "marker": "GGML_CUDA_EXT_KERNELS_DUMP",
+   "files": [
+    "ggml/src/ggml-cuda/ext-kernels.cpp",
+    "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ],
+   "lines": {
+    "added": 271,
+    "removed": 63
+   },
+   "budget": {
+    "added": 290,
+    "removed": 63
+   },
+   "depends_on": {
+    "apply": [
+     "ext-kernels"
+    ],
+    "run": [
+     "ext-kernels"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm)",
+     "numbers": "check mode (09's GGML_CUDA_EXT_KERNELS_CHECK, extended to every live output of a window; graphs off, turns 40-41, tolerance 0): shared gate 6,145 checks, inject region 12,545, down tail 12,801, shipped one-op entries 12,545, 0 differences, worst 0; with kernels/region-chain-k2560-k10240 on vs the shipped one-op manifest: reply sha256 identical 59/59 in all 6 runs of the 3-pair confirm",
+     "match": {
+      "what": "reply sha256 per turn, region manifest vs the shipped one-op manifest, same build",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "0",
+    "unit": "ms/step by itself: the gain is that of the windows in the manifest (kernels/region-chain-k2560-k10240)",
+    "vs": "same build, one-op manifest",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 59-turn session to 128k context (recorded history), MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3, series 01-13 on, -ncmoe 16 -b 2048 -ub 1024 --moe-cache-mib 6240",
+    "run": "boltbeam-runs/region-fusion-20261118"
+   },
+   "exercised_by": "a kernel_manifest.v2 entry whose match.ops lists N consecutive graph nodes with their wiring; measured with three windows (gemv + sigmoid + mul + add; gemv + scale + sigmoid + scale; scale + silu)",
+   "limits": [
+    "a window is N consecutive compute nodes (no views between, every tensor contiguous); interior nodes must be read only inside the window; a live output may share memory with an input only exactly and only where the entry allows it (alias_ok), else the engine's own nodes run",
+    "a GGML_OP_SCALE op matches only on its op_params (factor, bias); a SCALE entry without them is refused at load",
+    "one launch per entry; region entries must come before one-op entries in the manifest (first match wins)",
+    "GGML_CUDA_EXT_KERNELS_DUMP=<file> appends each graph shape the hook sees (JSON lines) for the region finder; off when unset"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "switch",
+     "why": "no switch of its own: it widens 09's hook, which GGML_CUDA_EXT_KERNELS turns on; a v1 manifest keeps 09's one-node behaviour (its entries checked 0 differ through this code)"
+    },
+    {
+     "rule": "check",
+     "why": "no check switch of its own: 09's GGML_CUDA_EXT_KERNELS_CHECK now compares every live output of a window"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 11,
+    "note": "rewrites lines of 09's ext-kernels.cpp (the loader and the match/launch function) and its one call site in ggml-cuda.cu (the returned node count is now used: i += n - 1); no engine line outside 09's is changed"
+   }
   }
  ],
  "parked": [
@@ -1451,6 +1526,53 @@
     "author: arkey's scheduler (family small_m_gemv.v1, reduction order llama.cpp.mmvf.bf16_f32.b256, verified on SASS); generator tinygrad-arkey cbd4ca8e3, recorded in each manifest entry; regenerating gives these bytes",
     "the PDL trigger fires at kernel end: firing it after the last global read restored full launch overlap but measured 0.089 ms/step slower (boltbeam-runs/arkey-pdl-20261115)"
    ]
+  },
+  {
+   "name": "region-chain-k2560-k10240",
+   "dir": "kernels/region-chain-k2560-k10240/",
+   "hook": "ext-kernels-window",
+   "files": {
+    "manifest.json": "4fde5a74c5a950df75f00812348338f6044cfad342aa918a65292d8816fdfe2b",
+    "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
+    "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
+    "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
+    "region_inject_tail.cubin": "71427bcf12349ae7739f10f51194781aa49dd5cb3d33405668a2402cc46dbef7",
+    "region_shexp_gate.cu": "9431445de298fe847daa40aa2782c90d1a98122b318fdf99884c0948fb8cb1e8",
+    "region_shexp_gate.cubin": "04710377a8db741ad3739758e243aeaf242e6e07da2c4de8b3527df49d6d3e56"
+   },
+   "source": [
+    "region_shexp_gate.cu",
+    "region_inject_tail.cu",
+    "region_down_tail.cu"
+   ],
+   "lines": 131,
+   "budget": 140,
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm, bench-*.json)",
+     "numbers": "hook check mode, real session (graphs off, turns 40-41, tolerance 0): shared gate 6,145, inject region 12,545, down tail 12,801 checks, 0 differences, worst 0; graph-replay bench against the engine's own nodes (real weights for the gate, 31,457,280 outputs; inject 24,576; down tail 1,966,080): 0 differ; switch on vs the shipped manifest: reply sha256 59/59 in all 6 confirm runs",
+     "match": {
+      "what": "reply sha256 per turn, this manifest vs kernels/bf16-smallm-gemv-k10240 alone, same build",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "+1.29",
+    "unit": "% decode tok/s (225.1 -> 228.0, +2.9 [+2.3, +3.5]; clean turns +2.7 [+2.5, +3.0]); session wall -1.5 s [-1.9, -1.1] (166.7 -> 165.3)",
+    "vs": "same build, GGML_CUDA_EXT_KERNELS = kernels/bf16-smallm-gemv-k10240/manifest.json (the shipped one-op kernels)",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 59-turn session to 128k context (recorded history), MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3, series 01-13 on, -ncmoe 16 -b 2048 -ub 1024 --moe-cache-mib 6240; 3 pairs (off on | on off | off on), 59 turns each, mean and 95% t interval over pairs",
+    "run": "boltbeam-runs/region-fusion-20261118 (ab-confirm)",
+    "basis": "screen first (turns 40-59, 1 pair): +1.04%; per-region graph-replay benches inside +-30% of the recalibrated region cost model (cost-model.json batch_v2); the batch measured about 60% of its 2.1% projection"
+   },
+   "exercised_by": "verify-step decode graphs (4 activation columns) with these windows: the shared-expert gate (BF16 gemv K 2560 to 1 row, sigmoid, mul, add), the hc inject (BF16 gemv K 10240 to 4 rows, scale 0.25, sigmoid, scale 2) and the hc down tail (scale 0.25, silu on 320 x 4); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "three windows and two one-op kernels (the latter read from ../bf16-smallm-gemv-k10240/); shapes, op_params and wiring keyed in manifest.json; sm_120 only; one engine build (b1b770d9)",
+    "author: arkey's scheduler (family region_chain.v1: one kernel per region; the gemv keeps reduction order llama.cpp.mmvf.bf16_f32.b256 as explicit FMAs, compiled -use_fast_math -fmad=false so no fused multiply-add spans two engine nodes); generator tinygrad-arkey branch region-fusion-20261118 538c3728c, recorded in each manifest entry",
+    "the inject window replaces the shipped ark_inject_c1u1 kernel on that node (region entries are listed first)"
+   ]
   }
  ],
  "engine_flags": [
@@ -1628,6 +1750,28 @@
     "patches/16-rs-one-copy.patch",
     "patches/17-cublas-shared.patch",
     "patches/18-draft-route-count.patch"
+   ]
+  },
+  {
+   "id": "region-fusion",
+   "path": "boltbeam-runs/region-fusion-20261118/src",
+   "what": "the tree the window hook (19) and kernels/region-chain-k2560-k10240 were built, checked and confirmed on (ab-check, ab-batch, ab-confirm in boltbeam-runs/region-fusion-20261118)",
+   "contains": "01-13 + 19 on the base (the 0.3.26 source tree ncmoe-few-20261116 + this patch)",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/07-fattn-vec-skip.patch",
+    "patches/08-idx-inplace.patch",
+    "patches/09-ext-kernels.patch",
+    "patches/10-moe-inplace.patch",
+    "patches/11-ckpt-pinned.patch",
+    "patches/12-topk-fused.patch",
+    "patches/13-graph-slots.patch",
+    "patches/19-ext-kernels-window.patch"
    ]
   }
  ],

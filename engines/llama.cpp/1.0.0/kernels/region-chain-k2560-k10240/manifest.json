@@ -1,0 +1,667 @@
+{
+ "schema": "boltbeam.kernel_manifest.v2",
+ "engine": {
+  "name": "llama.cpp",
+  "builds": [
+   "b1b770d9"
+  ]
+ },
+ "entries": [
+  {
+   "id": "region_shexp_gate",
+   "target": "nvidia_sm120",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       1,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        1
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "w"
+       },
+       {
+        "ext": "x"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       1,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        1,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 0
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SIGMOID"
+     },
+     {
+      "op": "GGML_OP_MUL",
+      "type": "f32",
+      "ne": [
+       2560,
+       4
+      ],
+      "src_types": [
+       "f32",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        4
+       ],
+       [
+        1,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "sh"
+       },
+       {
+        "node": 1
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_ADD",
+      "type": "f32",
+      "ne": [
+       2560,
+       4
+      ],
+      "src_types": [
+       "f32",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        4
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "moe"
+       },
+       {
+        "node": 2
+       }
+      ]
+     }
+    ],
+    "outputs": [
+     3
+    ],
+    "alias_ok": [
+     {
+      "node": 2,
+      "src": 0
+     },
+     {
+      "node": 3,
+      "src": 0
+     }
+    ]
+   },
+   "kernel": {
+    "file": "region_shexp_gate.cubin",
+    "sha256": "04710377a8db741ad3739758e243aeaf242e6e07da2c4de8b3527df49d6d3e56",
+    "symbol": "region_shexp_gate",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     4,
+     1,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 3,
+     "src": -1
+    },
+    {
+     "node": 3,
+     "src": 0
+    },
+    {
+     "node": 2,
+     "src": 0
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "046f89113581255d18f8b0076fdf2c78cd743c333025d9cad3f89a64b593806f",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)",
+     "Opt(op=OptOps.LANES, axis=1, arg=256)",
+     "Opt(op=OptOps.UPCAST, axis=1, arg=10)"
+    ],
+    "compile_flags": [
+     "-O3",
+     "-use_fast_math",
+     "-fmad=false"
+    ],
+    "checks": null,
+    "generator": "tinygrad-arkey branch region-fusion-20261118 538c3728c (extra/llm_research/region_chain.py)"
+   }
+  },
+  {
+   "id": "region_inject_tail",
+   "target": "nvidia_sm120",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        10240,
+        4
+       ],
+       [
+        10240,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "w"
+       },
+       {
+        "ext": "x"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_SCALE",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        4,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 0
+       }
+      ],
+      "op_params_f32": [
+       0.25,
+       0.0
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        4,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 1
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SIGMOID"
+     },
+     {
+      "op": "GGML_OP_SCALE",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        4,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 2
+       }
+      ],
+      "op_params_f32": [
+       2.0,
+       0.0
+      ]
+     }
+    ],
+    "outputs": [
+     3
+    ],
+    "alias_ok": []
+   },
+   "kernel": {
+    "file": "region_inject_tail.cubin",
+    "sha256": "71427bcf12349ae7739f10f51194781aa49dd5cb3d33405668a2402cc46dbef7",
+    "symbol": "region_inject_tail",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     4,
+     4,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 3,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "4100848bdc184513643d110fa56c4e25fbb2e8e98e33477067c373cc111024e5",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)"
+    ],
+    "compile_flags": [
+     "-O3",
+     "-use_fast_math",
+     "-fmad=false"
+    ],
+    "checks": null,
+    "generator": "tinygrad-arkey branch region-fusion-20261118 538c3728c (extra/llm_research/region_chain.py)"
+   }
+  },
+  {
+   "id": "region_down_tail",
+   "target": "nvidia_sm120",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_SCALE",
+      "type": "f32",
+      "ne": [
+       320,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        320,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x"
+       }
+      ],
+      "op_params_f32": [
+       0.25,
+       0.0
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       320,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        320,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 0
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SILU"
+     }
+    ],
+    "outputs": [
+     1
+    ],
+    "alias_ok": [
+     {
+      "node": 0,
+      "src": 0
+     }
+    ]
+   },
+   "kernel": {
+    "file": "region_down_tail.cubin",
+    "sha256": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
+    "symbol": "region_down_tail",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     5,
+     1,
+     1
+    ],
+    "block": [
+     4,
+     16,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 1,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "de55a9fc2d18f9994312e21d584035bc44af97ac895bf385f7e7be417fb022d7",
+    "order": null,
+    "opts": [],
+    "compile_flags": [
+     "-O3",
+     "-use_fast_math",
+     "-fmad=false"
+    ],
+    "checks": null,
+    "generator": "tinygrad-arkey branch region-fusion-20261118 538c3728c (extra/llm_research/region_chain.py)"
+   }
+  },
+  {
+   "id": "ark_inject_c1u1",
+   "target": "nvidia_sm120",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        10240,
+        4
+       ],
+       [
+        10240,
+        4
+       ]
+      ],
+      "contiguous": true
+     }
+    ],
+    "outputs": [
+     0
+    ]
+   },
+   "kernel": {
+    "file": "../bf16-smallm-gemv-k10240/ark_inject_c1u1.cubin",
+    "sha256": "d3a4bd684df58d05eecd25b20657fae7a1a5d4f615edfe8edc2a4e03d64c5959",
+    "symbol": "ark_inject_c1u1",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     4,
+     4,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 0,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "evidence": {
+    "author": "scheduler",
+    "family": "small_m_gemv.v1",
+    "candidate_hash": "f996dd86df995697d07d47ea400e8af536ce5736097c7b97ad70881805a7a965",
+    "compile_flags": [
+     "-O3",
+     "-ftz=true",
+     "-fmad=true"
+    ],
+    "correctness": "reduction order llama.cpp.mmvf.bf16_f32.b256: SASS dependency tree verified (40 FFMA, 5 SHFL, 1 outputs)",
+    "generator": {
+     "repo": "tinygrad-arkey",
+     "commit": "cbd4ca8e3b2c508745055996984256cfe5da0b32",
+     "script": "arkey-pdl-20261115/gen_v2.py"
+    }
+   },
+   "tolerance": 0
+  },
+  {
+   "id": "ark_down_c4u1",
+   "target": "nvidia_sm120",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       320,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        10240,
+        320
+       ],
+       [
+        10240,
+        4
+       ]
+      ],
+      "contiguous": true
+     }
+    ],
+    "outputs": [
+     0
+    ]
+   },
+   "kernel": {
+    "file": "../bf16-smallm-gemv-k10240/ark_down_c4u1.cubin",
+    "sha256": "4e0049985bb45e151a975b49bd06f693bbc1d4e905bf80fec74ade5d059b7ebf",
+    "symbol": "ark_down_c4u1",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     320,
+     1,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 0,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "evidence": {
+    "author": "scheduler",
+    "family": "small_m_gemv.v1",
+    "candidate_hash": "8fd8a2a44ee7045e2667cc94d83d116f41535bb3218d4a65b995eff5a42692b7",
+    "compile_flags": [
+     "-O3",
+     "-ftz=true",
+     "-fmad=true"
+    ],
+    "correctness": "reduction order llama.cpp.mmvf.bf16_f32.b256: SASS dependency tree verified (32 FFMA, 20 SHFL, 4 outputs)",
+    "generator": {
+     "repo": "tinygrad-arkey",
+     "commit": "cbd4ca8e3b2c508745055996984256cfe5da0b32",
+     "script": "arkey-pdl-20261115/gen_v2.py"
+    }
+   },
+   "tolerance": 0
+  }
+ ]
+}
