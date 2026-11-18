@@ -1043,6 +1043,221 @@
     "hunks_removing_stock_lines": 0,
     "note": "purely additive (0 lines removed): the server calls the hook only with LLAMA_PLE_PREFETCH_TURN set; the base-class hook is empty."
    }
+  },
+  {
+   "name": "rs-one-copy",
+   "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
+   "patch": "patches/16-rs-one-copy.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_RS_ONE_COPY",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_RS_ONE_COPY_CHECK",
+    "needs": [
+     "LLAMA_RS_ONE_COPY"
+    ]
+   },
+   "reads": [
+    "GGML_CUDA_GRAPH_OPT"
+   ],
+   "marker": "LLAMA_RS_ONE_COPY",
+   "files": [
+    "src/llama-context.cpp",
+    "src/llama-graph.cpp",
+    "src/llama-graph.h",
+    "src/llama-memory-recurrent.cpp",
+    "src/llama-memory-recurrent.h",
+    "src/llama-model.h",
+    "src/models/delta-net-base.cpp",
+    "src/models/models.h",
+    "src/models/qwen4exp.cpp"
+   ],
+   "lines": {
+    "added": 549,
+    "removed": 6
+   },
+   "budget": {
+    "added": 580,
+    "removed": 6
+   },
+   "depends_on": {
+    "apply": [
+     "ple-prefetch"
+    ],
+    "run": []
+   },
+   "output": {
+    "label": "quality-gated",
+    "evidence": {
+     "run": "boltbeam-runs/conversation-server-design-20261117 (OC1, ab-OC3, OC6, RT; BUILD.md)",
+     "numbers": "check mode compares the replayed state with the stock K-plane state at every graph: 7,633 steps over the 59-turn session (54 checkpoint restores, all with 0 kept tokens) and 738 steps at turns 1-5, sum |diff| 0 on every step; a forced-restore test (RT: 10 rounds of generate with the draft, save and restore the slot, continue the same tokens, plus 3 rollbacks 2 tokens inside the last reply) made 13 restores, 10 of them with a replay pending (2-4 kept tokens), 207 check steps at LLAMA_RS_ONE_COPY_CHECK=2, 0 differing, and the reply tokens equal check vs on vs off in 10/10 rounds; screen ab-OC3 turns 40-59 text 20/20 on vs off. Gate class because it ships with the resident setup (all experts on the GPU, -b 1024, a hot-set draft), which changes batch shapes and the draft: FR vs the shipped setup text 11/59, so the stage-1 agreement gate decides",
+     "gate": {
+      "name": "session-gate stage 1 (top-1 agreement over the session's positions vs the declared floor -b 5 -ub 5)",
+      "run": "boltbeam-runs/conversation-server-design-20261117/ab-OC6",
+      "verdict": "pass: FR 0.9960 [0.9935, 0.9985] vs floor 0.9965, excess 0.0005 of 0.0028 allowed"
+     }
+    }
+   },
+   "gain": {
+    "value": "-319.45",
+    "unit": "MiB VRAM at load (the recurrent buffer 450.28 -> 130.83 MiB); its own step cost +0.09 ms pooled (+0.12 [0.04, 0.19] per turn). Spent on residency (with 17 and a 220-expert hot-set draft): session wall 167.0 -> 153.1 s, -13.8 [-26.9, -0.7] (-8.3%); prefill -116 ms/turn; decode +5.5% [+1.4, +9.6]",
+    "vs": "same build, switch off (memory and step); the resident setup vs the shipped setup (session)",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 59-turn session to 128k context (recorded history), MoE model on the engine's qwen4exp graph (hybrid linear-attention layers, MTP draft head k=3), q8_0 KV, backend sampler (-bs), series switches 01-13 on; memory: load probe OC1 at -ncmoe 16; step: ab-OC3 screen pair at the shipped placement; session: ab-OC5, 3 alternating pairs, 95% t-interval over pairs, FS (-ncmoe 16 --moe-cache-mib 6240 -b 2048, full draft) vs FR (-ncmoe 0, no cache, -b 1024, hot-set draft of 220 of 512 experts, 16 and 17 on)",
+    "run": "boltbeam-runs/conversation-server-design-20261117 (OC1, ab-OC3, ab-OC5)"
+   },
+   "exercised_by": "hybrid models whose linear-attention (gated delta-net) layers keep a recurrent state with rollback planes for speculative decoding (n_rs_seq > 0), on an architecture that declares supports_rs_one_copy (the qwen4exp graph); llama-server -np 1",
+   "limits": [
+    "-np 1 only (one sequence, one cell); refused with the stock layout otherwise",
+    "an architecture opts in (supports_rs_one_copy); only the qwen4exp graph does; others keep the stock layout",
+    "refused (stock layout) with GGML_CUDA_GRAPH_OPT=1: its stream reordering could run the keep copies before the replay reads them",
+    "an f32 recurrent state only",
+    "a state saved with the switch on carries a one-copy section: it restores only into a server with the switch on and the same K",
+    "the speed gain needs the freed memory spent (here on expert residency with 17 and a hot-set draft); alone it costs +0.09 ms a step",
+    "check mode keeps the stock planes too (the freed memory comes back) and is for correctness, not timing"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 6,
+    "note": "6 stock lines rewritten: the S tensor's row count (n_rows unless the switch is on), the ctx size for 2 more tensors a layer when on, build_recurrent_attn and its declaration gain a defaulted s_ref argument, and the qwen4exp linear-attention layer chooses the state gather and passes s_ref; with the switch unset each takes the stock value or path."
+   }
+  },
+  {
+   "name": "cublas-shared",
+   "title": "one cuBLAS handle and workspace per device for every context",
+   "patch": "patches/17-cublas-shared.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_CUBLAS_SHARED",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_CUBLAS_SHARED",
+   "files": [
+    "ggml/src/ggml-cuda/common.cuh"
+   ],
+   "lines": {
+    "added": 29,
+    "removed": 0
+   },
+   "budget": {
+    "added": 40,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/conversation-server-design-20261117 (P4: FP0c vs FP0n)",
+     "numbers": "switch on (FP0c) vs off (FP0n), resident placement, -b 1024, 59 turns: reply text 59/59 equal; decode 201.6 vs 201.4 tok/s (untimed)",
+     "match": {
+      "what": "reply text per turn, switch on vs off",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "-96",
+    "unit": "MiB VRAM at the session's lowest (min free 82 -> 178 MiB; the first allocation after load +98 vs +204: one handle and workspace, not two)",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 59-turn session to 128k context (recorded history), MoE model on the engine's qwen4exp graph (hybrid linear-attention layers, MTP draft head k=3), q8_0 KV, backend sampler (-bs), series switches 01-13 on; -ncmoe 0, no expert cache, -b 1024, a 16-expert probe draft; one untimed session per arm",
+    "run": "boltbeam-runs/conversation-server-design-20261117 (P4)"
+   },
+   "exercised_by": "processes with more than one CUDA backend context on a device (a target and a draft context) that call cuBLAS",
+   "limits": [
+    "any value of LLAMA_CUBLAS_SHARED turns it on (it tests set, not 1)",
+    "contexts must run one at a time on one thread (llama-server's target and draft do); the handle is re-bound to the calling stream when it changes",
+    "stream 0 of each context only; other streams keep their own handles",
+    "CUDA builds; HIP and MUSA builds skip the workspace as stock does",
+    "no check mode"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the same cuBLAS calls run on one shared handle and workspace instead of one per context; nothing computed differs to compare beside it. Identity rests on the 59/59 session"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "purely additive (0 lines removed): the shared branch is taken only with LLAMA_CUBLAS_SHARED set."
+   }
+  },
+  {
+   "name": "draft-route-count",
+   "title": "diagnostic: count the experts the draft's router picks",
+   "patch": "patches/18-draft-route-count.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_DRAFT_ROUTE_COUNT",
+    "on": "a file path"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_DRAFT_ROUTE_COUNT",
+   "files": [
+    "common/speculative.cpp"
+   ],
+   "lines": {
+    "added": 56,
+    "removed": 0
+   },
+   "budget": {
+    "added": 60,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/conversation-server-design-20261117 (S2a: ID0, RC; P7a: HA0)",
+     "numbers": "switch on (RC, graph slots off) vs the same flags on the frozen series build (HA0): reply sha256 59/59 equal; switch off on the diagnostic build (ID0) vs the frozen build 12/12",
+     "match": {
+      "what": "reply sha256 per turn, switch on vs a build without the patch",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "gain": {
+    "value": "0",
+    "unit": "a diagnostic: no speed; it writes the draft's routing (hits and routed weight per expert, decode and catch-up passes) that BoltBeam's `derive hot-draft` ranks to size a hot-set draft",
+    "vs": "none",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 59-turn session to 128k context (recorded history), MoE model on the engine's qwen4exp graph (hybrid linear-attention layers, MTP draft head k=3), q8_0 KV, backend sampler (-bs), series switches 01-13 on; 22,095 decode and 158,013 catch-up tokens counted over the session",
+    "run": "boltbeam-runs/conversation-server-design-20261117 (RC, route-count.txt)"
+   },
+   "exercised_by": "llama-server with a mixture-of-experts draft model (-md) whose graph names its router output ffn_moe_probs",
+   "limits": [
+    "slow: an eval callback reads the router output of every draft forward to the host (a sync per layer); for a counting run, not for serving",
+    "the file is written every 20,000 forwards and when the process exits normally",
+    "the draft context only; the target is not counted",
+    "no check mode"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: a diagnostic that reads the router output and computes nothing the model uses; identity rests on the 59/59 session"
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "purely additive (0 lines removed): the callback is installed only with LLAMA_DRAFT_ROUTE_COUNT set to a non-empty path and a draft model."
+   }
   }
  ],
  "parked": [
@@ -1387,6 +1602,32 @@
     "patches/13-graph-slots.patch",
     "patches/14-tokenize-incr.patch",
     "patches/15-ple-prefetch.patch"
+   ]
+  },
+  {
+   "id": "ship-residency",
+   "path": "boltbeam-runs/ship-residency-20261118/src",
+   "what": "the tree rs-one-copy (16), cublas-shared (17) and draft-route-count (18) were built and checked on as a series: the forced-restore test at LLAMA_RS_ONE_COPY_CHECK=2 (TTk: 13 restores, 10 with a replay pending, 207 steps, 0 differing; reply tokens equal to the experiment build) and the resident setup with 16 and 17 on for 59 turns (TTr: reply sha256 59/59 equal to each of the three ab-OC5 FR runs); runs in boltbeam-runs/conversation-server-design-20261117 (TTk, TTr)",
+   "contains": "exactly the series 01-18 on the base (git archive b1b770d9 + git apply 01..18 in order, patch-shas.txt)",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/07-fattn-vec-skip.patch",
+    "patches/08-idx-inplace.patch",
+    "patches/09-ext-kernels.patch",
+    "patches/10-moe-inplace.patch",
+    "patches/11-ckpt-pinned.patch",
+    "patches/12-topk-fused.patch",
+    "patches/13-graph-slots.patch",
+    "patches/14-tokenize-incr.patch",
+    "patches/15-ple-prefetch.patch",
+    "patches/16-rs-one-copy.patch",
+    "patches/17-cublas-shared.patch",
+    "patches/18-draft-route-count.patch"
    ]
   }
  ],

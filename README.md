@@ -50,11 +50,16 @@ build/bin/llama-server -m MODEL.gguf -md DRAFT.gguf -c 131072 -fa on -ngl 99 \
 [BoltBeam](https://github.com/JulianAbeleda/BoltBeam-Public) works out the right number for yours:
 `boltbeam tune MODEL.gguf --engine llama.cpp --context 131072`.
 
+16 (`LLAMA_RS_ONE_COPY=1`) and 17 (`LLAMA_CUBLAS_SHARED=1`) free GPU memory for another setup: every expert on the GPU
+(`-ncmoe 0`, no `--moe-cache-mib`, `-b 1024`) with a draft that keeps only its hottest experts (`boltbeam derive
+hot-draft`, which reads 18's route count). On the chat below that setup is 8.3% faster per session; `boltbeam tune`
+recommends it when it ranks best on your GPU.
+
 To go back to stock, unset the variables. Each patch, what it does and its limits: [DETAILS.md](DETAILS.md).
 
 ## Benchmarks
 
-Stock llama.cpp v1.0.0 against the same version with patches 01-13 on (14 and 15 came later; their gains are in
+Stock llama.cpp v1.0.0 against the same version with patches 01-13 on (14-18 came later; their gains are in
 [DETAILS.md](DETAILS.md)), on the same 59-turn, 128k-token coding chat,
 3 runs each:
 

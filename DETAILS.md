@@ -24,9 +24,12 @@ its layout and the check. The [README](README.md) has how to apply and the numbe
 | 13 | +102 -0 | 0.19 ms/step [0.13, 0.26] session (+1.2%); every bucket clears | identical |
 | 14 | +109 -1 | TTFT -79.7 ms/turn [-40.5, -118.9], turns 2-59; tokenize -123 ms at 96-128k | identical |
 | 15 | +115 -0 | prefill -58.2 ms/turn [-50.2, -66.1], turns 2-59; -80.8 under 32k | identical |
+| 16 | +549 -6 | -319 MiB VRAM; with 17, a hot-set draft and every expert on the GPU: session -13.8 s [-26.9, -0.7] (-8.3%) | quality-gated: stage-1 gate pass |
+| 17 | +29 -0 | -96 MiB VRAM; speed unchanged | identical |
+| 18 | +56 -0 | none: a diagnostic, the draft's routing for a hot-set draft | identical |
 | kernel | 2 kernels | -0.56 ms/step [0.51, 0.62] (3.2%) vs the hook off | identical (59/59 turns, ~142k check comparisons) |
 
-Series total: +2,407 -132 lines. Evidence and conditions per mod: `engines/llama.cpp/1.0.0/mods.json`.
+Series total: +3,041 -138 lines. Evidence and conditions per mod: `engines/llama.cpp/1.0.0/mods.json`.
 
 ## llama.cpp master 7592b61d3: each mod
 
@@ -88,6 +91,13 @@ No switch: applied = on. `tools/quark_lm_head_int4.py SRC DST` builds the int4-h
 - 15 works only where the per-layer token-embedding table is lazily mapped (the qwen4exp graph); every other
   architecture is a no-op. One detached background thread for the process lifetime. A read-ahead hint: the gain depends
   on the page cache and storage. No check mode.
+- 16 needs -np 1 and an architecture that opts in (the qwen4exp graph); refused with the stock layout otherwise and with
+  `GGML_CUDA_GRAPH_OPT=1`. Alone it frees 319 MiB and costs +0.09 ms a step; the speed comes from spending that memory
+  (the resident setup in its row). A state saved with it on restores only into a server with it on.
+- 17 shares one cuBLAS handle between contexts that run one at a time on one thread (llama-server's target and draft).
+  Any value turns it on. No check mode.
+- 18 is for a counting run, not for serving: it syncs on every draft layer. The file is written every 20,000 draft
+  forwards and at a normal exit. BoltBeam's `boltbeam derive hot-draft` reads it.
 
 ### Check modes
 
@@ -110,6 +120,9 @@ Set the check switch beside the mod's switch. Rows marked G also need `GGML_CUDA
 | 13 | none | |
 | 14 | `LLAMA_TOKENIZE_INCR_CHECK=1` | |
 | 15 | none | |
+| 16 | `LLAMA_RS_ONE_COPY_CHECK=1` (2 aborts on a difference) | |
+| 17 | none | |
+| 18 | none | |
 
 A check run is slow. It is for correctness, not timing.
 

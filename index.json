@@ -17,7 +17,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone); ship-prefill: exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order)",
+    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone); ship-prefill: exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order); ship-residency: exactly the series 01-18 on the base (git archive b1b770d9 + git apply 01..18 in order, patch-shas.txt)",
     "entries": [
      {
       "id": "mods-series-verify",
@@ -866,6 +866,164 @@
     "src/models/models.h",
     "src/models/qwen4exp.cpp",
     "tools/server/server-context.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "check"
+   ]
+  },
+  {
+   "id": "llama.cpp/1.0.0/rs-one-copy",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "rs-one-copy",
+   "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
+   "state": "series",
+   "order": 16,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_RS_ONE_COPY",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "LLAMA_RS_ONE_COPY_CHECK",
+   "check_needs": [
+    "LLAMA_RS_ONE_COPY"
+   ],
+   "marker": "LLAMA_RS_ONE_COPY",
+   "knobs": [
+    "LLAMA_RS_ONE_COPY",
+    "GGML_CUDA_GRAPH_OPT"
+   ],
+   "output": "quality-gated",
+   "patch": "engines/llama.cpp/1.0.0/patches/16-rs-one-copy.patch",
+   "sha256": "48bfa2e938421604a59cee2f40949bd09493044a375ffe85ba24fe2e382c127e",
+   "lines": {
+    "added": 549,
+    "removed": 6
+   },
+   "budget": {
+    "added": 580,
+    "removed": 6
+   },
+   "files": [
+    "src/llama-context.cpp",
+    "src/llama-graph.cpp",
+    "src/llama-graph.h",
+    "src/llama-memory-recurrent.cpp",
+    "src/llama-memory-recurrent.h",
+    "src/llama-model.h",
+    "src/models/delta-net-base.cpp",
+    "src/models/models.h",
+    "src/models/qwen4exp.cpp"
+   ],
+   "depends_on": {
+    "apply": [
+     "ple-prefetch"
+    ],
+    "run": []
+   },
+   "rule_exceptions": []
+  },
+  {
+   "id": "llama.cpp/1.0.0/cublas-shared",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "cublas-shared",
+   "title": "one cuBLAS handle and workspace per device for every context",
+   "state": "series",
+   "order": 17,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_CUBLAS_SHARED",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "LLAMA_CUBLAS_SHARED",
+   "knobs": [
+    "LLAMA_CUBLAS_SHARED"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/17-cublas-shared.patch",
+   "sha256": "02dd49f2f6e276ea4470f4c18bba3c0748e6cdbe613253a7f2dbc9bf82eb9bb1",
+   "lines": {
+    "added": 29,
+    "removed": 0
+   },
+   "budget": {
+    "added": 40,
+    "removed": 0
+   },
+   "files": [
+    "ggml/src/ggml-cuda/common.cuh"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "check"
+   ]
+  },
+  {
+   "id": "llama.cpp/1.0.0/draft-route-count",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "draft-route-count",
+   "title": "diagnostic: count the experts the draft's router picks",
+   "state": "series",
+   "order": 18,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_DRAFT_ROUTE_COUNT",
+    "on": "a file path"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "LLAMA_DRAFT_ROUTE_COUNT",
+   "knobs": [
+    "LLAMA_DRAFT_ROUTE_COUNT"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/18-draft-route-count.patch",
+   "sha256": "26c79323991019dd5bb493cabfcec88dee16753ae0b526a4924f766a0eb0db6d",
+   "lines": {
+    "added": 56,
+    "removed": 0
+   },
+   "budget": {
+    "added": 60,
+    "removed": 0
+   },
+   "files": [
+    "common/speculative.cpp"
    ],
    "depends_on": {
     "apply": [],

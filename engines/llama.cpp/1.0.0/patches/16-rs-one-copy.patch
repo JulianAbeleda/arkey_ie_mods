@@ -1,0 +1,888 @@
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 41758e4d..c4843685 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1977,6 +1977,29 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+         return nullptr;
+     }
+ 
++    // LLAMA_RS_ONE_COPY_CHECK: the graph carries sum |replayed - stock| over the recurrent layers (only built in check mode)
++    if (res->t_rs_check != nullptr) {
++        static uint64_t n_steps   = 0;
++        static uint64_t n_nonzero = 0;
++        static const int level = [] {
++            const char * env = getenv("LLAMA_RS_ONE_COPY_CHECK");
++            return env != nullptr ? atoi(env) : 0;
++        }();
++
++        ggml_backend_sched_synchronize(sched.get());
++        float diff = 0.0f;
++        ggml_backend_tensor_get(res->t_rs_check, &diff, 0, sizeof(diff));
++
++        n_steps++;
++        const bool bad = !(diff == 0.0f);
++        n_nonzero += bad;
++        LLAMA_LOG_INFO("rs_one_copy_check: step %" PRIu64 " n_tokens %u sum|diff| %g nonzero %" PRIu64 "/%" PRIu64 "\n",
++                n_steps, ubatch.n_tokens, (double) diff, n_nonzero, n_steps);
++        if (bad && level >= 2) {
++            GGML_ABORT("rs_one_copy_check: replayed state differs from the stock state (step %" PRIu64 ", sum|diff| %g)", n_steps, (double) diff);
++        }
++    }
++
+     ret = GGML_STATUS_SUCCESS;
+ 
+     return res;
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 3cee72df..2eb3bc9b 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -498,6 +498,11 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
+ 
+     const int64_t n_rs = mctx->get_n_rs();
+ 
++    if (s_copy_base != nullptr) {
++        // before s_copy(): it consumes the pending rollback index the mask needs
++        mctx->set_input_one_copy(s_copy_base, replay_mask);
++    }
++
+     if (s_copy) {
+         GGML_ASSERT(ggml_backend_buffer_is_host(s_copy->buffer));
+         int32_t * data = (int32_t *) s_copy->data;
+@@ -1212,6 +1217,11 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
+ 
+     const int64_t n_rs = mctx->get_recr()->get_n_rs();
+ 
++    if (inp_rs->s_copy_base != nullptr) {
++        // before s_copy(): it consumes the pending rollback index the mask needs
++        mctx->get_recr()->set_input_one_copy(inp_rs->s_copy_base, inp_rs->replay_mask);
++    }
++
+     if (inp_rs->s_copy) {
+         GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
+         int32_t * data = (int32_t *) inp_rs->s_copy->data;
+@@ -1258,6 +1268,11 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
+ 
+     const int64_t n_rs = mctx->get_recr()->get_n_rs();
+ 
++    if (inp_rs->s_copy_base != nullptr) {
++        // before s_copy(): it consumes the pending rollback index the mask needs
++        mctx->get_recr()->set_input_one_copy(inp_rs->s_copy_base, inp_rs->replay_mask);
++    }
++
+     if (inp_rs->s_copy) {
+         GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
+         int32_t * data = (int32_t *) inp_rs->s_copy->data;
+@@ -1315,6 +1330,11 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
+ 
+     const int64_t n_rs = mctx->get_recr()->get_n_rs();
+ 
++    if (inp_rs->s_copy_base != nullptr) {
++        // before s_copy(): it consumes the pending rollback index the mask needs
++        mctx->get_recr()->set_input_one_copy(inp_rs->s_copy_base, inp_rs->replay_mask);
++    }
++
+     if (inp_rs->s_copy) {
+         GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
+         int32_t * data = (int32_t *) inp_rs->s_copy->data;
+@@ -1424,6 +1444,7 @@ void llm_graph_result::reset() {
+     t_embd        = nullptr;
+     t_embd_pooled = nullptr;
+     t_h_nextn     = nullptr;
++    t_rs_check    = nullptr;
+ 
+     t_layer_inp.resize(LLAMA_MAX_LAYERS + 1);
+     std::fill(t_layer_inp.begin(), t_layer_inp.end(), nullptr);
+@@ -1477,6 +1498,9 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
+     if (t_h_nextn != nullptr) {
+         ggml_set_output(t_h_nextn);
+     }
++    if (t_rs_check != nullptr) {
++        ggml_set_output(t_rs_check);
++    }
+     {
+         const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
+         for (size_t il = 0; il < embeddings_layer_inp.size() && !params.cparams.embeddings_layer_inp_dev; ++il) {
+@@ -4117,6 +4141,19 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
+     inp->head = mctx_cur->get_head();
+     inp->rs_z = mctx_cur->get_rs_z();
+ 
++    // rs_one_copy: the S plane is gathered without the rollback offset, and the replay mask says how many kept
++    // tokens to fold in; both are inputs, so the graph shape never depends on the accepted count
++    if (mctx_cur->get_rs_one_copy()) {
++        inp->s_copy_base = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rs);
++        ggml_set_input(inp->s_copy_base);
++        ggml_set_name(inp->s_copy_base, "rs_s_copy_base");
++        inp->s_copy_base_main = ggml_view_1d(ctx0, inp->s_copy_base, n_seqs, 0);
++
++        inp->replay_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, 1, inp->mctx->get_n_rs_seq() + 1, 1);
++        ggml_set_input(inp->replay_mask);
++        ggml_set_name(inp->replay_mask, "rs_replay_mask");
++    }
++
+     return inp;
+ }
+ 
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index d3b527dc..a4a93c7c 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -309,6 +309,11 @@ public:
+     ggml_tensor * s_copy_main; // I32 [n_seqs]
+     ggml_tensor * s_copy_tail; // I32 [n_rs - 1]
+ 
++    // rs_one_copy only (nullptr otherwise): gather of the single S plane (no rollback offset) and the replay mask
++    ggml_tensor * s_copy_base      = nullptr; // I32 [n_rs]
++    ggml_tensor * s_copy_base_main = nullptr; // I32 [n_seqs]
++    ggml_tensor * replay_mask      = nullptr; // F32 [1, 1, n_rs_seq + 1, 1]
++
+     const llama_memory_recurrent_context * mctx;
+ 
+     // used in view offsets, need to match for valid graph reuse
+@@ -976,6 +981,7 @@ public:
+     ggml_tensor * t_embd        = nullptr;
+     ggml_tensor * t_embd_pooled = nullptr;
+     ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
++    ggml_tensor * t_rs_check    = nullptr; // rs_one_copy check mode: F32 [1] sum |replayed - stock| over the layers
+ 
+     std::vector<ggml_tensor *> t_layer_inp;
+ 
+diff --git a/src/llama-memory-recurrent.cpp b/src/llama-memory-recurrent.cpp
+index 9213ac1d..10252bbf 100644
+--- a/src/llama-memory-recurrent.cpp
++++ b/src/llama-memory-recurrent.cpp
+@@ -8,6 +8,7 @@
+ 
+ #include <algorithm>
+ #include <cassert>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <map>
+@@ -39,6 +40,40 @@ llama_memory_recurrent::llama_memory_recurrent(
+     cells.clear();
+     cells.resize(mem_size);
+ 
++    // rs_one_copy: decided before any tensor is created; every refusal leaves the stock layout
++    // design: lagging base + in-graph replay: a verify step never modifies the stored state; the inputs of the
++    // accepted tokens are kept and folded into it at the start of the next graph
++    {
++        const char * env = getenv("LLAMA_RS_ONE_COPY");
++        if (env != nullptr && atoi(env) != 0) {
++            const char * env_check = getenv("LLAMA_RS_ONE_COPY_CHECK");
++            const int check = env_check != nullptr ? atoi(env_check) : 0;
++
++            bool any_layer = false;
++            for (int i = 0; i < n_layer; i++) {
++                any_layer = any_layer || !filter || filter(i);
++            }
++
++            if (!any_layer || n_rs_seq == 0) {
++                LLAMA_LOG_INFO("rs_one_copy: off for this memory (%s)\n", !any_layer ? "no recurrent layer" : "n_rs_seq = 0");
++            } else if (!model.supports_rs_one_copy()) {
++                LLAMA_LOG_WARN("rs_one_copy: refused, arch %s does not declare supports_rs_one_copy; stock layout kept\n", llm_arch_name(model.arch));
++            } else if (n_seq_max != 1 || mem_size != 1) {
++                LLAMA_LOG_WARN("rs_one_copy: refused, requires -np 1 (n_seq_max %u, mem_size %u); stock layout kept\n", n_seq_max, mem_size);
++            } else if (getenv("GGML_CUDA_GRAPH_OPT") != nullptr && atoi(getenv("GGML_CUDA_GRAPH_OPT")) == 1) {
++                // its stream reordering could run the keep copies before the replay reads x_l (ordering is not a data dep)
++                LLAMA_LOG_WARN("rs_one_copy: refused, incompatible with GGML_CUDA_GRAPH_OPT=1; stock layout kept\n");
++            } else if (type_s != GGML_TYPE_F32) {
++                LLAMA_LOG_WARN("rs_one_copy: refused, requires an f32 S state (type %s); stock layout kept\n", ggml_type_name(type_s));
++            } else {
++                rs_one_copy             = check > 0 ? 2 : 1;
++                rs_one_copy_check_level = check;
++                // k | v | g | beta of one token: the exact tensors fed to ggml_gated_delta_net (q is not needed for the state)
++                rs_x_per_token = hparams.ssm_d_state*hparams.ssm_n_group + hparams.ssm_d_inner + 2*hparams.ssm_dt_rank;
++            }
++        }
++    }
++
+     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
+     struct ggml_backend_buft_comparator {
+         bool operator()(const ggml_backend_buffer_type_t & lhs, const ggml_backend_buffer_type_t & rhs) const {
+@@ -53,7 +88,7 @@ llama_memory_recurrent::llama_memory_recurrent(
+         if (it == ctx_map.end()) {
+             ggml_init_params params = {
+                 // r and s per layer, plus the separate PLE conv row where the model has one
+-                /*.mem_size   =*/ size_t((hparams.ple_conv_state() > 0 ? 3u : 2u)*n_layer*ggml_tensor_overhead()),
++                /*.mem_size   =*/ size_t(((hparams.ple_conv_state() > 0 ? 3u : 2u) + (rs_one_copy ? 2u : 0u))*n_layer*ggml_tensor_overhead()),
+                 /*.mem_buffer =*/ NULL,
+                 /*.no_alloc   =*/ true,
+             };
+@@ -74,6 +109,10 @@ llama_memory_recurrent::llama_memory_recurrent(
+     r_l.resize(n_layer);
+     s_l.resize(n_layer);
+     p_l.resize(n_layer);
++    if (rs_one_copy) {
++        o_l.resize(n_layer);
++        x_l.resize(n_layer);
++    }
+ 
+     for (int i = 0; i < n_layer; i++) {
+         if (filter && !filter(i)) {
+@@ -101,12 +140,25 @@ llama_memory_recurrent::llama_memory_recurrent(
+ 
+         const uint32_t n_rows = mem_size * (1 + n_rs_seq);
+         ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
+-        ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
++        // rs_one_copy on: S keeps one plane; check mode keeps the stock planes and adds the plane below
++        ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), rs_one_copy == 1 ? mem_size : n_rows);
+         ggml_format_name(r, "cache_r_l%d", i);
+         ggml_format_name(s, "cache_s_l%d", i);
+         r_l[i] = r;
+         s_l[i] = s;
+ 
++        if (rs_one_copy) {
++            ggml_tensor * o = s;
++            if (rs_one_copy == 2) {
++                o = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), mem_size);
++                ggml_format_name(o, "cache_s1_l%d", i);
++            }
++            ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, (int64_t) rs_x_per_token*(1 + n_rs_seq), mem_size);
++            ggml_format_name(x, "cache_x_l%d", i);
++            o_l[i] = o;
++            x_l[i] = x;
++        }
++
+         // the PLE history needs its own row: Meta must mirror it while the delta-net conv state next door stays split
+         if (hparams.ple_conv_state() > 0 && hparams.is_ple(i)) {
+             ggml_tensor * p = ggml_new_tensor_2d(ctx, type_r, hparams.ple_conv_state(), n_rows);
+@@ -140,6 +192,21 @@ llama_memory_recurrent::llama_memory_recurrent(
+                 ggml_type_name(type_s), (float)memory_size_s / (1024.0f * 1024.0f),
+                 ggml_type_name(type_r), (float)memory_size_p / (1024.0f * 1024.0f));
+     }
++
++    if (rs_one_copy) {
++        size_t bytes_o = 0;
++        size_t bytes_x = 0;
++        for (int i = 0; i < n_layer; i++) {
++            bytes_o += o_l[i] != nullptr && rs_one_copy == 2 ? ggml_nbytes(o_l[i]) : 0;
++            bytes_x += x_l[i] != nullptr ? ggml_nbytes(x_l[i]) : 0;
++        }
++        LLAMA_LOG_INFO("rs_one_copy: on (S planes %u, replay K=%u, replay inputs %.2f MiB = %u floats/token, check %d%s)\n",
++                rs_one_copy == 1 ? 1u : 1u + n_rs_seq, 1 + n_rs_seq, bytes_x/1024.0/1024.0, rs_x_per_token, rs_one_copy_check_level,
++                rs_one_copy == 2 ? ": stock S planes kept beside the one-copy plane" : "");
++        if (rs_one_copy == 2) {
++            LLAMA_LOG_INFO("rs_one_copy: check plane %.2f MiB\n", bytes_o/1024.0/1024.0);
++        }
++    }
+ }
+ 
+ void llama_memory_recurrent::clear(bool data) {
+@@ -149,6 +216,8 @@ void llama_memory_recurrent::clear(bool data) {
+         cells[i].src = -1;
+         cells[i].tail = -1;
+         cells[i].rs_max = 0;
++        cells[i].n_saved = 0;
++        cells[i].n_replay = 0;
+     }
+ 
+     head = 0;
+@@ -615,6 +684,9 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
+                 auto & orig_cell = cells[seq_meta.tail];
+                 empty_cell.pos = orig_cell.pos;
+                 empty_cell.src = orig_cell.src;
++                if (rs_one_copy) {
++                    empty_cell.n_saved = orig_cell.n_saved;
++                }
+                 orig_cell.seq_id.erase(seq_id);
+                 empty_cell.seq_id.insert(seq_id); // will be overwritten
+                 GGML_ASSERT(!orig_cell.is_empty()); // has at least one remaining seq_id
+@@ -646,6 +718,9 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
+             std::swap(dst_cell.pos, src_cell.pos);
+             std::swap(dst_cell.src, src_cell.src);
+             std::swap(dst_cell.seq_id, src_cell.seq_id);
++            if (rs_one_copy) {
++                std::swap(dst_cell.n_saved, src_cell.n_saved);
++            }
+ 
+             // swap tails
+             for (uint32_t j = 0; j < size; ++j) {
+@@ -674,6 +749,12 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
+         }
+         cell.pos = last_pos;
+         cell.rs_max = n_seq_tokens <= n_rs_seq + 1 ? n_seq_tokens - 1 : 0;
++        if (rs_one_copy) {
++            // this ubatch replays what the last one kept (cleared below for a fresh cell), then keeps its own inputs
++            // when it is small; a long ubatch stores its final state and keeps nothing
++            cell.n_replay = cell.n_saved;
++            cell.n_saved  = n_seq_tokens <= n_rs_seq + 1 ? n_seq_tokens : 0;
++        }
+         cell.seq_id.clear();
+         for (int32_t j = 0; j < ubatch.n_seq_id[i]; ++j) {
+             const llama_seq_id seq_id = ubatch.seq_id[i][j];
+@@ -705,6 +786,9 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
+             if (cells[i].src < 0) {
+                 GGML_ASSERT(rs_z >= 0);
+                 cells[i].src0 = rs_z;
++                if (rs_one_copy) {
++                    cells[i].n_replay = 0; // a fresh state has nothing to replay
++                }
+             } else {
+                 // Stage the source ids for all used cells to allow correct seq_* behavior
+                 // and still make these values available when setting the inputs
+@@ -786,6 +870,8 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
+     std::vector<std::pair<uint32_t, uint32_t>> cell_ranges; // ranges, from inclusive, to exclusive
+     std::vector<std::pair<uint32_t, uint32_t>> cell_ranges_data; // logical source row ranges
+     uint32_t cell_count = 0;
++    std::vector<uint32_t> oc_rows;  // rs_one_copy: plane row of each written cell
++    std::vector<uint32_t> oc_valid; // rs_one_copy: kept tokens still to replay for each written cell
+ 
+     // Count the number of cells with the specified seq_id
+     // Find all the ranges of cells with this seq id (or all, when -1)
+@@ -818,6 +904,13 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
+             }
+ 
+             const uint32_t cell_id = rs_idx_cur * size + (cell.src >= 0 ? cell.src : (int32_t) i);
++            if (rs_one_copy) {
++                // the plane row carries no rollback offset; the logical state is the plane plus the replay of the
++                // first n_saved - rs_idx kept tokens, which a restore reproduces with rs_idx = 0
++                GGML_ASSERT(rs_idx_cur <= cell.n_saved);
++                oc_rows.push_back(cell.src >= 0 ? cell.src : (int32_t) i);
++                oc_valid.push_back(cell.n_saved - rs_idx_cur);
++            }
+             if (cell_ranges_data.empty() || cell_ranges_data.back().second != cell_id) {
+                 cell_ranges_data.emplace_back(cell_id, cell_id + 1);
+             } else {
+@@ -859,6 +952,9 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
+ 
+     state_write_meta(io, cell_ranges, seq_id);
+     state_write_data(io, cell_ranges_data);
++    if (rs_one_copy) {
++        state_write_one_copy(io, oc_rows, oc_valid);
++    }
+ }
+ 
+ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+@@ -878,6 +974,9 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
+ 
+     try {
+         res = res && state_read_data(io, cell_count);
++        if (rs_one_copy) {
++            res = res && state_read_one_copy(io, cell_count);
++        }
+     } catch (...) {
+         res = false;
+     }
+@@ -957,6 +1056,9 @@ void llama_memory_recurrent::state_write_data(llama_io_write_i & io, const std::
+             // skip null layers (read_data will handle this by checking "r_l" and "s_l" for null)
+             if (s_l[il] == nullptr) continue;
+ 
++            // rs_one_copy on: the single plane travels in state_write_one_copy
++            if (rs_one_copy == 1) continue;
++
+             // Write S tensor type
+             const int32_t s_type_i = (int32_t)s_l[il]->type;
+             io.write(&s_type_i, sizeof(s_type_i));
+@@ -1174,6 +1276,9 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
+             // skip null layers
+             if (s_l[il] == nullptr) continue;
+ 
++            // rs_one_copy on: the single plane travels in state_read_one_copy
++            if (rs_one_copy == 1) continue;
++
+             // Read type of value
+             int32_t s_type_i_ref;
+             io.read(&s_type_i_ref, sizeof(s_type_i_ref));
+@@ -1277,7 +1382,104 @@ void llama_memory_recurrent::state_clear(llama_seq_id seq_id, uint32_t cell_head
+             const size_t p_size_row = ggml_row_size(p_l[il]->type, hparams.ple_conv_state());
+             llama_clear_tensor_data(p_l[il], cell_head * p_size_row, cell_count * p_size_row);
+         }
++
++        if (rs_one_copy && x_l[il] != nullptr) {
++            if (rs_one_copy == 2) {
++                llama_clear_tensor_data(o_l[il], cell_head * o_l[il]->nb[1], cell_count * o_l[il]->nb[1]);
++            }
++            llama_clear_tensor_data(x_l[il], cell_head * x_l[il]->nb[1], cell_count * x_l[il]->nb[1]);
++        }
++    }
++
++    if (rs_one_copy) {
++        for (uint32_t i = cell_head; i < cell_head + cell_count && i < size; ++i) {
++            cells[i].n_saved  = 0;
++            cells[i].n_replay = 0;
++        }
++    }
++}
++
++// rs_one_copy section, after the stock data: magic, K, per cell the kept count still to replay, then per layer the
++// plane row and the replay-input row of each cell. A restore puts them at the restored cells with rs_idx = 0.
++static const uint32_t LLAMA_RS_ONE_COPY_MAGIC = 0x31435352; // "RSC1"
++
++void llama_memory_recurrent::state_write_one_copy(llama_io_write_i & io, const std::vector<uint32_t> & rows, const std::vector<uint32_t> & valid) const {
++    const uint32_t magic = LLAMA_RS_ONE_COPY_MAGIC;
++    const uint32_t K     = 1 + n_rs_seq;
++    const uint32_t n     = (uint32_t) rows.size();
++    GGML_ASSERT(valid.size() == rows.size());
++
++    io.write(&magic, sizeof(magic));
++    io.write(&K,     sizeof(K));
++    io.write(&n,     sizeof(n));
++    for (uint32_t c = 0; c < n; ++c) {
++        io.write(&valid[c], sizeof(valid[c]));
++    }
++
++    for (uint32_t il = 0; il < (uint32_t) x_l.size(); ++il) {
++        if (x_l[il] == nullptr) continue;
++
++        const uint64_t o_row = o_l[il]->nb[1];
++        const uint64_t x_row = x_l[il]->nb[1];
++        io.write(&o_row, sizeof(o_row));
++        io.write(&x_row, sizeof(x_row));
++        for (uint32_t c = 0; c < n; ++c) {
++            io.write_tensor(o_l[il], rows[c]*o_row, o_row);
++            io.write_tensor(x_l[il], rows[c]*x_row, x_row);
++        }
++    }
++}
++
++bool llama_memory_recurrent::state_read_one_copy(llama_io_read_i & io, uint32_t cell_count) {
++    uint32_t magic = 0;
++    uint32_t K     = 0;
++    uint32_t n     = 0;
++    io.read(&magic, sizeof(magic));
++    io.read(&K,     sizeof(K));
++    io.read(&n,     sizeof(n));
++    if (magic != LLAMA_RS_ONE_COPY_MAGIC || K != 1 + n_rs_seq || n != cell_count || head + n > size) {
++        LLAMA_LOG_ERROR("%s: rs_one_copy: state has no matching one-copy section (magic %08x, K %u, cells %u/%u)\n",
++                __func__, magic, K, n, cell_count);
++        return false;
++    }
++
++    std::vector<uint32_t> valid(n);
++    for (uint32_t c = 0; c < n; ++c) {
++        io.read(&valid[c], sizeof(valid[c]));
++        if (valid[c] > K) {
++            LLAMA_LOG_ERROR("%s: rs_one_copy: kept count %u > K %u\n", __func__, valid[c], K);
++            return false;
++        }
++    }
++
++    for (uint32_t il = 0; il < (uint32_t) x_l.size(); ++il) {
++        if (x_l[il] == nullptr) continue;
++
++        uint64_t o_row = 0;
++        uint64_t x_row = 0;
++        io.read(&o_row, sizeof(o_row));
++        io.read(&x_row, sizeof(x_row));
++        if (o_row != o_l[il]->nb[1] || x_row != x_l[il]->nb[1]) {
++            LLAMA_LOG_ERROR("%s: rs_one_copy: mismatched row sizes (layer %u)\n", __func__, il);
++            return false;
++        }
++        for (uint32_t c = 0; c < n; ++c) {
++            io.read_tensor(o_l[il], (head + c)*o_row, o_row);
++            io.read_tensor(x_l[il], (head + c)*x_row, x_row);
++        }
+     }
++
++    for (uint32_t c = 0; c < n; ++c) {
++        cells[head + c].n_saved  = valid[c];
++        cells[head + c].n_replay = 0;
++        if (rs_one_copy == 2) {
++            // check mode restores the stock S too, so the next graph's check compares the two restored states
++            LLAMA_LOG_INFO("rs_one_copy_check: restored cell %u pos %d with %u kept tokens to replay; next check step compares the round trip\n",
++                    head + c, cells[head + c].pos, valid[c]);
++        }
++    }
++
++    return true;
+ }
+ 
+ //
+@@ -1360,6 +1562,56 @@ ggml_tensor * llama_memory_recurrent_context::get_p_l(int32_t il) const {
+     return mem->p_l[il];
+ }
+ 
++int llama_memory_recurrent_context::get_rs_one_copy() const {
++    return mem->rs_one_copy;
++}
++
++uint32_t llama_memory_recurrent_context::get_n_rs_seq() const {
++    return mem->n_rs_seq;
++}
++
++ggml_tensor * llama_memory_recurrent_context::get_o_l(int32_t il) const {
++    return mem->rs_one_copy ? mem->o_l[il] : nullptr;
++}
++
++ggml_tensor * llama_memory_recurrent_context::get_x_l(int32_t il) const {
++    return mem->rs_one_copy ? mem->x_l[il] : nullptr;
++}
++
++void llama_memory_recurrent_context::set_input_one_copy(ggml_tensor * s_copy_base, ggml_tensor * replay_mask) const {
++    // either tensor stays unallocated if no layer of this graph reads it
++    if (s_copy_base != nullptr && s_copy_base->buffer != nullptr) {
++        GGML_ASSERT(ggml_backend_buffer_is_host(s_copy_base->buffer));
++        int32_t * data = (int32_t *) s_copy_base->data;
++        for (int64_t i = 0; i < s_copy_base->ne[0]; ++i) {
++            data[i] = mem->cells[i + get_head()].src0;
++        }
++    }
++
++    if (replay_mask != nullptr && replay_mask->buffer != nullptr) {
++        GGML_ASSERT(ggml_backend_buffer_is_host(replay_mask->buffer));
++        GGML_ASSERT(mem->size == 1); // -np 1: one cell, one mask
++        const auto & cell = mem->cells[get_head()];
++
++        uint32_t idx = 0;
++        if (!cell.seq_id.empty()) {
++            const llama_seq_id seq = *cell.seq_id.begin();
++            if (seq >= 0 && (size_t) seq < mem->rs_idx.size()) {
++                idx = mem->rs_idx[seq]; // not consumed here: s_copy() resets it right after
++            }
++        }
++        // seq_rm allows a rollback only up to rs_max = n_saved - 1 of the last ubatch, so at least one kept token stays
++        GGML_ASSERT(idx <= cell.n_replay);
++        const int64_t valid = (int64_t) cell.n_replay - idx;
++
++        float * data = (float *) replay_mask->data;
++        const int64_t K = ggml_nelements(replay_mask);
++        for (int64_t t = 0; t < K; ++t) {
++            data[t] = t < valid ? 1.0f : 0.0f;
++        }
++    }
++}
++
+ int32_t llama_memory_recurrent_context::s_copy(int i) const {
+     const uint32_t cell_idx = i + mem->head;
+     const int32_t  src0     = mem->cells[cell_idx].src0;
+diff --git a/src/llama-memory-recurrent.h b/src/llama-memory-recurrent.h
+index 6442fc1c..8efd1a31 100644
+--- a/src/llama-memory-recurrent.h
++++ b/src/llama-memory-recurrent.h
+@@ -79,6 +79,19 @@ public:
+ 
+     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
+ 
++    // LLAMA_RS_ONE_COPY=1 (off = stock): the delta-net state S keeps one plane (mem_size rows) instead of 1 + n_rs_seq.
++    // The plane lags: after a small ubatch (n <= n_rs_seq + 1 tokens) it holds the state BEFORE that ubatch, and the
++    // ubatch's delta-net inputs (k, v, g, beta) are kept per layer in x_l; the next graph replays the accepted ones
++    // (n_saved - rs_idx, masked by a graph input) before it runs its own tokens. R and P keep their stock planes.
++    // LLAMA_RS_ONE_COPY_CHECK=1|2 also keeps the stock S planes and compares (2 aborts on a difference).
++    // 0 off, 1 on, 2 on + check
++    int rs_one_copy = 0;
++    int rs_one_copy_check_level = 0;
++    uint32_t rs_x_per_token = 0; // floats per token in an x_l row: k | v | g | beta (each over K tokens)
++
++    std::vector<ggml_tensor *> o_l; // one-copy S plane (== s_l in on mode, a separate tensor in check mode)
++    std::vector<ggml_tensor *> x_l; // replay inputs, F32 [rs_x_per_token*K, mem_size]
++
+     // computed before each graph build
+     uint32_t n = 0;
+ 
+@@ -96,6 +109,10 @@ public:
+         // writes snapshots 0..n-1, a longer one only guarantees the final state (ggml_gated_delta_net)
+         uint32_t rs_max = 0;
+ 
++        // rs_one_copy: inputs of the last ubatch kept in x_l (0 after a long ubatch), and the count this ubatch replays
++        uint32_t n_saved  = 0;
++        uint32_t n_replay = 0;
++
+         std::set<llama_seq_id> seq_id;
+ 
+         bool has_seq_id(const llama_seq_id & id) const {
+@@ -139,6 +156,8 @@ private:
+ 
+     void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
+     void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
++    void state_write_one_copy(llama_io_write_i & io, const std::vector<uint32_t> & rows, const std::vector<uint32_t> & valid) const;
++    bool state_read_one_copy(llama_io_read_i & io, uint32_t cell_count);
+ 
+     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
+     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+@@ -185,6 +204,16 @@ public:
+     ggml_tensor * get_s_l(int32_t il) const;
+     ggml_tensor * get_p_l(int32_t il) const;
+ 
++    // rs_one_copy (see llama_memory_recurrent::rs_one_copy)
++    int           get_rs_one_copy() const;
++    uint32_t      get_n_rs_seq() const;
++    ggml_tensor * get_o_l(int32_t il) const;
++    ggml_tensor * get_x_l(int32_t il) const;
++
++    // fills the one-copy base gather (plane rows, no rollback offset) and the replay mask [K]
++    // must run before s_copy(), which consumes the pending rollback index
++    void set_input_one_copy(ggml_tensor * s_copy_base, ggml_tensor * replay_mask) const;
++
+     int32_t s_copy(int i) const;
+ 
+ private:
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 5c50f095..e9127560 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -1001,6 +1001,10 @@ struct llama_model {
+         GGML_UNUSED(tokens); GGML_UNUSED(n_tokens); GGML_UNUSED(i_first);
+     }
+ 
++    // LLAMA_RS_ONE_COPY: true when the arch's graph gathers S through s_copy_base and builds the replay
++    // (an arch declares it in its own file; the recurrent memory refuses the switch otherwise)
++    virtual bool supports_rs_one_copy() const { return false; }
++
+     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
+     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
+ 
+diff --git a/src/models/delta-net-base.cpp b/src/models/delta-net-base.cpp
+index 45b2de4b..b148773a 100644
+--- a/src/models/delta-net-base.cpp
++++ b/src/models/delta-net-base.cpp
+@@ -85,7 +85,8 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
+         ggml_tensor *        g,
+         ggml_tensor *        b,
+         ggml_tensor *        s,
+-        int                  il) {
++        int                  il,
++        ggml_tensor *        s_ref) {
+     const auto * mctx_cur   = inp->mctx;
+     const auto   kv_head    = mctx_cur->get_head();
+     const uint32_t mem_size = mctx_cur->get_size();
+@@ -115,6 +116,10 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
+     const int64_t D = S_v * S_v * H_v;
+     const int64_t K = cparams.n_rs_seq + 1;
+ 
++    if (mctx_cur->get_rs_one_copy()) {
++        return build_recurrent_attn_one_copy(inp, ssm_states_all, q, k, v, g, b, s, il, s_ref);
++    }
++
+     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
+     ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
+     const int64_t attn_score_elems    = S_v * H_v * n_seq_tokens * n_seqs;
+@@ -150,3 +155,157 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
+ 
+     return output;
+ }
++
++// LLAMA_RS_ONE_COPY: lagging base + in-graph replay.
++// A verify step never modifies the stored state; the inputs of the accepted tokens are kept and folded into it at
++// the start of the next graph (inside that graph: no extra kernel launch, no extra sync).
++// s is the base gathered from the single S plane (the state before the last small ubatch). The kept inputs of that
++// ubatch (k, v, g, beta per token, x_l) are replayed with K = 1; tokens past the accepted count get g*0 and beta*0 from
++// the replay mask (exp(0) = 1, delta*0 = 0: identity), so the graph never depends on the accepted count. This ubatch
++// then runs from the replayed state.
++//   small ubatch (n <= K): the replayed state goes to the plane (the cpy fuses into the replay kernel on CUDA) and this
++//                          ubatch's inputs are kept; the main op's own final state is not stored.
++//   long ubatch  (n >  K): the main op's final state goes to the plane (fused) and nothing is kept (n_saved = 0).
++// Check mode (s_ref != nullptr): the stock K-snapshot op still writes the stock planes from s_ref, and
++// sum |replayed - s_ref| is added to res->t_rs_check; the output (logits) comes from the one-copy path.
++ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_one_copy(
++        llm_graph_input_rs * inp,
++        ggml_tensor *        ssm_states_all,
++        ggml_tensor *        q,
++        ggml_tensor *        k,
++        ggml_tensor *        v,
++        ggml_tensor *        g,
++        ggml_tensor *        b,
++        ggml_tensor *        s,
++        int                  il,
++        ggml_tensor *        s_ref) {
++    const auto * mctx_cur   = inp->mctx;
++    const auto   kv_head    = mctx_cur->get_head();
++    const uint32_t mem_size = mctx_cur->get_size();
++
++    const int64_t S_v          = s->ne[0];
++    const int64_t H_v          = s->ne[2];
++    const int64_t n_seqs       = s->ne[3];
++    const int64_t n_seq_tokens = q->ne[2];
++    const int64_t S_k          = k->ne[0];
++    const int64_t H_k          = k->ne[1];
++
++    const int64_t D = S_v * S_v * H_v;
++    const int64_t K = cparams.n_rs_seq + 1;
++
++    GGML_ASSERT(n_seqs == 1 && mem_size == 1 && "rs_one_copy requires -np 1");
++    GGML_ASSERT(g->ne[0] == 1 && "rs_one_copy keeps a scalar gate per head");
++    GGML_ASSERT((int64_t) hparams.n_embd_s() == D);
++    GGML_ASSERT(inp->replay_mask != nullptr && inp->replay_mask->ne[2] == K);
++
++    ggml_tensor * plane = mctx_cur->get_o_l(il);
++    ggml_tensor * x     = mctx_cur->get_x_l(il);
++    GGML_ASSERT(plane != nullptr && x != nullptr && plane->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32);
++
++    // x row: k [S_k, H_k, K] | v [S_v, H_v, K] | g [1, H_v, K] | beta [1, H_v, K]
++    const int64_t n_k = S_k * H_k;
++    const int64_t n_v = S_v * H_v;
++    GGML_ASSERT(x->ne[0] == K * (n_k + n_v + 2*H_v) && "rs_one_copy: replay row does not match the delta-net shapes");
++
++    const size_t es     = ggml_element_size(x);
++    const size_t x_offs = (size_t) kv_head * x->nb[1];
++    auto x_view = [&](int64_t ne0, int64_t ne1, int64_t n_tok, int64_t offs_el) {
++        return ggml_view_4d(ctx0, x, ne0, ne1, n_tok, 1, ne0*es, ne0*ne1*es, ne0*ne1*n_tok*es, x_offs + (size_t) offs_el*es);
++    };
++    const int64_t off_k = 0;
++    const int64_t off_v = K * n_k;
++    const int64_t off_g = K * (n_k + n_v);
++    const int64_t off_b = K * (n_k + n_v + H_v);
++
++    // the plane row of this cell, as the [D, n_seqs, 1] view the CUDA gdn -> cpy fusion matches
++    ggml_tensor * plane_dst = ggml_view_3d(ctx0, plane,
++            D, n_seqs, 1,
++            plane->nb[1], (size_t) mem_size * plane->nb[1],
++            (size_t) kv_head * plane->nb[1]);
++
++    // replay: q is not needed for the state, k stands in for it
++    ggml_tensor * xk = x_view(S_k, H_k, K, off_k);
++    ggml_tensor * xv = x_view(S_v, H_v, K, off_v);
++    ggml_tensor * xg = ggml_mul(ctx0, x_view(1, H_v, K, off_g), inp->replay_mask);
++    ggml_tensor * xb = ggml_mul(ctx0, x_view(1, H_v, K, off_b), inp->replay_mask);
++    cb(xg, "rs_replay_g", il);
++    cb(xb, "rs_replay_beta", il);
++
++    ggml_tensor * rep = ggml_gated_delta_net(ctx0, xk, xk, xv, xg, xb, s, 1);
++    cb(rep, "rs_replay", il);
++
++    const size_t  rep_tail_offs = ggml_row_size(rep->type, S_v * H_v * K * n_seqs);
++    ggml_tensor * rep_tail      = ggml_view_3d(ctx0, rep, D, n_seqs, 1,
++            ggml_row_size(rep->type, D), ggml_row_size(rep->type, D * n_seqs), rep_tail_offs);
++
++    const bool small = n_seq_tokens <= K;
++
++    ggml_tensor * state_r = nullptr; // the logical state before this ubatch
++    if (small) {
++        // the replayed state is the new base: first real node after the replay op, so it fuses into its kernel
++        state_r = ggml_cpy(ctx0, rep_tail, plane_dst);
++        ggml_build_forward_expand(gf, state_r);
++    } else {
++        state_r = rep_tail;
++    }
++    state_r = ggml_reshape_4d(ctx0, state_r, S_v, S_v, H_v, n_seqs);
++    cb(state_r, "rs_state_replayed", il);
++
++    if (s_ref != nullptr) {
++        // check: the stock path, exactly as the keep branch of build_recurrent_attn writes the stock planes
++        const int64_t attn_score_elems    = S_v * H_v * n_seq_tokens * n_seqs;
++        const int64_t state_size_per_snap = S_v * S_v * H_v * n_seqs;
++        const int64_t n_written           = std::min<int64_t>(n_seq_tokens, K);
++        const size_t  row_size            = hparams.n_embd_s() * ggml_element_size(ssm_states_all);
++
++        ggml_tensor * gdn_ref = ggml_gated_delta_net(ctx0, q, k, v, g, b, s_ref, K);
++        cb(gdn_ref, "rs_check_stock", il);
++        ggml_tensor * src = ggml_view_3d(ctx0, gdn_ref,
++            D, n_seqs, n_written,
++            ggml_row_size(gdn_ref->type, D),
++            ggml_row_size(gdn_ref->type, state_size_per_snap),
++            ggml_row_size(gdn_ref->type, attn_score_elems));
++        ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
++            D, n_seqs, n_written,
++            ssm_states_all->nb[1],
++            (size_t) mem_size * row_size,
++            (size_t) kv_head * row_size);
++        ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
++
++        ggml_tensor * diff = ggml_sum(ctx0, ggml_abs(ctx0, ggml_sub(ctx0, state_r, s_ref)));
++        cb(diff, "rs_check_diff", il);
++        res->t_rs_check = res->t_rs_check ? ggml_add(ctx0, res->t_rs_check, diff) : diff;
++        ggml_build_forward_expand(gf, res->t_rs_check);
++    }
++
++    // this ubatch from the replayed state; K = 1, its final state is stored only for a long ubatch
++    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, state_r, 1);
++    cb(gdn_out, "rs_main", il);
++
++    ggml_tensor * output = ggml_view_4d(ctx0, gdn_out,
++        S_v, H_v, n_seq_tokens, n_seqs,
++        ggml_row_size(gdn_out->type, S_v),
++        ggml_row_size(gdn_out->type, S_v * H_v),
++        ggml_row_size(gdn_out->type, S_v * H_v * n_seq_tokens),
++        0);
++    cb(output, "attn_output", il);
++
++    if (!small) {
++        ggml_tensor * main_tail = ggml_view_3d(ctx0, gdn_out, D, n_seqs, 1,
++                ggml_row_size(gdn_out->type, D), ggml_row_size(gdn_out->type, D * n_seqs),
++                ggml_row_size(gdn_out->type, S_v * H_v * n_seq_tokens * n_seqs));
++        // first real node after the main op: fuses into its kernel on CUDA
++        ggml_build_forward_expand(gf, ggml_cpy(ctx0, main_tail, plane_dst));
++    } else {
++        // the kept inputs are overwritten only after the replay read them: the replay is an ancestor of the main op,
++        // which is placed in the graph before these copies (node order is kept by the scheduler; the CUDA stream
++        // reordering of GGML_CUDA_GRAPH_OPT=1 is refused at init with rs_one_copy)
++        ggml_build_forward_expand(gf, gdn_out);
++        ggml_build_forward_expand(gf, ggml_cpy(ctx0, k, x_view(S_k, H_k, n_seq_tokens, off_k)));
++        ggml_build_forward_expand(gf, ggml_cpy(ctx0, v, x_view(S_v, H_v, n_seq_tokens, off_v)));
++        ggml_build_forward_expand(gf, ggml_cpy(ctx0, g, x_view(1,   H_v, n_seq_tokens, off_g)));
++        ggml_build_forward_expand(gf, ggml_cpy(ctx0, b, x_view(1,   H_v, n_seq_tokens, off_b)));
++    }
++
++    return output;
++}
+diff --git a/src/models/models.h b/src/models/models.h
+index 06138135..255632d8 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -66,7 +66,21 @@ struct llm_build_delta_net_base : public llm_graph_context {
+             ggml_tensor *        g,
+             ggml_tensor *        b,
+             ggml_tensor *        s,
+-            int                  il);
++            int                  il,
++            ggml_tensor *        s_ref = nullptr); // rs_one_copy check mode: the stock gathered state
++
++    // LLAMA_RS_ONE_COPY (see delta-net-base.cpp)
++    ggml_tensor * build_recurrent_attn_one_copy(
++            llm_graph_input_rs * inp,
++            ggml_tensor *        ssm_states_all,
++            ggml_tensor *        q,
++            ggml_tensor *        k,
++            ggml_tensor *        v,
++            ggml_tensor *        g,
++            ggml_tensor *        b,
++            ggml_tensor *        s,
++            int                  il,
++            ggml_tensor *        s_ref);
+ };
+ 
+ struct llm_build_lfm_base : public llm_graph_context {
+@@ -2689,6 +2703,8 @@ struct llama_model_qwen4exp : public llama_model_base {
+ 
+     void prefetch_inputs(const llama_token * tokens, int32_t n_tokens, int32_t i_first) const override; // LOCAL (ple-prefetch)
+ 
++    bool supports_rs_one_copy() const override; // qwen4exp.cpp
++
+     class llm_graph_input_kpool;
+ 
+     void load_arch_hparams(llama_model_loader & ml) override;
+diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
+index 0c84705a..7b294941 100644
+--- a/src/models/qwen4exp.cpp
++++ b/src/models/qwen4exp.cpp
+@@ -1141,6 +1141,11 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
+     return cur;
+ }
+ 
++// LLAMA_RS_ONE_COPY: the linear-attention layers below gather S via s_copy_base and replay through build_recurrent_attn
++bool llama_model_qwen4exp::supports_rs_one_copy() const {
++    return true;
++}
++
+ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
+         llm_graph_input_rs * inp,
+         ggml_tensor *        cur,
+@@ -1209,7 +1214,19 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
+     ggml_tensor * conv_input = build_conv_state_at(inp, conv_states_all, qkv_mixed,
+             conv_kernel_size - 1, conv_channels, il);
+ 
+-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
++    ggml_tensor * state     = nullptr;
++    ggml_tensor * state_ref = nullptr; // rs_one_copy check mode: the stock (rollback-indexed) state
++    if (mctx_cur->get_rs_one_copy()) {
++        // LLAMA_RS_ONE_COPY: the base comes from the single S plane, gathered without the rollback offset
++        state = build_rs(mctx_cur->get_o_l(il), inp->s_copy_base, inp->s_copy_base_main, hparams.n_embd_s(), n_seqs,
++                mctx_cur->get_n_rs(), mctx_cur->get_head(), mctx_cur->get_size(), mctx_cur->get_rs_z());
++        if (mctx_cur->get_rs_one_copy() == 2) {
++            state_ref = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
++            state_ref = ggml_reshape_4d(ctx0, state_ref, head_v_dim, head_v_dim, num_v_heads, n_seqs);
++        }
++    } else {
++        state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
++    }
+     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+     cb(state, "state_predelta", il);
+ 
+@@ -1256,7 +1273,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
+     cb(k_conv, "k_conv_predelta", il);
+     cb(v_conv, "v_conv_predelta", il);
+ 
+-    ggml_tensor * output = build_recurrent_attn(inp, ssm_states_all, q_conv, k_conv, v_conv, gate, beta, state, il);
++    ggml_tensor * output = build_recurrent_attn(inp, ssm_states_all, q_conv, k_conv, v_conv, gate, beta, state, il, state_ref);
+ 
+     ggml_tensor * z_2d = ggml_view_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
+             ggml_row_size(z->type, head_v_dim), z->nb[1], z->nb[1] * n_seq_tokens, 0);
