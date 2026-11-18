@@ -14,9 +14,11 @@ brew install JulianAbeleda/tap/boltbeam
 boltbeam mods apply
 ```
 
-`boltbeam mods apply` fetches this repo at the commit BoltBeam pins into BoltBeam's own folder (a clone you name in
-`BOLTBEAM_IE_MODS` is used instead), says what it fetches and from where, then builds the patches into a copy of the llama.cpp
-source BoltBeam runs (`--src` to name another) and checks each one is on.
+`boltbeam mods apply` (BoltBeam 0.3.29 or later) fetches this repo into BoltBeam's own folder and uses the newest commit
+it can read (`requires.boltbeam` in index.json); offline, the commit that BoltBeam release pins. It says which commit
+and why; `--pin COMMIT` uses exactly one. A clone you name in `BOLTBEAM_IE_MODS` is used as it is, never fetched into.
+Then it builds the verified patches into a copy of the llama.cpp source BoltBeam runs (`--src` to name another) and
+checks each one is on.
 
 ### By hand
 
