@@ -1242,6 +1242,70 @@
    "module": null
   },
   {
+   "id": "llama.cpp/1.0.0/kv-stream",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "kv-stream",
+   "title": "KV streaming: attention K/V in pinned host RAM, N cells a layer paged in VRAM",
+   "state": "series",
+   "order": 21,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KV_STREAM",
+    "on": "N: cells per layer kept in VRAM (a multiple of 4, >= 4096, below the context)"
+   },
+   "switch_null_why": null,
+   "check": "LLAMA_KV_STREAM_CHECK",
+   "check_needs": [
+    "LLAMA_KV_STREAM"
+   ],
+   "marker": "LLAMA_KV_STREAM",
+   "knobs": [
+    "LLAMA_KV_STREAM"
+   ],
+   "output": "quality-gated",
+   "patch": "engines/llama.cpp/1.0.0/patches/21-kv-stream.patch",
+   "sha256": "bb64a45519e948192a3511852e87aeb85cc8531fa736d5448c43ecb0b12b3c80",
+   "lines": {
+    "added": 922,
+    "removed": 8
+   },
+   "budget": {
+    "added": 970,
+    "removed": 8
+   },
+   "files": [
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn.cu",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/kv-stream.cu",
+    "ggml/src/ggml-cuda/kv-stream.cuh",
+    "src/CMakeLists.txt",
+    "src/llama-kv-cache.cpp",
+    "src/llama-kv-stream.cpp",
+    "src/llama-kv-stream.h"
+   ],
+   "depends_on": {
+    "apply": [
+     "sparse-direct",
+     "fattn-vec-skip"
+    ],
+    "run": [
+     "sparse-direct",
+     "graph-cap"
+    ]
+   },
+   "rule_exceptions": [],
+   "module": null
+  },
+  {
    "id": "llama.cpp/1.0.0/fattn-compact-par",
    "engine": "llama.cpp",
    "version": "1.0.0",

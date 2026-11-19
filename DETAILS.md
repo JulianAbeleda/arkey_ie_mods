@@ -27,9 +27,10 @@ its layout and the check. The [README](README.md) has how to apply and the numbe
 | 16 | +549 -6 | -319 MiB VRAM; with 17, a hot-set draft and every expert on the GPU: session -13.8 s [-26.9, -0.7] (-8.3%) | quality-gated: stage-1 gate pass |
 | 17 | +29 -0 | -96 MiB VRAM; speed unchanged | identical |
 | 18 | +56 -0 | none: a diagnostic, the draft's routing for a hot-set draft | identical |
+| 21 | +922 -8 | at 256k with every expert on the GPU: session -88.9 s [-89.2, -88.6] (-19.8%); a cost at 128k | quality-gated: stage-1 gate pass (identical vs off) |
 | kernel | 2 kernels | -0.56 ms/step [0.51, 0.62] (3.2%) vs the hook off | identical (59/59 turns, ~142k check comparisons) |
 
-Series total: +3,041 -138 lines. Evidence and conditions per mod: `engines/llama.cpp/1.0.0/mods.json`.
+Series total: +4,327 -209 lines (01-21). Evidence and conditions per mod: `engines/llama.cpp/1.0.0/mods.json`.
 
 ## llama.cpp master 7592b61d3: each mod
 
@@ -98,6 +99,14 @@ No switch: applied = on. `tools/quark_lm_head_int4.py SRC DST` builds the int4-h
   Any value turns it on. No check mode.
 - 18 is for a counting run, not for serving: it syncs on every draft layer. The file is written every 20,000 draft
   forwards and at a normal exit. BoltBeam's `boltbeam derive hot-draft` reads it.
+- 21 has no fixed N: `boltbeam tune` derives it per machine, from the free memory at load and the growth
+  `boltbeam load-probe --stress` measures. It needs 20 (graph-cap) on: without it CUDA graph executables of dead graph
+  keys grow with the request rate, and a server loaded this close to full VRAM runs out of memory.
+  It pages the target's sparse-attention layers only (q8_0 K/V, one sequence, one CUDA GPU); the MTP draft layer is not
+  paged. N is a multiple of 4, >= 4096 and below the context, else ignored (stock). It pays only where the context
+  cannot hold all K/V and every expert on the GPU: at 128k it costs about 8.6 tok/s and +25 ms prefill a turn.
+  Prompt ubatches past N copy the cells they read from host RAM. Context shift skips the write-through (run with -c at
+  the session size); a SET_ROWS kernel from 09 on a streamed layer would too. Debug builds assert on its host buffer.
 
 ### Check modes
 
@@ -123,6 +132,7 @@ Set the check switch beside the mod's switch. Rows marked G also need `GGML_CUDA
 | 16 | `LLAMA_RS_ONE_COPY_CHECK=1` (2 aborts on a difference) | |
 | 17 | none | |
 | 18 | none | |
+| 21 | `LLAMA_KV_STREAM_CHECK=1` (aborts on a differing byte or attention output) | G |
 
 A check run is slow. It is for correctness, not timing.
 
@@ -203,7 +213,7 @@ so a module is one patch on one engine extension point: the engine files that up
 - Code that needs no engine internals goes in the module's own new file: a new file cannot conflict on a base move.
 
 llama.cpp b12521 modules: `kv` (sparse-direct, fattn-vec-skip), `indexer` (idx-pooled, kpool-input-device,
-idx-inplace, topk-fused), `kernels` (ext-kernels, ext-kernels-window), `experts` (moe-inplace, cublas-shared,
+idx-inplace, topk-fused), `kernels` (ext-kernels, ext-kernels-window, graph-cap), `experts` (moe-inplace, cublas-shared,
 draft-route-count), `state` (mtp-share-head, graph-slots, rs-one-copy), `host` (ckpt-pinned, tokenize-incr,
 ple-prefetch, sched-async-inputs). The switches, check modes and limits are those of the same mods on 1.0.0, above.
 

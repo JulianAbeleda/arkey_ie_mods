@@ -1,0 +1,1175 @@
+diff --git a/ggml/src/ggml-cuda/fattn-common.cuh b/ggml/src/ggml-cuda/fattn-common.cuh
+index 4519f91..e3fad62 100644
+--- a/ggml/src/ggml-cuda/fattn-common.cuh
++++ b/ggml/src/ggml-cuda/fattn-common.cuh
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "common.cuh"
++#include "kv-stream.cuh"
+ #include "convert.cuh"
+ #include "vecdotq.cuh"
+ 
+@@ -1077,6 +1078,9 @@ void launch_fattn(
+         ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
+ 
+     ggml_cuda_pool_alloc<int>    KV_max(pool);
++    // LLAMA_KV_STREAM scratch: allocated after KV_max and before dst_tmp, so the pool frees stay in stack order
++    ggml_cuda_pool_alloc<int32_t> kvs_cells(pool);
++    ggml_cuda_pool_alloc<half>    kvs_mask_scratch(pool);
+     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
+     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
+ 
+@@ -1094,6 +1098,13 @@ void launch_fattn(
+     size_t nb22 = V->nb[2];
+     size_t nb23 = V->nb[3];
+ 
++    // LLAMA_KV_STREAM: a streamed layer's K/V come from its VRAM pages or staging pool; direct sparse calls resolve
++    // their pages after compact_mask below
++    if (!direct) {
++        ggml_cuda_kvs_attn(main_stream, K, V, K->ne[1], false, nullptr, nullptr, 0, 0, nullptr, &K_data, &V_data);
++    }
++    ggml_cuda_kvs_mask kvs_mask;
++
+     if (need_f16_K && K->type != GGML_TYPE_F16 && !direct) {
+         const size_t bs = ggml_blck_size(K->type);
+         const size_t ts = ggml_type_size(K->type);
+@@ -1175,6 +1186,20 @@ void launch_fattn(
+ 
+         KV_max.alloc(size_t(n_kv_max)*n_lists + n_lists);
+         ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists, Q->ne[1], ncols1, n_kv_max, main_stream);
++        if (direct) {
++            const int64_t slot_cells = ggml_cuda_kvs_resolve_cells(K, K->ne[1], n_lists, n_kv_max, Q->ne[1]);
++            if (slot_cells > 0) {
++                GGML_ASSERT(mask->ne[2] == 1 && mask->ne[3] == 1);
++                kvs_mask.data    = (const half *) mask->data;
++                kvs_mask.stride  = mask->nb[1]/sizeof(half);
++                kvs_mask.ne01    = Q->ne[1];
++                kvs_mask.ncols1  = ncols1;
++                kvs_mask.cells   = kvs_cells.alloc(size_t(n_kv_max)*n_lists);
++                kvs_mask.scratch = kvs_mask_scratch.alloc(size_t(Q->ne[1])*slot_cells);
++            }
++            ggml_cuda_kvs_attn(main_stream, K, V, K->ne[1], true, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists,
++                               n_lists, n_kv_max, &kvs_mask, &K_data, &V_data);
++        }
+     }
+ 
+     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
+@@ -1324,7 +1349,7 @@ void launch_fattn(
+         (const char *) Q->data,
+         K_data,
+         V_data,
+-        mask ? ((const char *) mask->data) : nullptr,
++        kvs_mask.swapped ? (const char *) kvs_mask.scratch : mask ? ((const char *) mask->data) : nullptr,
+         sinks ? ((const char *) sinks->data) : nullptr,
+         KV_max.ptr,
+         kv_rows ? (const int *) kv_rows->data : nullptr,
+@@ -1334,7 +1359,9 @@ void launch_fattn(
+         K->ne[0], n_kv, K->ne[2], K->ne[3], direct ? -int32_t(nb11) : int32_t(nb11), nb12, nb13,
+         direct ? -int32_t(nb21) : int32_t(nb21), nb22, nb23,
+         mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
+-        mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
++        kvs_mask.swapped ? kvs_mask.out_stride*sizeof(half) : mask ? mask->nb[1] : 0,
++        kvs_mask.swapped ? kvs_mask.out_stride*sizeof(half)*mask->ne[1] : mask ? mask->nb[2] : 0,
++        kvs_mask.swapped ? kvs_mask.out_stride*sizeof(half)*mask->ne[1] : mask ? mask->nb[3] : 0
+     );
+     CUDA_CHECK(cudaGetLastError());
+ 
+diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
+index 071fd0d..7072b1b 100644
+--- a/ggml/src/ggml-cuda/fattn.cu
++++ b/ggml/src/ggml-cuda/fattn.cu
+@@ -5,6 +5,8 @@
+ #include "fattn-tile.cuh"
+ #include "fattn-vec.cuh"
+ #include "fattn.cuh"
++#include "kv-stream.cuh"
++#include <cstring>
+ 
+ #if !defined(GGML_USE_MUSA)
+ 
+@@ -879,6 +881,43 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
+ 
+ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+     ggml_cuda_set_device(ctx.device);
++    // LLAMA_KV_STREAM_CHECK=1 (graphs off): every call over a streamed layer also runs with the pages bypassed (the host
++    // copy read in place, stock lists and mask) and the two outputs must be equal bit for bit
++    static const bool kvs_check = getenv("LLAMA_KV_STREAM_CHECK") && atoi(getenv("LLAMA_KV_STREAM_CHECK")) != 0;
++    static thread_local bool kvs_in_check = false;
++    if (kvs_check && !kvs_in_check && ggml_cuda_kvs_streamed(dst->src[1])) {
++        static uint64_t n_check = 0;
++        const size_t n = ggml_nelements(dst);
++        std::vector<float> a(n), b(n);
++        kvs_in_check = true;
++        ggml_cuda_flash_attn_ext(ctx, dst);
++        CUDA_CHECK(cudaMemcpyAsync(a.data(), dst->data, n*sizeof(float), cudaMemcpyDeviceToHost, ctx.stream()));
++        ggml_cuda_kvs_set_bypass(true);
++        ggml_cuda_flash_attn_ext(ctx, dst);
++        ggml_cuda_kvs_set_bypass(false);
++        kvs_in_check = false;
++        CUDA_CHECK(cudaMemcpyAsync(b.data(), dst->data, n*sizeof(float), cudaMemcpyDeviceToHost, ctx.stream()));
++        CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
++        size_t n_diff = 0;
++        for (size_t i = 0; i < n; ++i) {
++            n_diff += memcmp(&a[i], &b[i], sizeof(float)) != 0;
++        }
++        ++n_check;
++        if (n_diff != 0) {
++            GGML_LOG_ERROR("LLAMA_KV_STREAM_CHECK: %s (q %lld, n_kv %lld): %zu of %zu outputs differ from the unpaged read\n",
++                dst->name, (long long) dst->src[0]->ne[1], (long long) dst->src[1]->ne[1], n_diff, n);
++            GGML_ABORT("LLAMA_KV_STREAM_CHECK: paged and unpaged attention differ");
++        }
++        if (n_check <= 3 || n_check % 2000 == 0) {
++            GGML_LOG_WARN("kv_stream output check %llu ok (%s, q %lld, n_kv %lld)\n", (unsigned long long) n_check, dst->name,
++                (long long) dst->src[0]->ne[1], (long long) dst->src[1]->ne[1]);
++        }
++        // finish with the paged output, as without the check
++        kvs_in_check = true;
++        ggml_cuda_flash_attn_ext(ctx, dst);
++        kvs_in_check = false;
++        return;
++    }
+     static const int check = sparse_direct_env("LLAMA_SPARSE_DIRECT_CHECK");
+     static const int check_vec = sparse_direct_env("LLAMA_FATTN_VEC_SKIP_CHECK");
+     static uint64_t n_call = 0, n_check = 0, n_call_vec = 0, n_vec = 0, n_vec_bits = 0, n_vec_nonfinite = 0;
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index baa6eed..957237d 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -67,6 +67,7 @@
+ #include "ggml-cuda/dsv4-hc.cuh"
+ #include "ggml-cuda/set.cuh"
+ #include "ggml-cuda/set-rows.cuh"
++#include "ggml-cuda/kv-stream.cuh"
+ #include "ggml-cuda/pad_reflect_1d.cuh"
+ #include "ggml-cuda/solve_tri.cuh"
+ #include "ggml-cuda/tri.cuh"
+@@ -948,6 +949,8 @@ struct ggml_backend_cuda_buffer_context {
+     int device;
+     void * dev_ptr = nullptr;
+     std::string name;
++    bool host_mapped = false; // LLAMA_KV_STREAM: pinned, device-mapped host memory (cudaHostAlloc)
++    size_t size = 0;
+ 
+     ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
+         device(device), dev_ptr(dev_ptr),
+@@ -955,7 +958,12 @@ struct ggml_backend_cuda_buffer_context {
+     }
+ 
+     ~ggml_backend_cuda_buffer_context() {
+-        CUDA_CHECK(cudaFree(dev_ptr));
++        if (host_mapped) {
++            ggml_cuda_kvs_forget(dev_ptr, size);
++            CUDA_CHECK(cudaFreeHost(dev_ptr));
++        } else {
++            CUDA_CHECK(cudaFree(dev_ptr));
++        }
+     }
+ };
+ 
+@@ -964,6 +972,12 @@ static void ggml_backend_cuda_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+     delete ctx;
+ }
+ 
++// LLAMA_KV_STREAM: a host-side write into a host copy drops the VRAM pages
++static void ggml_cuda_kvs_host_write(ggml_backend_buffer_t buffer) {
++    ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
++    if (ctx->host_mapped) { ggml_cuda_set_device(ctx->device); ggml_cuda_kvs_invalidate(ctx->dev_ptr, buffer->size); }
++}
++
+ static bool ggml_backend_buffer_is_cuda(ggml_backend_buffer_t buffer) {
+     return buffer->iface.free_buffer == ggml_backend_cuda_buffer_free_buffer;
+ }
+@@ -1001,6 +1015,7 @@ static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer,
+     ggml_cuda_set_device(ctx->device);
+     CUDA_CHECK(cudaMemsetAsync((char *) tensor->data + offset, value, size, cudaStreamPerThread));
+     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
++    if (ctx->host_mapped) ggml_cuda_kvs_invalidate((char *) tensor->data + offset, size);
+ }
+ 
+ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+@@ -1009,6 +1024,7 @@ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
+     ggml_cuda_set_device(ctx->device);
+     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
++    if (ctx->host_mapped) ggml_cuda_kvs_invalidate((char *) tensor->data + offset, size);
+ }
+ 
+ static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+@@ -1021,6 +1037,7 @@ static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, co
+ 
+ static void ggml_backend_cuda_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data,
+         size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
++    ggml_cuda_kvs_host_write(buffer);
+     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
+ 
+     ggml_cuda_set_device(ctx->device);
+@@ -1040,6 +1057,7 @@ static void ggml_backend_cuda_buffer_get_tensor_2d(ggml_backend_buffer_t buffer,
+ }
+ 
+ static void ggml_backend_cuda_buffer_set_tensor_n(ggml_backend_buffer_t buffer, struct ggml_tensor * const * tensors, const void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors) {
++    ggml_cuda_kvs_host_write(buffer);
+     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
+ 
+     ggml_cuda_set_device(ctx->device);
+@@ -1085,6 +1103,7 @@ static void ggml_backend_cuda_buffer_get_tensor_n(ggml_backend_buffer_t buffer,
+ }
+ 
+ static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
++    ggml_cuda_kvs_host_write(buffer);
+     if (ggml_backend_buffer_is_cuda(src->buffer)) {
+         ggml_backend_cuda_buffer_context * src_ctx = (ggml_backend_cuda_buffer_context *)src->buffer->context;
+         ggml_backend_cuda_buffer_context * dst_ctx = (ggml_backend_cuda_buffer_context *)dst->buffer->context;
+@@ -1110,6 +1129,7 @@ static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, co
+ }
+ 
+ static bool ggml_backend_cuda_buffer_cpy_tensor_n(ggml_backend_buffer_t buffer, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors) {
++    ggml_cuda_kvs_host_write(buffer);
+     ggml_backend_cuda_buffer_context * dst_ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
+ 
+     for (size_t i = 0; i < n_tensors; i++) {
+@@ -1163,6 +1183,7 @@ static void ggml_backend_cuda_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
+     ggml_cuda_set_device(ctx->device);
+     CUDA_CHECK(cudaMemsetAsync(ctx->dev_ptr, value, buffer->size, cudaStreamPerThread));
+     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
++    if (ctx->host_mapped) ggml_cuda_kvs_invalidate(ctx->dev_ptr, buffer->size);
+ }
+ 
+ static const ggml_backend_buffer_i ggml_backend_cuda_buffer_interface = {
+@@ -1253,6 +1274,47 @@ static const ggml_backend_buffer_type_i ggml_backend_cuda_buffer_type_interface
+     /* .is_host             = */ NULL,
+ };
+ 
++// LLAMA_KV_STREAM: the CUDA buffer type family over pinned, device-mapped host memory: ops on its tensors run on the GPU
++static ggml_backend_buffer_t ggml_backend_cuda_kvs_host_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
++    ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
++    ggml_cuda_set_device(buft_ctx->device);
++    void * ptr = nullptr;
++    cudaError_t err = cudaHostAlloc(&ptr, size, cudaHostAllocMapped | cudaHostAllocPortable);
++    if (err != cudaSuccess) {
++        (void) cudaGetLastError();
++        GGML_LOG_ERROR("%s: pinning %.2f MiB of host memory failed: %s\n", __func__, size/1024.0/1024.0, cudaGetErrorString(err));
++        return nullptr;
++    }
++    void * dev_ptr = nullptr;
++    CUDA_CHECK(cudaHostGetDevicePointer(&dev_ptr, ptr, 0));
++    GGML_ASSERT(dev_ptr == ptr && "LLAMA_KV_STREAM needs unified addressing");
++    ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, ptr);
++    ctx->host_mapped = true;
++    ctx->size = size;
++    return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
++}
++
++extern "C" ggml_backend_buffer_type_t ggml_backend_cuda_kvs_host_buft(int device) {
++    static std::mutex mutex;
++    std::lock_guard<std::mutex> lock(mutex);
++    static ggml_backend_buffer_type_i iface = [] {
++        ggml_backend_buffer_type_i i = ggml_backend_cuda_buffer_type_interface;
++        i.alloc_buffer = ggml_backend_cuda_kvs_host_alloc_buffer;
++        return i;
++    }();
++    static ggml_backend_buffer_type bufts[GGML_CUDA_MAX_DEVICES];
++    static bool init[GGML_CUDA_MAX_DEVICES] = {};
++    if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
++        return nullptr;
++    }
++    if (!init[device]) {
++        bufts[device] = { iface, ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
++                          new ggml_backend_cuda_buffer_type_context{device, GGML_CUDA_NAME + std::to_string(device) + "_KVHost"} };
++        init[device] = true;
++    }
++    return &bufts[device];
++}
++
+ ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
+     static std::mutex mutex;
+     std::lock_guard<std::mutex> lock(mutex);
+@@ -2709,6 +2771,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor *
+ }
+ 
+ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
++    ggml_cuda_kvs_gpu_write(ctx.stream(), dst); // LLAMA_KV_STREAM: a write past set_rows drops the pages
+     switch (dst->op) {
+         case GGML_OP_ARGMAX:
+             ggml_cuda_argmax(ctx, dst);
+@@ -2729,7 +2792,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
+             ggml_cuda_op_get_rows_back(ctx, dst);
+             break;
+         case GGML_OP_SET_ROWS:
+-            ggml_cuda_op_set_rows(ctx, dst);
++            if (!ggml_cuda_kvs_set_rows(ctx, dst)) {
++                ggml_cuda_op_set_rows(ctx, dst);
++            }
+             break;
+         case GGML_OP_SET:
+             ggml_cuda_op_set(ctx, dst);
+@@ -6923,6 +6988,12 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+     if (strcmp(name, "ggml_backend_unregister_host_buffer") == 0) {
+         return (void *)ggml_backend_cuda_unregister_host_buffer;
+     }
++    if (strcmp(name, "ggml_backend_cuda_kvs_host_buft") == 0) {
++        return (void *)ggml_backend_cuda_kvs_host_buft;
++    }
++    if (strcmp(name, "ggml_backend_cuda_kvs_register") == 0) {
++        return (void *)ggml_backend_cuda_kvs_register;
++    }
+     if (strcmp(name, "ggml_backend_get_features") == 0) {
+         return (void *)ggml_backend_cuda_get_features;
+     }
+diff --git a/ggml/src/ggml-cuda/kv-stream.cu b/ggml/src/ggml-cuda/kv-stream.cu
+new file mode 100644
+index 0000000..1591c65
+--- /dev/null
++++ b/ggml/src/ggml-cuda/kv-stream.cu
+@@ -0,0 +1,557 @@
++// LLAMA_KV_STREAM: see kv-stream.cuh.
++#include "kv-stream.cuh"
++#include "set-rows.cuh"
++
++#include <cstdlib>
++#include <mutex>
++#include <vector>
++
++static constexpr int KVS_PAGE  = 4;    // cells per page = the indexer pool
++static constexpr int KVS_RT    = 1024; // resolve block
++static constexpr int KVS_CTL   = 16;   // [0] epoch [1] hand [2] misses of the last call [3] overflow [4] u64 misses [6] u64 lookups [8] u64 calls [10] check mismatches
++
++struct ggml_cuda_kvs_layer {
++    const char * hk = nullptr; const char * hv = nullptr; // host copies (device-mapped)
++    char * sk = nullptr; char * sv = nullptr;             // slot pools (n_slots pages)
++    char * gk = nullptr; char * gv = nullptr;             // staging pool (n_cells), shared by the cache's layers
++    int32_t * st = nullptr;                               // device state, cudaMalloc'd here (no ggml clear touches it)
++    int64_t n_cells = 0, n_pages = 0, n_slots = 0;
++    size_t rk = 0, rv = 0;
++    int il = -1;
++    __host__ __device__ int32_t * page_table() const { return st; }
++    __host__ __device__ int32_t * slot_page()  const { return st + n_pages; }
++    __host__ __device__ int32_t * slot_stamp() const { return st + n_pages + n_slots; }
++    __host__ __device__ int32_t * slot_ref()   const { return st + n_pages + 2*n_slots; }
++    __host__ __device__ int32_t * miss_page()  const { return st + n_pages + 3*n_slots; }
++    __host__ __device__ int32_t * miss_slot()  const { return st + n_pages + 4*n_slots; }
++    __host__ __device__ int32_t * ctl()        const { return st + n_pages + 5*n_slots; }
++};
++
++static std::vector<ggml_cuda_kvs_layer *> & kvs_layers() {
++    static std::vector<ggml_cuda_kvs_layer *> v;
++    return v;
++}
++
++static int kvs_env(const char * name) {
++    const char * e = getenv(name);
++    return e ? atoi(e) : 0;
++}
++
++ggml_cuda_kvs_layer * ggml_cuda_kvs_find(const void * data, bool * is_v) {
++    const char * p = (const char *) data;
++    for (auto * L : kvs_layers()) {
++        if (p >= L->hk && p < L->hk + L->n_cells*L->rk) { *is_v = false; return L; }
++        if (p >= L->hv && p < L->hv + L->n_cells*L->rv) { *is_v = true;  return L; }
++    }
++    return nullptr;
++}
++
++// ---------------------------------------------------------------------------------------------------- kernels
++
++// every page out, every slot free
++static __global__ void kvs_empty_kernel(ggml_cuda_kvs_layer L) {
++    const int64_t i0 = (int64_t) blockIdx.x*blockDim.x + threadIdx.x, st = (int64_t) gridDim.x*blockDim.x;
++    for (int64_t i = i0; i < L.n_pages; i += st) L.page_table()[i] = -1;
++    for (int64_t i = i0; i < L.n_slots; i += st) { L.slot_page()[i] = -1; L.slot_stamp()[i] = -1; L.slot_ref()[i] = 0; }
++}
++
++// copy whole pages host -> slot, 16 B per thread; pages/slots from two int arrays (or identity when null)
++static __device__ __forceinline__ void kvs_copy_page(const ggml_cuda_kvs_layer & L, int64_t page, int64_t slot) {
++    const int64_t bk = KVS_PAGE*(int64_t) L.rk, bv = KVS_PAGE*(int64_t) L.rv;
++    const uint4 * sk = (const uint4 *) (L.hk + page*bk); uint4 * dk = (uint4 *) (L.sk + slot*bk);
++    const uint4 * sv = (const uint4 *) (L.hv + page*bv); uint4 * dv = (uint4 *) (L.sv + slot*bv);
++    for (int64_t i = threadIdx.x; i < bk/16; i += blockDim.x) dk[i] = sk[i];
++    for (int64_t i = threadIdx.x; i < bv/16; i += blockDim.x) dv[i] = sv[i];
++}
++
++static __global__ void kvs_copy_misses_kernel(ggml_cuda_kvs_layer L) {
++    const int need = L.ctl()[2];
++    for (int k = blockIdx.x; k < need; k += gridDim.x) {
++        kvs_copy_page(L, L.miss_page()[k], L.miss_slot()[k]);
++    }
++}
++
++// identity pass A (per slot s < P): a slot holding another page gives it up
++static __global__ void kvs_identity_a_kernel(ggml_cuda_kvs_layer L, int64_t P) {
++    const int64_t s = (int64_t) blockIdx.x*blockDim.x + threadIdx.x;
++    if (s >= P) return;
++    const int32_t q = L.slot_page()[s];
++    if (q >= 0 && q != s) { L.page_table()[q] = -1; L.slot_page()[s] = -1; }
++}
++// identity pass B (per page p < P): a page resident elsewhere (in a slot >= P) frees it; flag the page for a copy
++static __global__ void kvs_identity_b_kernel(ggml_cuda_kvs_layer L, int64_t P) {
++    const int64_t p = (int64_t) blockIdx.x*blockDim.x + threadIdx.x;
++    if (p >= P) return;
++    const int32_t s = L.page_table()[p];
++    if (s == p) return;
++    if (s >= 0) { L.slot_page()[s] = -1; L.slot_stamp()[s] = -1; L.slot_ref()[s] = 0; }
++    L.page_table()[p] = -3; // to copy
++}
++// identity pass C: one block per flagged page copies it into slot p
++static __global__ void kvs_identity_c_kernel(ggml_cuda_kvs_layer L, int64_t P) {
++    for (int64_t p = blockIdx.x; p < P; p += gridDim.x) {
++        if (L.page_table()[p] != -3) continue;
++        kvs_copy_page(L, p, p);
++        __syncthreads();
++        if (threadIdx.x == 0) { L.page_table()[p] = (int32_t) p; L.slot_page()[p] = (int32_t) p; L.slot_ref()[p] = 1; }
++    }
++}
++
++// block-wide exclusive scan of one int per thread (KVS_RT threads)
++static __device__ int kvs_block_scan(int v, int * warp_sums, int & total) {
++    const int lane = threadIdx.x & 31, w = threadIdx.x >> 5;
++    int x = v;
++#pragma unroll
++    for (int o = 1; o < 32; o <<= 1) { const int y = __shfl_up_sync(0xffffffffu, x, o); if (lane >= o) x += y; }
++    if (lane == 31) warp_sums[w] = x;
++    __syncthreads();
++    if (w == 0) {
++        int t = warp_sums[lane];
++#pragma unroll
++        for (int o = 1; o < 32; o <<= 1) { const int y = __shfl_up_sync(0xffffffffu, t, o); if (lane >= o) t += y; }
++        warp_sums[lane] = t;
++    }
++    __syncthreads();
++    total = warp_sums[31];
++    const int excl = x - v + (w > 0 ? warp_sums[w - 1] : 0);
++    __syncthreads();
++    return excl;
++}
++
++// make every page the lists name resident (one block): hits take the epoch and a reference bit, a missing page is
++// claimed once (-1 -> -2), then one CLOCK victim per miss that no page of this call uses, then the table is re-pointed
++static __global__ void __launch_bounds__(KVS_RT) kvs_resolve_kernel(ggml_cuda_kvs_layer L, const int32_t * __restrict__ idx,
++        const int32_t * __restrict__ counts, int n_lists, int n_kv_max) {
++    __shared__ int s_nmiss, s_lookups, s_cut;
++    __shared__ int warp_sums[32];
++    int32_t * ctl = L.ctl();
++    const int epoch = ctl[0] + 1;
++    if (threadIdx.x == 0) { s_nmiss = 0; s_lookups = 0; }
++    __syncthreads();
++    int lookups = 0;
++    for (int l = 0; l < n_lists; ++l) {
++        const int32_t * li = idx + (int64_t) l*n_kv_max;
++        const int n = counts[l];
++        for (int i = threadIdx.x; i < n; i += KVS_RT) {
++            const int c = li[i];
++            if (c < 0) continue;
++            const int b = c / KVS_PAGE;
++            if (i > 0 && li[i - 1] >= 0 && li[i - 1] / KVS_PAGE == b) continue; // ascending: one lookup per page
++            ++lookups;
++            const int sl = L.page_table()[b];
++            if (sl >= 0) {
++                L.slot_stamp()[sl] = epoch;
++                L.slot_ref()[sl] = 1;
++            } else if (sl == -1 && atomicCAS(&L.page_table()[b], -1, -2) == -1) {
++                const int k = atomicAdd(&s_nmiss, 1);
++                if (k < L.n_slots) L.miss_page()[k] = b; // more distinct misses than slots: overflow below
++            }
++        }
++    }
++    if (lookups > 0) atomicAdd(&s_lookups, lookups);
++    __syncthreads();
++    const int need = min(s_nmiss, (int) L.n_slots), n = (int) L.n_slots;
++    if (threadIdx.x == 0 && s_nmiss > n) ctl[3] = 1;
++    int hand = ctl[1], got = 0;
++    for (int scanned = 0; got < need && scanned < 3*n; scanned += KVS_RT) {
++        const int j = (int) (((int64_t) hand + threadIdx.x) % n);
++        const bool mine = L.slot_stamp()[j] == epoch;
++        const bool cand = !mine && (L.slot_page()[j] < 0 || L.slot_ref()[j] == 0);
++        int total = 0;
++        const int rank = kvs_block_scan(cand ? 1 : 0, warp_sums, total);
++        const int want = need - got;
++        if (threadIdx.x == 0) s_cut = KVS_RT;
++        __syncthreads();
++        if (cand && rank == want - 1) s_cut = threadIdx.x + 1;
++        __syncthreads();
++        const int cut = s_cut;
++        if (cand && rank < want) {
++            L.miss_slot()[got + rank] = j;
++            L.slot_stamp()[j] = epoch;
++        } else if (threadIdx.x < cut && !mine) {
++            L.slot_ref()[j] = 0;
++        }
++        got += total < want ? total : want;
++        hand = (int) (((int64_t) hand + cut) % n);
++        __syncthreads();
++    }
++    const int placed = got < need ? got : need;
++    for (int k = threadIdx.x; k < need; k += KVS_RT) {
++        const int b = L.miss_page()[k];
++        if (k >= placed) { L.page_table()[b] = -1; continue; }
++        const int sl = L.miss_slot()[k];
++        const int old = L.slot_page()[sl];
++        if (old >= 0) L.page_table()[old] = -1;
++        L.slot_page()[sl] = b;
++        L.slot_stamp()[sl] = epoch;
++        L.slot_ref()[sl] = 1;
++        L.page_table()[b] = sl;
++    }
++    if (threadIdx.x == 0) {
++        ctl[0] = epoch;
++        ctl[1] = hand;
++        ctl[2] = placed;
++        if (placed < need || ctl[3]) {
++            // a page the call needs is not resident: the attention would drop it. Never silent: the stream faults.
++            __trap();
++        }
++        unsigned long long * c = (unsigned long long *) (ctl + 4);
++        c[0] += (unsigned long long) placed;
++        c[1] += (unsigned long long) s_lookups;
++        c[2] += 1ull;
++    }
++}
++
++// cell -> slot row, in place (an unresolved page cannot reach here: the resolve traps on overflow)
++static __global__ void kvs_translate_kernel(ggml_cuda_kvs_layer L, int32_t * idx, const int32_t * counts, int n_kv_max) {
++    const int l = blockIdx.y;
++    const int n = counts[l];
++    int32_t * li = idx + (int64_t) l*n_kv_max;
++    for (int i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += gridDim.x*blockDim.x) {
++        const int c = li[i];
++        if (c < 0) continue;
++        const int sl = L.page_table()[c / KVS_PAGE];
++        li[i] = sl >= 0 ? sl*KVS_PAGE + c % KVS_PAGE : -1;
++    }
++}
++
++// check: every listed slot row equals its host row (lists hold slot rows, `orig` the cells)
++static __global__ void kvs_check_lists_kernel(ggml_cuda_kvs_layer L, const int32_t * slots, const int32_t * cells, const int32_t * counts, int n_kv_max) {
++    const int l = blockIdx.y;
++    const int n = counts[l];
++    for (int i = blockIdx.x; i < n; i += gridDim.x) {
++        const int c = cells[(int64_t) l*n_kv_max + i], s = slots[(int64_t) l*n_kv_max + i];
++        if (c < 0) continue;
++        bool bad = s < 0;
++        if (!bad) {
++            for (size_t j = threadIdx.x; j < L.rk; j += blockDim.x) bad |= L.sk[(int64_t) s*L.rk + j] != L.hk[(int64_t) c*L.rk + j];
++            for (size_t j = threadIdx.x; j < L.rv; j += blockDim.x) bad |= L.sv[(int64_t) s*L.rv + j] != L.hv[(int64_t) c*L.rv + j];
++        }
++        if (bad) atomicAdd(&L.ctl()[10], 1);
++    }
++}
++static __global__ void kvs_check_dense_kernel(ggml_cuda_kvs_layer L, const char * k, const char * v, int64_t n_kv) {
++    for (int64_t c = blockIdx.x; c < n_kv; c += gridDim.x) {
++        bool bad = false;
++        for (size_t j = threadIdx.x; j < L.rk; j += blockDim.x) bad |= k[c*L.rk + j] != L.hk[c*L.rk + j];
++        for (size_t j = threadIdx.x; j < L.rv; j += blockDim.x) bad |= v[c*L.rv + j] != L.hv[c*L.rv + j];
++        if (bad) atomicAdd(&L.ctl()[10], 1);
++    }
++}
++
++// the call's mask at slot-row columns, for the rows of each list's query tile
++static __global__ void kvs_mask_scatter_kernel(const half * mask, int64_t stride, half * ms, int64_t stride_s,
++        const int32_t * cells, const int32_t * slots, const int32_t * counts, int n_kv_max, int ncols1, int64_t ne01) {
++    const int l = blockIdx.y;
++    const int n = counts[l];
++    for (int i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += gridDim.x*blockDim.x) {
++        const int c = cells[(int64_t) l*n_kv_max + i], s = slots[(int64_t) l*n_kv_max + i];
++        if (c < 0 || s < 0) continue;
++        for (int64_t j = (int64_t) l*ncols1; j < (int64_t) (l + 1)*ncols1 && j < ne01; ++j) {
++            ms[j*stride_s + s] = mask[j*stride + c];
++        }
++    }
++}
++
++// prompt calls past N: mark the pages the lists name, then stage only those (from the slot when resident, else the host
++// copy) into the staging pool at their identity rows. Lists and mask are untouched: the stock read of the staging pool.
++static __global__ void kvs_mark_kernel(const int32_t * idx, const int32_t * counts, int n_kv_max, uint32_t * bits) {
++    const int l = blockIdx.y;
++    const int n = counts[l];
++    for (int i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += gridDim.x*blockDim.x) {
++        const int c = idx[(int64_t) l*n_kv_max + i];
++        if (c < 0) continue;
++        const int b = c / KVS_PAGE;
++        atomicOr(&bits[b >> 5], 1u << (b & 31));
++    }
++}
++static __global__ void kvs_stage_marked_kernel(ggml_cuda_kvs_layer L, const uint32_t * bits, int64_t P) {
++    const int64_t p = (int64_t) blockIdx.x*(blockDim.x/32) + threadIdx.x/32;
++    if (p >= P || !(bits[p >> 5] & (1u << (p & 31)))) return;
++    const int lane = threadIdx.x & 31;
++    const int32_t sl = L.page_table()[p];
++    const int64_t bk = KVS_PAGE*(int64_t) L.rk, bv = KVS_PAGE*(int64_t) L.rv;
++    const uint4 * sk = (const uint4 *) (sl >= 0 ? L.sk + sl*bk : L.hk + p*bk);
++    const uint4 * sv = (const uint4 *) (sl >= 0 ? L.sv + sl*bv : L.hv + p*bv);
++    uint4 * dk = (uint4 *) (L.gk + p*bk);
++    uint4 * dv = (uint4 *) (L.gv + p*bv);
++    for (int64_t i = lane; i < bk/16; i += 32) dk[i] = sk[i];
++    for (int64_t i = lane; i < bv/16; i += 32) dv[i] = sv[i];
++}
++// check for a union-staged call: every listed row of the staging pool equals its host row
++static __global__ void kvs_check_staged_lists_kernel(ggml_cuda_kvs_layer L, const int32_t * cells, const int32_t * counts, int n_kv_max) {
++    const int l = blockIdx.y;
++    const int n = counts[l];
++    for (int i = blockIdx.x; i < n; i += gridDim.x) {
++        const int c = cells[(int64_t) l*n_kv_max + i];
++        if (c < 0) continue;
++        bool bad = false;
++        for (size_t j = threadIdx.x; j < L.rk; j += blockDim.x) bad |= L.gk[(int64_t) c*L.rk + j] != L.hk[(int64_t) c*L.rk + j];
++        for (size_t j = threadIdx.x; j < L.rv; j += blockDim.x) bad |= L.gv[(int64_t) c*L.rv + j] != L.hv[(int64_t) c*L.rv + j];
++        if (bad) atomicAdd(&L.ctl()[10], 1);
++    }
++}
++
++static uint32_t * kvs_bits = nullptr; // one page bitmap for all layers
++static int64_t    kvs_bits_words = 0;
++
++// The staging pool and the bitmap have exactly one user: the target context, one stream, one call at a time. A second
++// user (another context or stream, e.g. a paged drafter) would race on them: it fails here instead.
++static cudaStream_t kvs_stage_stream = nullptr;
++static void kvs_one_user(cudaStream_t s) {
++    if (kvs_stage_stream == nullptr) kvs_stage_stream = s;
++    GGML_ASSERT(kvs_stage_stream == s && "kv_stream: the staging pool has one user stream; a second one needs an ordering protocol");
++}
++
++// ---------------------------------------------------------------------------------------------------- host side
++
++static thread_local bool kvs_bypass = false;
++void ggml_cuda_kvs_set_bypass(bool on) { kvs_bypass = on; }
++bool ggml_cuda_kvs_streamed(const ggml_tensor * K) {
++    bool is_v = false;
++    return !kvs_layers().empty() && ggml_cuda_kvs_find(K->data, &is_v) != nullptr;
++}
++
++static bool kvs_resolves(const ggml_cuda_kvs_layer * L, int64_t n_kv, int64_t n_lists, int64_t n_kv_max, int64_t ne01) {
++    const int64_t bound = n_lists*(n_kv_max/KVS_PAGE + 2); // the page bound of one resolve: half the pool for victims
++    return n_kv > L->n_slots*KVS_PAGE && 2*bound <= L->n_slots && ne01 <= 64;
++}
++
++int64_t ggml_cuda_kvs_resolve_cells(const ggml_tensor * K, int64_t n_kv, int64_t n_lists, int64_t n_kv_max, int64_t ne01) {
++    if (kvs_layers().empty() || kvs_bypass) return 0;
++    bool is_v = false;
++    const ggml_cuda_kvs_layer * L = ggml_cuda_kvs_find(K->data, &is_v);
++    return L && kvs_resolves(L, n_kv, n_lists, n_kv_max, ne01) ? L->n_slots*KVS_PAGE : 0;
++}
++
++static void kvs_check_result(const ggml_cuda_kvs_layer * L, cudaStream_t stream, const char * what, int64_t n_kv) {
++    static uint64_t n_checks = 0;
++    int32_t c[KVS_CTL];
++    CUDA_CHECK(cudaMemcpyAsync(c, L->ctl(), sizeof(c), cudaMemcpyDeviceToHost, stream));
++    CUDA_CHECK(cudaStreamSynchronize(stream));
++    ++n_checks;
++    const unsigned long long * u = (const unsigned long long *) (c + 4);
++    if (c[10] != 0 || c[3] != 0) {
++        GGML_LOG_ERROR("LLAMA_KV_STREAM_CHECK: layer %d, %s call, n_kv %lld: %d rows differ from the host copy, overflow %d\n",
++            L->il, what, (long long) n_kv, c[10], c[3]);
++        GGML_ABORT("LLAMA_KV_STREAM_CHECK: a streamed K/V row differs from the host copy");
++    }
++    if (n_checks <= 3 || n_checks % 2000 == 0) {
++        GGML_LOG_WARN("kv_stream check %llu ok (layer %d, %s, n_kv %lld): misses %llu of %llu page lookups in %llu resolves\n",
++            (unsigned long long) n_checks, L->il, what, (long long) n_kv, u[0], u[1], u[2]);
++    }
++}
++
++static __global__ void kvs_arange_kernel(int64_t * x, int64_t n) {
++    const int64_t i = (int64_t) blockIdx.x*blockDim.x + threadIdx.x;
++    if (i < n) x[i] = i;
++}
++
++// rows quantized in VRAM, then whole rows to the host copy (and the resident slot): 16 B stores over PCIe instead of the
++// quantize kernel's byte stores into host memory
++template <typename idx_t>
++static __global__ void kvs_rows_out_kernel(ggml_cuda_kvs_layer L, bool is_v, const char * rows_q, const idx_t * rows,
++                                           int64_t n_rows, int64_t row_off) {
++    const int64_t r = blockIdx.x;
++    if (r >= n_rows) return;
++    const int64_t c = (int64_t) rows[r] + row_off;
++    if (c < 0 || c >= L.n_cells) return;
++    const size_t rb = is_v ? L.rv : L.rk;
++    const uint4 * src = (const uint4 *) (rows_q + r*rb);
++    uint4 * host = (uint4 *) ((is_v ? L.hv : L.hk) + c*rb);
++    const int32_t sl = L.page_table()[c / KVS_PAGE];
++    uint4 * slot = sl < 0 ? nullptr : (uint4 *) ((is_v ? L.sv : L.sk) + ((int64_t) sl*KVS_PAGE + c % KVS_PAGE)*rb);
++    for (size_t i = threadIdx.x; i < rb/16; i += blockDim.x) {
++        const uint4 v = src[i];
++        host[i] = v;
++        if (slot) slot[i] = v;
++    }
++}
++
++bool ggml_cuda_kvs_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
++    if (kvs_layers().empty()) return false;
++    bool is_v = false;
++    ggml_cuda_kvs_layer * L = ggml_cuda_kvs_find(dst->data, &is_v);
++    if (!L) return false;
++    const ggml_tensor * rows = dst->src[1];
++    const size_t rb = is_v ? L->rv : L->rk;
++    GGML_ASSERT(dst->nb[1] == rb && ggml_nelements(rows) == rows->ne[0] && dst->src[0]->ne[1] == rows->ne[0] &&
++                "kv_stream: one row index per K/V row");
++    const char * base = is_v ? L->hv : L->hk;
++    GGML_ASSERT(((const char *) dst->data - base) % rb == 0);
++    const int64_t off = ((const char *) dst->data - base) / rb;
++    const int64_t n = rows->ne[0];
++    if (n == 0) return true;
++    cudaStream_t stream = ctx.stream();
++    ggml_cuda_pool_alloc<char>    q(ctx.pool(), n*rb);
++    ggml_cuda_pool_alloc<int64_t> ar(ctx.pool(), n);
++    kvs_arange_kernel<<<(unsigned) ((n + 255)/256), 256, 0, stream>>>(ar.ptr, n);
++    ggml_tensor ix = *rows;
++    ix.type = GGML_TYPE_I64; ix.data = ar.ptr; ix.nb[0] = sizeof(int64_t);
++    for (int d = 1; d < GGML_MAX_DIMS; ++d) ix.nb[d] = ix.nb[d - 1]*ix.ne[d - 1];
++    ggml_tensor tmp = *dst;
++    tmp.data = q.ptr; tmp.view_src = nullptr; tmp.view_offs = 0;
++    tmp.ne[1] = n; tmp.ne[2] = 1; tmp.ne[3] = 1;
++    tmp.nb[2] = tmp.nb[1]*n; tmp.nb[3] = tmp.nb[2];
++    tmp.src[1] = &ix;
++    ggml_cuda_op_set_rows(ctx, &tmp);
++    if (rows->type == GGML_TYPE_I64) {
++        kvs_rows_out_kernel<int64_t><<<(unsigned) n, 64, 0, stream>>>(*L, is_v, q.ptr, (const int64_t *) rows->data, n, off);
++    } else {
++        kvs_rows_out_kernel<int32_t><<<(unsigned) n, 64, 0, stream>>>(*L, is_v, q.ptr, (const int32_t *) rows->data, n, off);
++    }
++    CUDA_CHECK(cudaGetLastError());
++    return true;
++}
++
++bool ggml_cuda_kvs_attn(cudaStream_t stream, const ggml_tensor * K, const ggml_tensor * V, int64_t n_kv,
++                        bool sparse_direct, int32_t * indices, const int32_t * counts, int64_t n_lists, int64_t n_kv_max,
++                        ggml_cuda_kvs_mask * mask, const char ** K_data, const char ** V_data) {
++    if (kvs_layers().empty() || kvs_bypass) return false;
++    bool is_v = false;
++    ggml_cuda_kvs_layer * L = ggml_cuda_kvs_find(K->data, &is_v);
++    if (!L) return false;
++    bool v_is_v = false;
++    GGML_ASSERT(!is_v && K->data == L->hk && ggml_cuda_kvs_find(V->data, &v_is_v) == L && v_is_v && V->data == L->hv);
++    GGML_ASSERT(K->nb[1] == L->rk && V->nb[1] == L->rv);
++    static const int check = kvs_env("LLAMA_KV_STREAM_CHECK");
++
++    if (sparse_direct && indices != nullptr && mask != nullptr && mask->cells != nullptr && mask->scratch != nullptr &&
++            kvs_resolves(L, n_kv, n_lists, n_kv_max, mask->ne01)) {
++        int32_t * cells = mask->cells;
++        CUDA_CHECK(cudaMemcpyAsync(cells, indices, n_lists*n_kv_max*sizeof(int32_t), cudaMemcpyDeviceToDevice, stream));
++        if (check) {
++            CUDA_CHECK(cudaMemsetAsync(L->ctl() + 10, 0, sizeof(int32_t), stream));
++        }
++        kvs_resolve_kernel<<<1, KVS_RT, 0, stream>>>(*L, indices, counts, (int) n_lists, (int) n_kv_max);
++        kvs_copy_misses_kernel<<<96, 128, 0, stream>>>(*L);
++        const dim3 grid((unsigned) std::min<int64_t>((n_kv_max + 255)/256, 64), (unsigned) n_lists);
++        kvs_translate_kernel<<<grid, 256, 0, stream>>>(*L, indices, counts, (int) n_kv_max);
++        kvs_mask_scatter_kernel<<<grid, 256, 0, stream>>>(mask->data, mask->stride, mask->scratch, L->n_slots*KVS_PAGE,
++            cells, indices, counts, (int) n_kv_max, mask->ncols1, mask->ne01);
++        CUDA_CHECK(cudaGetLastError());
++        mask->swapped    = true;
++        mask->out_stride = L->n_slots*KVS_PAGE;
++        if (check) {
++            kvs_check_lists_kernel<<<dim3(64, (unsigned) n_lists), 128, 0, stream>>>(*L, indices, cells, counts, (int) n_kv_max);
++            kvs_check_result(L, stream, "resolve", n_kv);
++        }
++        *K_data = L->sk;
++        *V_data = L->sv;
++        return true;
++    }
++    if (n_kv <= L->n_slots*KVS_PAGE) {
++        // the first n_kv cells at their identity slots: a scan when they already are
++        const int64_t P = (n_kv + KVS_PAGE - 1)/KVS_PAGE;
++        kvs_identity_a_kernel<<<(unsigned) ((P + 255)/256), 256, 0, stream>>>(*L, P);
++        kvs_identity_b_kernel<<<(unsigned) ((P + 255)/256), 256, 0, stream>>>(*L, P);
++        kvs_identity_c_kernel<<<96, 128, 0, stream>>>(*L, P);
++        CUDA_CHECK(cudaGetLastError());
++        *K_data = L->sk;
++        *V_data = L->sv;
++    } else {
++        if (indices != nullptr && n_lists > 0) {
++            // a prompt ubatch at depth with index lists: stage only the pages they name
++            const int64_t P = (n_kv + KVS_PAGE - 1)/KVS_PAGE;
++            GGML_ASSERT((P + 31)/32 <= kvs_bits_words);
++            kvs_one_user(stream);
++            CUDA_CHECK(cudaMemsetAsync(kvs_bits, 0, (P + 31)/32*sizeof(uint32_t), stream));
++            kvs_mark_kernel<<<dim3(16, (unsigned) n_lists), 256, 0, stream>>>(indices, counts, (int) n_kv_max, kvs_bits);
++            kvs_stage_marked_kernel<<<(unsigned) ((P + 7)/8), 256, 0, stream>>>(*L, kvs_bits, P);
++            CUDA_CHECK(cudaGetLastError());
++            *K_data = L->gk;
++            *V_data = L->gv;
++            if (check) {
++                CUDA_CHECK(cudaMemsetAsync(L->ctl() + 10, 0, sizeof(int32_t), stream));
++                kvs_check_staged_lists_kernel<<<dim3(64, (unsigned) n_lists), 128, 0, stream>>>(*L, indices, counts, (int) n_kv_max);
++                kvs_check_result(L, stream, "union-staged", n_kv);
++            }
++            return true;
++        }
++        // a prompt ubatch at depth without lists: the whole prefix, host -> staging pool, read as stock
++        kvs_one_user(stream);
++        CUDA_CHECK(cudaMemcpyAsync(L->gk, L->hk, n_kv*L->rk, cudaMemcpyDefault, stream));
++        CUDA_CHECK(cudaMemcpyAsync(L->gv, L->hv, n_kv*L->rv, cudaMemcpyDefault, stream));
++        *K_data = L->gk;
++        *V_data = L->gv;
++    }
++    if (check) {
++        CUDA_CHECK(cudaMemsetAsync(L->ctl() + 10, 0, sizeof(int32_t), stream));
++        kvs_check_dense_kernel<<<256, 128, 0, stream>>>(*L, *K_data, *V_data, n_kv);
++        kvs_check_result(L, stream, *K_data == L->sk ? "identity" : "staged", n_kv);
++    }
++    return true;
++}
++
++void ggml_cuda_kvs_forget(const void * ptr, size_t size) {
++    const char * p = (const char *) ptr;
++    auto & v = kvs_layers();
++    for (size_t i = 0; i < v.size();) {
++        ggml_cuda_kvs_layer * L = v[i];
++        if (L->hk >= p && L->hk < p + size) {
++            CUDA_CHECK(cudaFree(L->st));
++            delete L;
++            v.erase(v.begin() + i);
++        } else {
++            ++i;
++        }
++    }
++    if (v.empty()) { // the last cache is gone: the next one may come with another stream and more pages
++        if (kvs_bits) CUDA_CHECK(cudaFree(kvs_bits));
++        kvs_bits = nullptr; kvs_bits_words = 0; kvs_stage_stream = nullptr;
++    }
++}
++
++void ggml_cuda_kvs_gpu_write(cudaStream_t stream, const ggml_tensor * dst) {
++    if (kvs_layers().empty() || dst->op == GGML_OP_SET_ROWS || ggml_is_empty(dst) || dst->op == GGML_OP_NONE ||
++        dst->op == GGML_OP_VIEW || dst->op == GGML_OP_RESHAPE || dst->op == GGML_OP_PERMUTE || dst->op == GGML_OP_TRANSPOSE) return;
++    bool is_v = false;
++    ggml_cuda_kvs_layer * L = ggml_cuda_kvs_find(dst->data, &is_v);
++    if (L) {
++        kvs_empty_kernel<<<64, 256, 0, stream>>>(*L); // an op wrote the host copy without write-through
++        CUDA_CHECK(cudaGetLastError());
++    }
++}
++
++void ggml_cuda_kvs_invalidate(const void * ptr, size_t size) {
++    const char * p = (const char *) ptr;
++    for (auto * L : kvs_layers()) {
++        const bool hit_k = p < L->hk + L->n_cells*L->rk && p + size > L->hk;
++        const bool hit_v = p < L->hv + L->n_cells*L->rv && p + size > L->hv;
++        if (hit_k || hit_v) {
++            kvs_empty_kernel<<<64, 256, 0, cudaStreamPerThread>>>(*L);
++            CUDA_CHECK(cudaGetLastError());
++            CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
++        }
++    }
++}
++
++extern "C" void ggml_backend_cuda_kvs_register(void * host_k, void * host_v, void * slot_k, void * slot_v, void * stage_k,
++                                               void * stage_v, int64_t n_cells, int64_t n_slot_cells,
++                                               size_t row_k, size_t row_v, int il) {
++    static std::mutex mutex;
++    std::lock_guard<std::mutex> lock(mutex);
++    GGML_ASSERT(n_cells % KVS_PAGE == 0 && n_slot_cells % KVS_PAGE == 0 && n_slot_cells >= KVS_RT*KVS_PAGE);
++    GGML_ASSERT(row_k % 16 == 0 && row_v % 16 == 0);
++    for (auto * o : kvs_layers()) GGML_ASSERT((o->gk != stage_k || (o->rk == row_k && o->rv == row_v)) && "kv_stream: one staging pool, one row size");
++    auto * L = new ggml_cuda_kvs_layer;
++    L->hk = (const char *) host_k; L->hv = (const char *) host_v;
++    L->sk = (char *) slot_k; L->sv = (char *) slot_v;
++    L->gk = (char *) stage_k; L->gv = (char *) stage_v;
++    L->n_cells = n_cells; L->n_pages = n_cells/KVS_PAGE; L->n_slots = n_slot_cells/KVS_PAGE;
++    L->rk = row_k; L->rv = row_v; L->il = il;
++    int32_t * state = nullptr;
++    CUDA_CHECK(cudaMalloc(&state, (L->n_pages + 5*L->n_slots + KVS_CTL)*sizeof(int32_t)));
++    L->st = state;
++    const int64_t words = (L->n_pages + 31)/32;
++    if (words > kvs_bits_words) {
++        if (kvs_bits) CUDA_CHECK(cudaFree(kvs_bits)); // cudaFree waits for the device: no call still reads the old one
++        CUDA_CHECK(cudaMalloc(&kvs_bits, words*sizeof(uint32_t)));
++        kvs_bits_words = words;
++    }
++    CUDA_CHECK(cudaMemset(L->ctl(), 0, KVS_CTL*sizeof(int32_t)));
++    kvs_empty_kernel<<<64, 256>>>(*L);
++    CUDA_CHECK(cudaGetLastError());
++    CUDA_CHECK(cudaDeviceSynchronize());
++    kvs_layers().push_back(L);
++}
+diff --git a/ggml/src/ggml-cuda/kv-stream.cuh b/ggml/src/ggml-cuda/kv-stream.cuh
+new file mode 100644
+index 0000000..4fe3c44
+--- /dev/null
++++ b/ggml/src/ggml-cuda/kv-stream.cuh
+@@ -0,0 +1,70 @@
++#pragma once
++// LLAMA_KV_STREAM (local long-context mod, off by default): KV streaming for the sparse-attention layers.
++//
++// A streamed layer's AUTHORITATIVE K/V lives in pinned, device-mapped host memory: a buffer of the CUDA buffer type
++// family (so the scheduler runs every op on it on the GPU), laid out exactly like the stock cache. Every write
++// (set_rows) lands there unchanged. VRAM holds a pool of n_slots pages (page = 4 cells, one indexer pool, K and V)
++// and a residency map page -> slot. Invariant: a resident slot holds the same bytes as its host page.
++// Writers keep it: set_rows also writes the slot when the page is resident (write-through).
++// Readers (flash attention, launch_fattn) see the cache through the map:
++//   - sparse calls whose selection fits the pool: a device resolve after compact_mask makes every selected page resident
++//     (CLOCK, misses copied host -> slot), then the index lists are rewritten to slot rows: same rows, same order,
++//     same bytes, so the output is the stock output bit for bit;
++//   - calls over n_kv <= the pool: pages [0, n_kv/4) are put at their identity slots (a no-op scan once they are);
++//   - anything else (a prompt ubatch at depth): the pages its index lists name (else the first n_kv cells) are copied
++//     host -> one staging pool, read as stock. The pool has one user stream (asserted).
++#include "common.cuh"
++
++#include <cstdint>
++
++struct ggml_cuda_kvs_layer;
++
++// the layer whose host copy holds `data`, or nullptr; *is_v tells K from V
++ggml_cuda_kvs_layer * ggml_cuda_kvs_find(const void * data, bool * is_v);
++
++// set_rows into a host copy: quantize into VRAM, then whole rows to the host copy and the resident slot.
++// Returns false (the caller runs the stock op) for any other tensor.
++bool ggml_cuda_kvs_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
++
++// the mask of a resolved call: the kernel gathers mask columns with the same (rewritten) index list as K/V, so the
++// call's mask is scattered to slot-row columns first: ms[j][slot row] = mask[j][cell] for every listed entry
++struct ggml_cuda_kvs_mask {
++    const half * data = nullptr;   // in: the stock mask, row stride `stride` halfs
++    int64_t stride = 0;
++    int64_t ne01 = 0;              // queries
++    int ncols1 = 1;                // queries per list
++    int32_t * cells = nullptr;     // scratch: n_lists*n_kv_max ints (the lists before the rewrite)
++    half * scratch = nullptr;      // scratch: ne01*n_slot_cells halfs
++    bool swapped = false;          // out: read `scratch` with row stride n_slot_cells instead
++    int64_t out_stride = 0;
++};
++
++// > 0 when a direct sparse call over K resolves pages: the slot-cell count (sizes the mask scratch)
++int64_t ggml_cuda_kvs_resolve_cells(const ggml_tensor * K, int64_t n_kv, int64_t n_lists, int64_t n_kv_max, int64_t ne01);
++
++// fattn.cu check mode: stock read of the host copy (no pages) on this thread
++void ggml_cuda_kvs_set_bypass(bool on);
++bool ggml_cuda_kvs_streamed(const ggml_tensor * K);
++
++// launch_fattn: K/V data for this call. Rewrites `indices` (sparse lists) in place when it resolves.
++// Returns false when K is not streamed (K_data/V_data untouched).
++bool ggml_cuda_kvs_attn(cudaStream_t stream, const ggml_tensor * K, const ggml_tensor * V, int64_t n_kv,
++                        bool sparse_direct, int32_t * indices, const int32_t * counts, int64_t n_lists, int64_t n_kv_max,
++                        ggml_cuda_kvs_mask * mask, const char ** K_data, const char ** V_data);
++
++// any other op that writes a host copy on the GPU (context shift's cpy): drop that layer's residency, in stream order
++void ggml_cuda_kvs_gpu_write(cudaStream_t stream, const ggml_tensor * dst);
++
++// a host copy's buffer is freed: drop its layers (a later allocation may reuse the address)
++void ggml_cuda_kvs_forget(const void * ptr, size_t size);
++
++// a write into a host copy that bypasses set_rows (state load, clear, context shift): drop the residency
++void ggml_cuda_kvs_invalidate(const void * ptr, size_t size);
++
++// exported through the backend registry (get_proc_address)
++extern "C" {
++ggml_backend_buffer_type_t ggml_backend_cuda_kvs_host_buft(int device);
++void ggml_backend_cuda_kvs_register(void * host_k, void * host_v, void * slot_k, void * slot_v, void * stage_k,
++                                    void * stage_v, int64_t n_cells, int64_t n_slot_cells,
++                                    size_t row_k, size_t row_v, int il);
++}
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 426c487..cbe1d9c 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -22,6 +22,7 @@ set(LLAMA_CORE_SOURCES
+     llama-impl.cpp
+     llama-io.cpp
+     llama-kv-cache.cpp
++    llama-kv-stream.cpp
+     llama-kv-cache-iswa.cpp
+     llama-kv-cache-dsa.cpp
+     llama-kv-cache-dsa-iswa.cpp
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index f3dc1c9..ffa6a2a 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-kv-cache.h"
++#include "llama-kv-stream.h"
+ 
+ #include "llama-impl.h"
+ #include "llama-io.h"
+@@ -163,6 +164,12 @@ llama_kv_cache::llama_kv_cache(
+ 
+     const bool is_mla = hparams.is_mla();
+ 
++    // LLAMA_KV_STREAM=N (local long-context mod, off by default): the sparse-attention layers keep their full q8_0 K/V in
++    // pinned host memory (a CUDA buffer type, so every op still runs on the GPU) and N cells of it in VRAM as 4-cell
++    // pages; flash attention reads through the page map (ggml-cuda/kv-stream.cu), the bytes it reads are the stock bytes
++    llama_kv_stream kvs = llama_kv_stream::plan(model, hparams, &hparams == &model.hparams && !is_indexer && !other,
++                                                type_k, type_v, kv_size, n_stream, offload);
++
+     for (uint32_t il = 0; il < n_layer; il++) {
+         if (!hparams.has_kv(il)) {
+             LLAMA_LOG_DEBUG("%s: layer %3d: does not have KV cache\n", __func__, il);
+@@ -231,8 +238,14 @@ llama_kv_cache::llama_kv_cache(
+         const bool has_k = true;
+         const bool has_v = !is_mla;
+ 
+-        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
+-        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
++        // LLAMA_KV_STREAM: the K/V of a streamed layer go to the host buffer type, the pages to the device one
++        ggml_context * ctx_kv = kvs.streams(hparams, il, has_v) ? ctx_for_buft(kvs.host_buft) : ctx;
++
++        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx_kv, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
++        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx_kv, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
++        if (ctx_kv != ctx) {
++            kvs.add_layer(ctx, hparams, il, k, v);
++        }
+ 
+         has_k && ggml_format_name(k, "cache_%sk_l%d", name_tag, il);
+         has_v && ggml_format_name(v, "cache_%sv_l%d", name_tag, il);
+@@ -241,8 +254,8 @@ llama_kv_cache::llama_kv_cache(
+         std::vector<ggml_tensor *> v_stream;
+ 
+         for (uint32_t s = 0; s < n_stream; ++s) {
+-            k_stream.push_back(has_k ? ggml_view_2d(ctx, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]) : nullptr);
+-            v_stream.push_back(has_v ? ggml_view_2d(ctx, v, n_embd_v_gqa, kv_size, v->nb[1], s*v->nb[2]) : nullptr);
++            k_stream.push_back(has_k ? ggml_view_2d(ctx_kv, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]) : nullptr);
++            v_stream.push_back(has_v ? ggml_view_2d(ctx_kv, v, n_embd_v_gqa, kv_size, v->nb[1], s*v->nb[2]) : nullptr);
+         }
+ 
+         map_layer_ids[il] = layers.size();
+@@ -281,6 +294,10 @@ llama_kv_cache::llama_kv_cache(
+         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
+     }
+ 
++    if (!no_alloc) {
++        kvs.register_layers();
++    }
++
+     {
+         const size_t memory_size_k = size_k_bytes();
+         const size_t memory_size_v = size_v_bytes();
+diff --git a/src/llama-kv-stream.cpp b/src/llama-kv-stream.cpp
+new file mode 100644
+index 0000000..2f0055a
+--- /dev/null
++++ b/src/llama-kv-stream.cpp
+@@ -0,0 +1,93 @@
++#include "llama-kv-stream.h"
++
++#include "llama-impl.h"
++#include "llama-model.h"
++
++#include <cstdlib>
++
++static int64_t kvs_env(const char * name, int64_t def) {
++    const char * e = getenv(name);
++    return e ? atoll(e) : def;
++}
++
++static const char * kvs_check_n(int64_t n, uint32_t kv_size) {
++    if (n % 4 != 0 || n < 4096) return "N must be a multiple of 4 and >= 4096";
++    if ((int64_t) kv_size <= n) return "the context fits in N cells";
++    return nullptr;
++}
++
++llama_kv_stream llama_kv_stream::plan(const llama_model & model, const llama_hparams & hparams, bool main_attn_cache,
++                                      ggml_type type_k, ggml_type type_v, uint32_t kv_size, uint32_t n_stream, bool offload) {
++    GGML_UNUSED(hparams);
++    llama_kv_stream s;
++    int64_t n_main  = kvs_env("LLAMA_KV_STREAM", 0);
++    if (n_main <= 0 || !main_attn_cache) {
++        return s;
++    }
++    const char * why = nullptr;
++    if (model.arch != LLM_ARCH_QWEN4EXP)                          why = "not a QSA model";
++    else if (type_k != GGML_TYPE_Q8_0 || type_v != GGML_TYPE_Q8_0) why = "K/V are not q8_0";
++    else if (n_stream != 1 || !offload)                           why = "needs one unified stream on the GPU";
++    ggml_backend_dev_t dev = why ? nullptr : model.dev_output();
++    if (!why && !dev) why = "no GPU device";
++    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
++    auto * get_buft = reg ? (ggml_backend_buffer_type_t (*)(int)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_kvs_host_buft") : nullptr;
++    if (!why && !get_buft) why = "the backend has no streamed KV (CUDA only)";
++    if (why) {
++        LLAMA_LOG_WARN("%s: LLAMA_KV_STREAM ignored: %s\n", __func__, why);
++        return s;
++    }
++    if (const char * w = kvs_check_n(n_main, kv_size)) {
++        LLAMA_LOG_WARN("%s: LLAMA_KV_STREAM=%lld ignored: %s\n", __func__, (long long) n_main, w);
++        return s;
++    }
++    int dev_idx = 0;
++    for (size_t i = 0; i < ggml_backend_reg_dev_count(reg); ++i) {
++        if (ggml_backend_reg_dev_get(reg, i) == dev) { dev_idx = (int) i; break; }
++    }
++    s.n_main    = n_main;
++    s.host_buft = get_buft(dev_idx);
++    s.reg       = reg;
++    s.kv_size   = kv_size;
++    return s;
++}
++
++// the target's attention layers only: the MTP drafter (il >= n_layer, its own context and stream) is not streamed
++int64_t llama_kv_stream::slot_cells(const llama_hparams & hparams, uint32_t il) const {
++    return il < hparams.n_layer() ? n_main : 0;
++}
++
++bool llama_kv_stream::streams(const llama_hparams & hparams, uint32_t il, bool has_v) const {
++    return host_buft != nullptr && has_v && slot_cells(hparams, il) > 0 && hparams.dsv4_compress_ratios[il] > 0;
++}
++
++void llama_kv_stream::add_layer(ggml_context * ctx_dev, const llama_hparams & hparams, int il, ggml_tensor * k, ggml_tensor * v) {
++    const int64_t n_slot_cells = slot_cells(hparams, il);
++    ggml_tensor * ks = ggml_new_tensor_2d(ctx_dev, k->type, k->ne[0], n_slot_cells);
++    ggml_tensor * vs = ggml_new_tensor_2d(ctx_dev, v->type, v->ne[0], n_slot_cells);
++    ggml_format_name(ks, "cache_k_pages_l%d", il);
++    ggml_format_name(vs, "cache_v_pages_l%d", il);
++    if (gk == nullptr) {
++        gk = ggml_new_tensor_2d(ctx_dev, k->type, k->ne[0], kv_size);
++        gv = ggml_new_tensor_2d(ctx_dev, v->type, v->ne[0], kv_size);
++        ggml_set_name(gk, "cache_k_stage");
++        ggml_set_name(gv, "cache_v_stage");
++    }
++    layers.push_back({ il, k, v, ks, vs, n_slot_cells });
++}
++
++void llama_kv_stream::register_layers() {
++    if (layers.empty()) {
++        return;
++    }
++    using reg_fn = void (*)(void *, void *, void *, void *, void *, void *, int64_t, int64_t, size_t, size_t, int);
++    auto * fn = (reg_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_kvs_register");
++    GGML_ASSERT(fn != nullptr);
++    for (const auto & l : layers) {
++        GGML_ASSERT(l.k->data && l.ks->data);
++        fn(l.k->data, l.v->data, l.ks->data, l.vs->data, gk ? gk->data : nullptr, gv ? gv->data : nullptr,
++           l.k->ne[1], l.n_slot_cells, l.k->nb[1], l.v->nb[1], l.il);
++        LLAMA_LOG_WARN("%s: LLAMA_KV_STREAM: layer %d streamed, %lld of %lld cells in VRAM\n", __func__, l.il,
++            (long long) l.n_slot_cells, (long long) l.k->ne[1]);
++    }
++}
+diff --git a/src/llama-kv-stream.h b/src/llama-kv-stream.h
+new file mode 100644
+index 0000000..a509d19
+--- /dev/null
++++ b/src/llama-kv-stream.h
+@@ -0,0 +1,39 @@
++#pragma once
++
++// LLAMA_KV_STREAM (local long-context mod, off by default): where a KV cache layer keeps its K/V.
++// The extension point of llama_kv_cache's storage: plan() decides once per cache, streams() per layer, and the cache
++// asks add_layer() for the VRAM side of a streamed layer and register_layers() once its buffers exist.
++// A streamed layer: full q8_0 K/V in pinned host memory under the CUDA buffer type family (every op still runs on
++// the GPU), plus `n_slot_cells` cells of VRAM pages that flash attention reads through a page map (ggml-cuda/kv-stream.cu).
++//   LLAMA_KV_STREAM=N        resident cells per target attention layer (multiple of 4, >= 4096); 0 or unset = stock
++//   LLAMA_KV_STREAM_CHECK=1  every streamed read is compared with the host copy, abort on a differing byte
++//                            (synchronizes: run with GGML_CUDA_DISABLE_GRAPHS=1)
++
++#include "ggml.h"
++#include "ggml-backend.h"
++
++#include <cstdint>
++#include <vector>
++
++struct llama_model;
++struct llama_hparams;
++
++struct llama_kv_stream {
++    int64_t n_main  = 0;                // VRAM cells per target attention layer (LLAMA_KV_STREAM); 0: off
++    ggml_backend_buffer_type_t host_buft = nullptr;
++    ggml_backend_reg_t         reg       = nullptr;
++
++    struct layer { int il; ggml_tensor * k, * v, * ks, * vs; int64_t n_slot_cells; };
++    std::vector<layer> layers;
++    ggml_tensor * gk = nullptr;         // one staging pool for all layers (calls on one stream are serial)
++    ggml_tensor * gv = nullptr;
++    int64_t kv_size = 0;
++
++    static llama_kv_stream plan(const llama_model & model, const llama_hparams & hparams, bool main_attn_cache,
++                                ggml_type type_k, ggml_type type_v, uint32_t kv_size, uint32_t n_stream, bool offload);
++
++    int64_t slot_cells(const llama_hparams & hparams, uint32_t il) const;
++    bool streams(const llama_hparams & hparams, uint32_t il, bool has_v) const;
++    void add_layer(ggml_context * ctx_dev, const llama_hparams & hparams, int il, ggml_tensor * k, ggml_tensor * v);
++    void register_layers();
++};

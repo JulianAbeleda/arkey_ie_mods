@@ -1393,6 +1393,99 @@
      "why": "no check mode: the switch only destroys cached CUDA graph executables earlier than the 10 s idle sweep would; a destroyed graph is captured again on its next use, so what is computed does not change. Identity rests on the 59/59 reply pair"
     }
    ]
+  },
+  {
+   "name": "kv-stream",
+   "title": "KV streaming: attention K/V in pinned host RAM, N cells a layer paged in VRAM",
+   "patch": "patches/21-kv-stream.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KV_STREAM",
+    "on": "N: cells per layer kept in VRAM (a multiple of 4, >= 4096, below the context)"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_KV_STREAM_CHECK",
+    "needs": [
+     "LLAMA_KV_STREAM"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_KV_STREAM",
+   "files": [
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn.cu",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/kv-stream.cu",
+    "ggml/src/ggml-cuda/kv-stream.cuh",
+    "src/CMakeLists.txt",
+    "src/llama-kv-cache.cpp",
+    "src/llama-kv-stream.cpp",
+    "src/llama-kv-stream.h"
+   ],
+   "lines": {
+    "added": 922,
+    "removed": 8
+   },
+   "budget": {
+    "added": 970,
+    "removed": 8
+   },
+   "depends_on": {
+    "apply": [
+     "sparse-direct",
+     "fattn-vec-skip"
+    ],
+    "run": [
+     "sparse-direct",
+     "graph-cap"
+    ]
+   },
+   "output": {
+    "label": "quality-gated",
+    "evidence": {
+     "run": "boltbeam-runs/kv-stream-20261118 (ident-home, ab128-cost); boltbeam-runs/rental-20261118/out (kvs11, kvs12, kvs13, kvs14, kvs20, kvs21); boltbeam-runs/graph-cap-20261119",
+     "numbers": "switch on vs off, same build, every expert on the GPU, 128k context (-c 131072): N 32,768, 30 turns of a 256k session (recorded history): reply sha256 30/30, draft count and accepted 30/30; check mode (graphs off): 30/30, byte checks of every row a call reads vs the host copy to 106,000 and attention-output checks vs the unpaged read to 52,000, paths identity, resolve and union-staged all exercised, no abort; N 65,536, 59-turn 128k session, 3 pairs: replies 59/59 equal in all 6 runs. Gate class because it ships with the placement it pays for (every expert on the GPU instead of 16 expert layers in RAM with the expert cache), which changes rounding: K vs C reply sha256 33/116, so the stage-1 agreement gate decides",
+     "match": {
+      "what": "reply sha256 per turn, switch on vs off, same build and placement",
+      "equal": 30,
+      "of": 30
+     },
+     "gate": {
+      "name": "session-gate stage 1 (top-1 agreement over the session's positions vs the declared floor -b 5 -ub 5)",
+      "run": "boltbeam-runs/rental-20261118/out/kvs13/k32, out/kvs14/k63, out/kvs20/k53 (reference A and floor FN from out/kvs12/gate256); boltbeam-runs/graph-cap-20261119 (the home 256k gate with graph-cap on)",
+      "verdict": "pass at N 53,240 twice (kvs20), N 63,616 twice (kvs14), N 32,768 and N 16,384 (kvs13): agreement 0.9910 vs floor 0.9915, excess +0.0005 of 0.0030 allowed, every turn holds; on the home 32 GB card with graph-cap on (GGML_CUDA_GRAPH_MAX_KEYS=2), 1.0.0 + 01-20 + this mod, N 53,632, 116 turns to 256k, no crash: pass, excess +0.0015 of 0.0034 allowed (d_copy 0.0090, d_floor 0.0075, 116 documents; boltbeam-runs/graph-cap-20261119/gate256); untimed there (CPU shared), against the setup without it: session 533.4 -> 368.8 s, warm decode 162.2 -> 219.2 tok/s, TTFT 1,423 -> 835 ms; at N 65,536 (kvs12) the server ran out of GPU memory on the gate's scored requests after the session (CUDA graph executables of new graph keys), so N is derived with the runtime headroom and graph-cap is on (limits)"
+     }
+    }
+   },
+   "gain": {
+    "value": "-88.9",
+    "unit": "s session wall [-89.2, -88.6] (448.5 -> 359.6, -19.8%): warm decode 184.4 -> 219.7 tok/s (+35.3 [+34.5, +36.2]); by depth band 241.8 / 229.6 / 224.8 / 191.7 tok/s (<=66k / <=133k / <=195k / <=262k); TTFT 1,071 -> 765 ms a warm turn",
+    "vs": "the best 256k setup without it (C: 16 expert layers in RAM, expert cache 4,200 MiB, its tuned draft), same build",
+    "conditions": "RTX 5090 (rented) at 400 W, one request at a time, 116-turn session to 256k context (-c 262144, recorded history), MoE model on the engine's qwen4exp graph (hybrid indexer, MTP draft head k=3), q8_0 KV, backend sampler (-bs), -ub 1024 -b 1024, series switches 01-17 on, kernels/region-chain-k2560-k10240; K = LLAMA_KV_STREAM=65536, -ncmoe 0 (every expert on the GPU), a 220-expert hot-set draft; 3 alternating pairs, 95% t-interval over pairs; at N 63,616 (kvs14) warm decode 217.8 and at N 53,240 (kvs20, 2 runs) 217.2 and 219.3 tok/s, vs 219.8 at N 65,536 (kvs12)",
+    "run": "boltbeam-runs/rental-20261118/out/kvs11/ab256x3"
+   },
+   "exercised_by": "the sparse-attention (indexer) layers of the qwen4exp graph with q8_0 K/V, one sequence on one CUDA GPU, a context larger than N; the speed comes from spending the freed VRAM on expert residency",
+   "limits": [
+    "N is not a constant of the mod: boltbeam tune derives it per machine from the free memory at load and the runtime growth boltbeam load-probe --stress measures. On a 32 GB card at 256k, N 65,536 loaded with 181 MiB free and ran out of GPU memory after its session; N 63,616 and N 53,240 passed the gate",
+    "needs graph-cap on (GGML_CUDA_GRAPH_MAX_KEYS): without it the CUDA graph executables of dead graph keys grow with the request rate, and a server loaded this close to full VRAM runs out of memory (N 53,240 did under the full stress, kvs21)",
+    "target attention layers only: the MTP draft layer is not paged (drafter paging collapsed decode once its context passed its page budget; parked)",
+    "pays only where the context cannot hold all K/V and every expert on the GPU: at 128k, where it fits, it costs -8.6 tok/s warm decode [-17.8, +0.6] and +25 ms prefill a turn (ab128-cost)",
+    "prompt ubatches past N stage the cells they read host -> VRAM: deep-band TTFT pays that copy (the freed VRAM still wins it back at 256k)",
+    "one CUDA GPU (pages register on the current device); one user stream of the staging pool (asserted at init)",
+    "debug (non-NDEBUG) builds assert on the pinned host buffer type",
+    "context shift writes the host copy without write-through: run with -c at the session size",
+    "a SET_ROWS ext kernel (09) on a streamed layer would skip write-through",
+    "check mode needs GGML_CUDA_DISABLE_GRAPHS=1 and is for correctness, not timing",
+    "N: a multiple of 4, >= 4096 and below the context, else ignored with a warning (stock path)"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 6,
+    "note": "6 hunks rewrite stock lines: launch_fattn's mask pointer and strides (a paged call passes its rewritten mask), the CUDA buffer free (a host-mapped buffer is freed with cudaFreeHost), the SET_ROWS dispatch (a streamed layer's write goes through VRAM scratch and write-through), the KV cache's K/V tensor creation and per-stream views (a streamed layer's K/V go to the host buffer type); with the switch unset each takes the stock value or path"
+   }
   }
  ],
  "parked": [

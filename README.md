@@ -60,6 +60,13 @@ generated regions, several engine nodes in one kernel each: decode +1.29% over t
 hot-draft`, which reads 18's route count). On the chat below that setup is 8.3% faster per session; `boltbeam tune`
 recommends it when it ranks best on your GPU.
 
+21 (`LLAMA_KV_STREAM=N`) is for contexts too long to hold all attention K/V and every expert on the GPU: the
+sparse-attention layers keep their K/V in pinned host RAM and page N cells a layer in GPU memory, the text unchanged.
+At 256k on a 32 GB card, with the freed memory spent on every expert, a 116-turn chat ran 19.8% faster per session
+(N 65,536, which left too little memory to keep serving; at the N values that do, 63,616 and 53,240, it decodes
+within 3 tok/s of it). `boltbeam tune` derives N for your machine and turns it on, with 20 (graph-cap), only where
+the context does not fit: where it fits (128k here) it is a cost.
+
 To go back to stock, unset the variables. Each patch, what it does and its limits: [DETAILS.md](DETAILS.md).
 
 ## Benchmarks
