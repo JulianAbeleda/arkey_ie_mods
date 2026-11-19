@@ -2,11 +2,11 @@
   "schema": "arkey_ie_mods.engines.v1",
   "about": "One row per inference engine. Everything engine-specific lives here or in engines/<engine>/<version>/mods.json; tools/check.py and the hook read rows and name no engine. A mod is keyed on engine + version + kernel or graph shape, never on a model name. Machine paths (base checkouts, run roots) live in the untracked local.json (see local.example.json).",
   "requires": {
-    "boltbeam": "0.3.29",
-    "why": "the oldest BoltBeam that reads this index: a consumer that resolves the newest commit of this repo takes the newest one whose index schema it reads and whose requires it meets; raise it when a change needs a newer consumer (a new index field it must read, a mod it must set up)"
+    "boltbeam": "0.3.30",
+    "why": "the oldest BoltBeam that reads this index: a consumer that resolves the newest commit of this repo takes the newest one whose index schema it reads and whose requires it meets; raise it when a change needs a newer consumer (a new index field it must read, a mod it must set up). 0.3.30: the rows of a version with modules share one patch (index `module`), which a consumer applies once"
   },
   "rules": [
-    "one switch per mod; switch off = the engine's stock path",
+    "one switch per mod; switch off = the engine's stock path. Mods on one extension point share a module: one patch that applies alone on the base",
     "a check mode that runs the stock path beside the mod and aborts on a difference",
     "output bit-identical to stock, or labelled (quality-gated / untested) with the evidence",
     "a line budget per patch (measured size, rounded up a little); over budget fails",

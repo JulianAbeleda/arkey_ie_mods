@@ -8,13 +8,174 @@
   "release": null,
   "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c"
  },
- "about": "Mods 02-19 of 1.0.0 rebased onto llama.cpp b12521 (6f311d7a, no release name), same numbering and switches. Series order = list order. 01 kpool-incremental is not in this series: upstream llama.cpp #32137 (commit 08a9b358939e, 2026-11-17) does the incremental k-pool update, always on; 05 is ported onto that loop. 06 is upstream-equivalent (#32380, commit 21fa9c043f0e). No gain is claimed on this version yet: the rows' gains were measured on 1.0.0 (engines/llama.cpp/1.0.0/mods.json). Identity on this base: ab-ident2 and ab-xcheck in the rows; the base-move gate passed (gate-timed-stdlib/go, gate-q-stdlib/go: session wall not worse on both workloads, stage-1 pass on both).",
+ "about": "The 1.0.0 mods rebased onto llama.cpp b12521 (6f311d7a, no release name), kept as 6 modules. A module is one patch on one engine extension point (modules[].point) and applies alone on the base; a mod row is a feature of its module: one switch, its check mode, label and evidence, with the same name, switch and marker it had as patch 02-20. Series order = modules order. The module tree is the 02-20 series tree without seq-rm-indexed (retired: upstream #32380 does it), with two declarations of rs-one-copy on their own lines and the ple-prefetch function in its own file (src/models/qwen4exp-prefetch.cpp); nothing else differs. 01 kpool-incremental is not in this series: upstream llama.cpp #32137 (commit 08a9b358939e, 2026-11-17) does the incremental k-pool update, always on; kpool-input-device is ported onto that loop. No gain is claimed on this version yet: the rows' gains were measured on 1.0.0 (engines/llama.cpp/1.0.0/mods.json). Identity on this base: ab-ident2 and ab-xcheck in the rows (measured on the 02-19 series, the same feature code); the base-move gate passed (gate-timed-stdlib/go, gate-q-stdlib/go: session wall not worse on both workloads, stage-1 pass on both); the module build against the series build: verified, modules-b12521.",
  "budget_rule": "ceil_105_10",
+ "modules": [
+  {
+   "name": "kv",
+   "title": "K/V store and its attention read path",
+   "point": "the K/V cache and the flash-attention kernels that read it (fattn*, llama-kv-cache)",
+   "patch": "patches/kv.patch",
+   "files": [
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn-mma-f16.cuh",
+    "ggml/src/ggml-cuda/fattn-vec.cuh",
+    "ggml/src/ggml-cuda/fattn.cu"
+   ],
+   "lines": {
+    "added": 200,
+    "removed": 9
+   },
+   "budget": {
+    "added": 210,
+    "removed": 9
+   },
+   "static": {
+    "hunks_removing_stock_lines": 7
+   }
+  },
+  {
+   "name": "indexer",
+   "title": "hybrid indexer memory, its scorer and top-k",
+   "point": "the hybrid indexer memory, its scorer and top-k kernels and the graph inputs they feed (llama-memory-hybrid-idx, lightning-indexer, top-k)",
+   "patch": "patches/indexer.patch",
+   "files": [
+    "ggml/src/ggml-cuda/lightning-indexer.cu",
+    "ggml/src/ggml-cuda/top-k.cu",
+    "src/llama-memory-hybrid-idx.cpp",
+    "src/llama-memory-hybrid-idx.h",
+    "src/llama-model.cpp",
+    "src/models/qwen4exp.cpp"
+   ],
+   "lines": {
+    "added": 1025,
+    "removed": 59
+   },
+   "budget": {
+    "added": 1080,
+    "removed": 59
+   },
+   "static": {
+    "hunks_removing_stock_lines": 17
+   }
+  },
+  {
+   "name": "kernels",
+   "title": "external kernel hook",
+   "point": "the backend's node dispatch: one hook that swaps a node or a window of nodes for a kernel a manifest names (ext-kernels)",
+   "patch": "patches/kernels.patch",
+   "files": [
+    "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/ext-kernels.cpp",
+    "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ],
+   "lines": {
+    "added": 500,
+    "removed": 0
+   },
+   "budget": {
+    "added": 530,
+    "removed": 0
+   },
+   "static": {
+    "hunks_removing_stock_lines": 0
+   }
+  },
+  {
+   "name": "experts",
+   "title": "expert (MoE) weights: read path, handles, routing count",
+   "point": "expert weights on the device: the cached-expert matmul, the per-device BLAS handle and the draft's routing counter (mmq, llama-moe-cache, sched_copy_experts)",
+   "patch": "patches/experts.patch",
+   "files": [
+    "common/speculative.cpp",
+    "ggml/src/ggml-cuda/common.cuh",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/mmq.cu",
+    "ggml/src/ggml-cuda/mmq.cuh",
+    "src/llama-context.cpp",
+    "src/llama-context.h",
+    "src/llama-moe-cache.cpp",
+    "src/llama-moe-cache.h"
+   ],
+   "lines": {
+    "added": 233,
+    "removed": 16
+   },
+   "budget": {
+    "added": 250,
+    "removed": 16
+   },
+   "static": {
+    "hunks_removing_stock_lines": 11
+   }
+  },
+  {
+   "name": "state",
+   "title": "draft and recurrent state held by a context",
+   "point": "what a context keeps between steps: the draft head, its graphs and the recurrent state (llama-context, llama-graph, llama-memory-recurrent)",
+   "patch": "patches/state.patch",
+   "files": [
+    "src/llama-context.cpp",
+    "src/llama-context.h",
+    "src/llama-cparams.h",
+    "src/llama-graph.cpp",
+    "src/llama-graph.h",
+    "src/llama-memory-recurrent.cpp",
+    "src/llama-memory-recurrent.h",
+    "src/llama-model.h",
+    "src/models/delta-net-base.cpp",
+    "src/models/models.h",
+    "src/models/qwen4exp.cpp"
+   ],
+   "lines": {
+    "added": 696,
+    "removed": 10
+   },
+   "budget": {
+    "added": 740,
+    "removed": 10
+   },
+   "static": {
+    "hunks_removing_stock_lines": 8
+   }
+  },
+  {
+   "name": "host",
+   "title": "host work around a step: server, checkpoints, scheduler inputs",
+   "point": "host-side work around a decode step: the server's tokenize and checkpoints, mapped-input read-ahead and the scheduler's input uploads (tools/server, common, llama-mmap, ggml-backend)",
+   "patch": "patches/host.patch",
+   "files": [
+    "common/common.cpp",
+    "common/common.h",
+    "ggml/src/ggml-backend.cpp",
+    "include/llama.h",
+    "src/llama-mmap.cpp",
+    "src/llama-mmap.h",
+    "src/llama-model.cpp",
+    "src/llama-model.h",
+    "src/models/models.h",
+    "src/models/qwen4exp-prefetch.cpp",
+    "tools/server/server-common.cpp",
+    "tools/server/server-context.cpp"
+   ],
+   "lines": {
+    "added": 495,
+    "removed": 1
+   },
+   "budget": {
+    "added": 520,
+    "removed": 1
+   },
+   "static": {
+    "hunks_removing_stock_lines": 1
+   }
+  }
+ ],
  "mods": [
   {
    "name": "sparse-direct",
    "title": "sparse attention reads q8_0 K/V rows by index",
-   "patch": "patches/02-sparse-direct.patch",
+   "module": "kv",
    "engine": "llama.cpp",
    "base": "b12521",
    "switch": {
@@ -31,19 +192,6 @@
    },
    "reads": [],
    "marker": "LLAMA_SPARSE_DIRECT",
-   "files": [
-    "ggml/src/ggml-cuda/fattn-common.cuh",
-    "ggml/src/ggml-cuda/fattn-mma-f16.cuh",
-    "ggml/src/ggml-cuda/fattn.cu"
-   ],
-   "lines": {
-    "added": 103,
-    "removed": 4
-   },
-   "budget": {
-    "added": 110,
-    "removed": 4
-   },
    "depends_on": {
     "apply": [],
     "run": []
@@ -65,16 +213,56 @@
     "sparse MMA flash-attention path with q8_0 K/V only; other calls take the stock path",
     "half 2 (ordered index lists from top-k) lost 1.0% and was dropped before this patch"
    ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 3,
-    "note": "4 lines changed to thread a parameter and a gate; additive otherwise."
-   }
+   "rule_exceptions": []
+  },
+  {
+   "name": "fattn-vec-skip",
+   "title": "vector attention kernel skips masked rows",
+   "module": "kv",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_FATTN_VEC_SKIP",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_FATTN_VEC_SKIP_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_FATTN_VEC_SKIP",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
+     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_FATTN_VEC_SKIP_CHECK: 0 bit patterns differ. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/draft-attn-sparse-20261115): check session: 0 value differences on every draft pass; text, n, draft_n, accepted identical on 59/59 turns",
+     "match": {
+      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "one-query calls only (the vector kernel, q8_0 K/V, with a sparse mask): the draft passes",
+    "apply order needs patch 02 (shares its env helper and check block); the two switches are independent at run time",
+    "an accumulator that is exactly -0 would stay -0 where stock gives +0 (equal as values; never observed)"
+   ],
+   "rule_exceptions": []
   },
   {
    "name": "idx-pooled",
    "title": "indexer cache keeps pooled keys only",
-   "patch": "patches/03-idx-pooled.patch",
+   "module": "indexer",
    "engine": "llama.cpp",
    "base": "b12521",
    "switch": {
@@ -89,20 +277,6 @@
    },
    "reads": [],
    "marker": "LLAMA_IDX_POOLED",
-   "files": [
-    "src/llama-memory-hybrid-idx.cpp",
-    "src/llama-memory-hybrid-idx.h",
-    "src/llama-model.cpp",
-    "src/models/qwen4exp.cpp"
-   ],
-   "lines": {
-    "added": 299,
-    "removed": 19
-   },
-   "budget": {
-    "added": 320,
-    "removed": 19
-   },
    "depends_on": {
     "apply": [],
     "run": []
@@ -125,16 +299,381 @@
     "aborts (never silent) on: context shift, mid-sequence seq_rm / seq_add / seq_div, full slot save/restore, prompt cache (--cache-ram > 0)",
     "context checkpoints work (the raw tail rides in the partial state)"
    ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 13,
-    "note": "19 stock lines changed across 4 files to branch on the mode. Not provable statically."
-   }
+   "rule_exceptions": []
+  },
+  {
+   "name": "kpool-input-device",
+   "title": "k-pool inputs live on the device",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_INPUT_DEVICE",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_INPUT_CHECK",
+    "needs": []
+   },
+   "reads": [],
+   "marker": "LLAMA_KPOOL_INPUT_DEVICE",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
+     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_KPOOL_INPUT_CHECK ok on every report. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/idle-growth-20261114): check: 0 aborts, 30,000+ forwards verified per context in 3 setups; text and n identical 59/59 for check = on = off",
+     "match": {
+      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "covers the k-pool inputs (pool_cells, pool_idxs); pool_mask stays a host input",
+    "apply order needs patch 03 (same functions); at run time it works with either switch on or off (measured with LLAMA_IDX_POOLED unset: 8/8 turns identical)",
+    "rebased onto upstream llama.cpp #32137 (incremental k-pool update, always on): its dirty-pool tracking is re-inserted into that loop; on 1.0.0 it was written on mod 01's loop"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "idx-inplace",
+   "title": "indexer scores pooled q8_0 keys in place",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_IDX_INPLACE",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_IDX_INPLACE_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_IDX_INPLACE",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "idx-pooled"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
+     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_IDX_INPLACE_CHECK: 0 score bit patterns differ. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/mask-indexer-20261115): check session: 116k indexer calls, 6.55e9 scores, 0 bit patterns differ; text sha, n, draft counts identical on 59/59 turns in 6 arms",
+     "match": {
+      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "decode shapes only (fewer than 8 query tokens); prefill keeps the stock copy",
+    "needs LLAMA_IDX_POOLED=1 and q8_0 indexer keys; otherwise stock path",
+    "falls back to the stock copy when padded pools exceed the store rows (above about 130.8k tokens)"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "topk-fused",
+   "title": "radix top-k of a few rows in one launch",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_TOPK_FUSED",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_TOPK_FUSED_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [
+    "GGML_CUDA_PDL"
+   ],
+   "marker": "LLAMA_TOPK_FUSED",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
+     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_TOPK_FUSED_CHECK: total diff 0. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/decode-topk-fused-20261115): check session (59 turns, graphs off): 166,000+ fused calls each compared with the stock kernels and a host reference (picks above the threshold as a set, tie slots word for word in order), total diff 0, verify rows 4 x up to 32,320 columns and the 1-row sampler over 248,320; -lv 5 off/on pair: 65,790 draft candidate lines and 7,268 accepted lines equal, text + n 59/59; 6 timed arms: text sha, n, draft_n, accepted 59/59 equal",
+     "match": {
+      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "ggml_top_k calls that take the CUDA radix path with at most 8 rows (and rows <= SM count): the indexer's per-layer top-k at decode and draft, and, on builds without CUB DeviceTopK (CCCL < 3.4.3), the backend sampler's top-k over the vocabulary",
+   "limits": [
+    "CUDA only: compiled out on HIP and MUSA builds (warp size 32, cudaStreamCreate), which keep the stock path",
+    "only calls with rows <= 8 and rows x blocks <= SM count use it (an in-kernel barrier needs every block resident); larger calls (prefill) keep the stock path",
+    "residency is derived from the SM count, not checked: not for MPS thread-percentage limits or green contexts (the barrier could hang); a faulted launch leaves the row state set and later calls on that stream hang",
+    "row state is keyed by stream handle only: a process that destroys a stream and gets the same handle on another GPU would reuse a buffer on the wrong device (single-GPU runs measured)",
+    "the order of picks above the threshold is the atomicAdd order, as in stock (no fixed order); ties fill the last slots in ascending column order, as in stock",
+    "keeps 8 x 128 bytes of zeroed device state per stream for the life of the process",
+    "the check mode needs GGML_CUDA_DISABLE_GRAPHS=1 (it syncs the stream) and does not enforce it",
+    "measured gain is 70% of the derived 0.46 ms/step at ~100k"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "ext-kernels",
+   "title": "external kernel hook",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_EXT_KERNELS",
+    "on": "/path/manifest.json"
+   },
+   "check": {
+    "kind": "env",
+    "name": "GGML_CUDA_EXT_KERNELS_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [
+    "GGML_CUDA_PDL"
+   ],
+   "marker": "GGML_CUDA_EXT_KERNELS",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-xcheck)",
+     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/ext-kernel-hook-20261115): identity kernel: 71,425 checks past 98.6k context, 0 differences (bitwise); text and n identical 59/59 with the switch on vs off",
+     "match": {
+      "what": "reply sha256 per turn, check mode on vs the unchecked arm, same build and manifest (ab-xcheck, turns 1-4)",
+      "equal": 4,
+      "of": 4
+     }
+    }
+   },
+   "exercised_by": "any graph node the manifest matches by op, types and shape; measured with a BF16 mul_mat_vec instance",
+   "limits": [
+    "a window of one op; one device",
+    "\"identical\" holds for an identity kernel only: each installed kernel carries its own tolerance and evidence"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "ext-kernels-window",
+   "title": "kernel hook takes a window of nodes: one generated kernel for a region",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": null,
+   "switch_null_why": "extends ext-kernels (09): engaged by the same GGML_CUDA_EXT_KERNELS when its manifest is a boltbeam.kernel_manifest.v2 with multi-node entries; unset = stock, a v1 manifest = 09's behaviour",
+   "check": null,
+   "reads": [
+    "GGML_CUDA_EXT_KERNELS_DUMP",
+    "GGML_CUDA_PDL"
+   ],
+   "marker": "GGML_CUDA_EXT_KERNELS_DUMP",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "ext-kernels"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-xcheck)",
+     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm)): check mode (09's GGML_CUDA_EXT_KERNELS_CHECK, extended to every live output of a window; graphs off, turns 40-41, tolerance 0): shared gate 6,145 checks, inject region 12,545, down tail 12,801, shipped one-op entries 12,545, 0 differences, worst 0; with kernels/region-chain-k2560-k10240 on vs the shipped one-op manifest: reply sha256 identical 59/59 in all 6 runs of the 3-pair confirm",
+     "match": {
+      "what": "reply sha256 per turn, check mode on vs the unchecked arm, same build and manifest (ab-xcheck, turns 1-4)",
+      "equal": 4,
+      "of": 4
+     }
+    }
+   },
+   "exercised_by": "a kernel_manifest.v2 entry whose match.ops lists N consecutive graph nodes with their wiring; measured with three windows (gemv + sigmoid + mul + add; gemv + scale + sigmoid + scale; scale + silu)",
+   "limits": [
+    "a window is N consecutive compute nodes (no views between, every tensor contiguous); interior nodes must be read only inside the window; a live output may share memory with an input only exactly and only where the entry allows it (alias_ok), else the engine's own nodes run",
+    "a GGML_OP_SCALE op matches only on its op_params (factor, bias); a SCALE entry without them is refused at load",
+    "one launch per entry; region entries must come before one-op entries in the manifest (first match wins)",
+    "GGML_CUDA_EXT_KERNELS_DUMP=<file> appends each graph shape the hook sees (JSON lines) for the region finder; off when unset"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "switch",
+     "why": "no switch of its own: it widens 09's hook, which GGML_CUDA_EXT_KERNELS turns on; a v1 manifest keeps 09's one-node behaviour (its entries checked 0 differ through this code)"
+    },
+    {
+     "rule": "check",
+     "why": "no check switch of its own: 09's GGML_CUDA_EXT_KERNELS_CHECK now compares every live output of a window"
+    }
+   ]
+  },
+  {
+   "name": "moe-inplace",
+   "title": "prefill reads cached experts in place",
+   "module": "experts",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_MOE_INPLACE",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_MOE_INPLACE_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_MOE_INPLACE",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/prefill-expert-inplace-20261115; boltbeam-runs/guardrails-20261118 (ab-mods3)",
+     "numbers": "on b12521 (boltbeam-runs/guardrails-20261118 ab-mods3: the 59-turn session's turns 1-8, -ncmoe 16 --moe-cache-mib 4096, graphs off): LLAMA_MOE_INPLACE_CHECK on 1,200 calls, 0 bytes differ; replies 8/8 equal to the switch-off arm. (At --moe-cache-mib 6240 this build does not load the draft: out of memory.) The match below was measured on 1.0.0. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0: check session (graphs off, 59 turns): 49,392 checks of every prefill MMQ mul_mat_id output of the host expert layers, in place vs staged, 0 bytes differ; -lv 5 off/on pair: 65,673 draft candidate lines and 7,259 accepted lines equal, text sha + n 59/59; 8,015,016 experts read in place = the 8,015,016 stock copied",
+     "match": {
+      "what": "reply sha256 per turn on b12521, switch and check mode on vs off (ab-mods3, turns 1-8, --moe-cache-mib 4096)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "prefill batches (more than 32 tokens) through MMQ mul_mat_id on host-RAM experts with the engine's MoE expert cache on (--moe-cache-mib with -ncmoe); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "batches over 32 tokens through the MMQ mul_mat_id kernel only; decode and small batches keep the stock path",
+    "experts that miss the cache are still uploaded one by one into the staging copy, as stock (about 116 ms a turn at 100k remains)",
+    "one device-side offset table per staged host expert tensor (2 KB each, kept for the life of the backend context)",
+    "a cold first turn is unchanged (nothing is cached yet)",
+    "rebased with a one-line port: x_delta is passed at upstream's new GCN force_tiling launch (llama.cpp #30022)"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "cublas-shared",
+   "title": "one cuBLAS handle and workspace per device for every context",
+   "module": "experts",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_CUBLAS_SHARED",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_CUBLAS_SHARED",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
+     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on (switch on in the identical-switch arm; no check mode). base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/conversation-server-design-20261117 (P4: FP0c vs FP0n)): switch on (FP0c) vs off (FP0n), resident placement, -b 1024, 59 turns: reply text 59/59 equal; decode 201.6 vs 201.4 tok/s (untimed)",
+     "match": {
+      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "processes with more than one CUDA backend context on a device (a target and a draft context) that call cuBLAS",
+   "limits": [
+    "any value of LLAMA_CUBLAS_SHARED turns it on (it tests set, not 1)",
+    "contexts must run one at a time on one thread (llama-server's target and draft do); the handle is re-bound to the calling stream when it changes",
+    "stream 0 of each context only; other streams keep their own handles",
+    "CUDA builds; HIP and MUSA builds skip the workspace as stock does",
+    "no check mode"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the same cuBLAS calls run on one shared handle and workspace instead of one per context; nothing computed differs to compare beside it. Identity rests on the 59/59 session"
+    }
+   ]
+  },
+  {
+   "name": "draft-route-count",
+   "title": "diagnostic: count the experts the draft's router picks",
+   "module": "experts",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_DRAFT_ROUTE_COUNT",
+    "on": "a file path"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_DRAFT_ROUTE_COUNT",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/conversation-server-design-20261117 (S2a: ID0, RC; P7a: HA0); boltbeam-runs/guardrails-20261118 (ab-mods3)",
+     "numbers": "on b12521 (ab-mods3, turns 1-8): switch on (a route file written: 2,909 decode and 21,538 catch-up tokens counted) vs off: replies 8/8 equal. The match below was measured on 1.0.0. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0: switch on (RC, graph slots off) vs the same flags on the frozen series build (HA0): reply sha256 59/59 equal; switch off on the diagnostic build (ID0) vs the frozen build 12/12",
+     "match": {
+      "what": "reply sha256 per turn on b12521, switch on vs off (ab-mods3, turns 1-8)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "llama-server with a mixture-of-experts draft model (-md) whose graph names its router output ffn_moe_probs",
+   "limits": [
+    "slow: an eval callback reads the router output of every draft forward to the host (a sync per layer); for a counting run, not for serving",
+    "the file is written every 20,000 forwards and when the process exits normally",
+    "the draft context only; the target is not counted",
+    "no check mode"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: a diagnostic that reads the router output and computes nothing the model uses; identity rests on the 59/59 session"
+    }
+   ]
   },
   {
    "name": "mtp-share-head",
    "title": "draft head reads the target's output projection",
-   "patch": "patches/04-mtp-share-head.patch",
+   "module": "state",
    "engine": "llama.cpp",
    "base": "b12521",
    "switch": {
@@ -145,19 +684,6 @@
    "check": null,
    "reads": [],
    "marker": "LLAMA_MTP_SHARE_HEAD",
-   "files": [
-    "src/llama-context.cpp",
-    "src/llama-cparams.h",
-    "src/models/qwen4exp.cpp"
-   ],
-   "lines": {
-    "added": 45,
-    "removed": 4
-   },
-   "budget": {
-    "added": 50,
-    "removed": 4
-   },
    "depends_on": {
     "apply": [],
     "run": []
@@ -185,54 +711,33 @@
      "rule": "check",
      "why": "no check mode: the target computes bit-identically (dgate); only the draft head's proposals change, which a stock-beside-mod check cannot compare"
     }
-   ],
-   "static": {
-    "hunks_removing_stock_lines": 2,
-    "note": "4 stock lines changed. No check switch: rule exception, recorded here."
-   }
+   ]
   },
   {
-   "name": "kpool-input-device",
-   "title": "k-pool inputs live on the device",
-   "patch": "patches/05-kpool-input-device.patch",
+   "name": "graph-slots",
+   "title": "draft context keeps a graph per small ubatch size",
+   "module": "state",
    "engine": "llama.cpp",
    "base": "b12521",
    "switch": {
     "kind": "env",
-    "name": "LLAMA_KPOOL_INPUT_DEVICE",
+    "name": "LLAMA_GRAPH_SLOTS",
     "on": "1"
    },
-   "check": {
-    "kind": "env",
-    "name": "LLAMA_KPOOL_INPUT_CHECK",
-    "needs": []
-   },
-   "reads": [],
-   "marker": "LLAMA_KPOOL_INPUT_DEVICE",
-   "files": [
-    "src/llama-memory-hybrid-idx.cpp",
-    "src/llama-memory-hybrid-idx.h",
-    "src/models/qwen4exp.cpp"
+   "check": null,
+   "reads": [
+    "GGML_CUDA_GRAPH_OPT"
    ],
-   "lines": {
-    "added": 359,
-    "removed": 45
-   },
-   "budget": {
-    "added": 380,
-    "removed": 45
-   },
+   "marker": "LLAMA_GRAPH_SLOTS",
    "depends_on": {
-    "apply": [
-     "idx-pooled"
-    ],
+    "apply": [],
     "run": []
    },
    "output": {
     "label": "identical",
     "evidence": {
      "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
-     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_KPOOL_INPUT_CHECK ok on every report. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/idle-growth-20261114): check: 0 aborts, 30,000+ forwards verified per context in 3 setups; text and n identical 59/59 for check = on = off",
+     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on (switch on in the identical-switch arm; no check mode). base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/graph-reuse-20261116): -lv 5 off/on pair (LLAMA_GRAPH_SLOTS=1 with the archived graph-recapture switch also on): 65,790 draft candidate lines and 7,268 accepted lines equal, text sha + n and draft_n/accepted 59/59; 6 timed arms of the switch alone (3 off, 3 on) and 6 of both switches: text sha, n, draft_n, accepted 59/59 equal to the first off arm",
      "match": {
       "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
       "equal": 8,
@@ -240,22 +745,260 @@
      }
     }
    },
-   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "exercised_by": "speculative decoding with an MTP draft context (context type MTP) whose forwards alternate between a catch-up of a few tokens and 1-token draft passes; measured on one MoE model with an MTP draft head",
    "limits": [
-    "covers the k-pool inputs (pool_cells, pool_idxs); pool_mask stays a host input",
-    "apply order needs patch 03 (same functions); at run time it works with either switch on or off (measured with LLAMA_IDX_POOLED unset: 8/8 turns identical)",
-    "rebased onto upstream llama.cpp #32137 (incremental k-pool update, always on): its dirty-pool tracking is re-inserted into that loop; on 1.0.0 it was written on mod 01's loop"
+    "MTP draft contexts only (context type MTP); target and other contexts keep the stock single scheduler",
+    "measured at N=1 only: N>1 (one scheduler per ubatch size 1..N) costs about 60 MiB more VRAM, not explained, and ran out of memory at 128k on the measured flags; N=1 costs about 4 MiB",
+    "the slot schedulers' compute buffers are not counted in memory_breakdown (each slot logs its size once, at its first graph)",
+    "no check mode",
+    "refused (stock path) when GGML_CUDA_GRAPH_OPT is set: its concurrent-stream events are per backend and rebuilt only when a graph is built; also off when graph reuse is disabled",
+    "the measured gain is a third of the CPU time the rebuilds cost (0.59 ms/step); the rest overlapped GPU work"
    ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 11,
-    "note": "45 stock lines changed. Not provable statically."
-   }
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the switch changes which scheduler holds a draft graph (compute buffer addresses), not what is computed; identity rests on the -lv 5 pair and the 12 timed arms. A check (run each slot graph once more on slot 0 and compare) is not built"
+    }
+   ]
   },
+  {
+   "name": "rs-one-copy",
+   "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
+   "module": "state",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_RS_ONE_COPY",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_RS_ONE_COPY_CHECK",
+    "needs": [
+     "LLAMA_RS_ONE_COPY"
+    ]
+   },
+   "reads": [
+    "GGML_CUDA_GRAPH_OPT"
+   ],
+   "marker": "LLAMA_RS_ONE_COPY",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "quality-gated",
+    "evidence": {
+     "run": "boltbeam-runs/conversation-server-design-20261117 (OC1, ab-OC3, OC6, RT; BUILD.md); boltbeam-runs/guardrails-20261118 (ab-xcheck, ab-screen2)",
+     "numbers": "on b12521: switch on in the full-stack arms of ab-xcheck and ab-screen2 (no stock comparison of this mod alone); the gate object below was measured on 1.0.0. Separately, the base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0: check mode compares the replayed state with the stock K-plane state at every graph: 7,633 steps over the 59-turn session (54 checkpoint restores, all with 0 kept tokens) and 738 steps at turns 1-5, sum |diff| 0 on every step; a forced-restore test (RT: 10 rounds of generate with the draft, save and restore the slot, continue the same tokens, plus 3 rollbacks 2 tokens inside the last reply) made 13 restores, 10 of them with a replay pending (2-4 kept tokens), 207 check steps at LLAMA_RS_ONE_COPY_CHECK=2, 0 differing, and the reply tokens equal check vs on vs off in 10/10 rounds; screen ab-OC3 turns 40-59 text 20/20 on vs off. Gate class because it ships with the resident setup (all experts on the GPU, -b 1024, a hot-set draft), which changes batch shapes and the draft: FR vs the shipped setup text 11/59, so the stage-1 agreement gate decides",
+     "gate": {
+      "name": "session-gate stage 1 (top-1 agreement over the session's positions vs the declared floor -b 5 -ub 5)",
+      "run": "boltbeam-runs/conversation-server-design-20261117/ab-OC6",
+      "verdict": "pass: FR 0.9960 [0.9935, 0.9985] vs floor 0.9965, excess 0.0005 of 0.0028 allowed (measured on 1.0.0); on b12521 pass as part of the full stack: gate-q-stdlib 0.9965 vs floor 0.9945, gate-q-go 0.9925 vs floor 0.9945, excess +0.0020 of 0.0023 allowed"
+     }
+    }
+   },
+   "exercised_by": "hybrid models whose linear-attention (gated delta-net) layers keep a recurrent state with rollback planes for speculative decoding (n_rs_seq > 0), on an architecture that declares supports_rs_one_copy (the qwen4exp graph); llama-server -np 1",
+   "limits": [
+    "-np 1 only (one sequence, one cell); refused with the stock layout otherwise",
+    "an architecture opts in (supports_rs_one_copy); only the qwen4exp graph does; others keep the stock layout",
+    "refused (stock layout) with GGML_CUDA_GRAPH_OPT=1: its stream reordering could run the keep copies before the replay reads them",
+    "an f32 recurrent state only",
+    "a state saved with the switch on carries a one-copy section: it restores only into a server with the switch on and the same K",
+    "the speed gain needs the freed memory spent (here on expert residency with 17 and a hot-set draft); alone it costs +0.09 ms a step",
+    "check mode keeps the stock planes too (the freed memory comes back) and is for correctness, not timing"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "ckpt-pinned",
+   "title": "context checkpoints in a pinned pool",
+   "module": "host",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_CKPT_PINNED",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_CKPT_PINNED_CHECK",
+    "needs": []
+   },
+   "reads": [],
+   "marker": "LLAMA_CKPT_PINNED",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
+     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_CKPT_PINNED_CHECK: 25 saves and 7 restores, 0 differing bytes. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/prefill-ckpt-20261115): check session (59 turns): 178 saves each also taken through the stock path and 54 restores each loaded from both copies, 0 differing bytes; -lv 5 off/on pair: 65,673 draft candidate lines and 7,259 accepted lines equal, text + n 59/59; restore test (last and earlier user message edited): 9 requests, 8 restores, equal off vs on. Together with 10 at -ub 512 (prefill-combined-20261115): 66,672 draft candidate lines and 7,370 accepted lines equal, text 59/59",
+     "match": {
+      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "llama-server context checkpoints (three a prompt) on a CUDA device with a pinned host buffer type; any model whose state saves are 1 MiB or more",
+   "limits": [
+    "costs 3.7 GB of pinned host RAM (33 x 113 MiB here: --ctx-checkpoints + 1 buffers of the state size) from the first checkpoint until the process exits",
+    "the first checkpoint of a server's life takes about 2.3 s once (all pool buffers are pinned at once)",
+    "costs 8 MiB of VRAM (measured stacked on 10 at -ub 512)",
+    "a checkpoint of another size or past the reserved count is pinned when first needed (slower host CUDA calls while that happens); buffers under 1 MiB and hosts without a pinned host buffer type take the stock path",
+    "the check mode doubles checkpoint memory",
+    "rebased: the check call moved into upstream's refactored checkpoint restore (llama.cpp #32154)"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "tokenize-incr",
+   "title": "server tokenizes only the prompt's new part",
+   "module": "host",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_TOKENIZE_INCR",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_TOKENIZE_INCR_CHECK",
+    "needs": [
+     "LLAMA_TOKENIZE_INCR"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_TOKENIZE_INCR",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
+     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_TOKENIZE_INCR_CHECK: piecewise == full tokenization on every call. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/ship-prefill-20261118 (ab-ID: untimed identity session; ab-SCR: timed screen)): ab-ID (this patch, built as the series 01-15): off vs on (LLAMA_TOKENIZE_INCR=1 + LLAMA_TOKENIZE_INCR_CHECK=1 + LLAMA_PLE_PREFETCH_TURN=1), 59-turn session to 129k, recorded history: reply sha256 59/59 equal; 60 check calls (59 turns + warm-up), piecewise == full tokenization on every one (up to 128,856 tokens), 0 failures; server exits in 2.8 s, not killed. ab-SCR turns 40-59: 20/20 equal. Unit test (earlier build of the same code): 7 vocabs x 5 templates x 8 turns x add_special on/off = 560 cases, 0 failures. Earlier version (first-token cut, 4096-byte threshold), 3 timed pairs: text 59/59 x3",
+     "match": {
+      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "llama-server string prompts (the chat template's output) that hold control-token text, on a multi-turn chat whose history repeats from request to request",
+   "limits": [
+    "TTFT only (template + tokenize before the server's prefill); prompt processing and decode are unchanged",
+    "stock path when the prompt holds no control token of the vocab, when special-token parsing is off, or when the vocab adds EOS",
+    "the cache holds the pieces of the last call only (one prompt's text and tokens); with -np > 1 interleaved conversations reuse less (exact either way; how much less is unmeasured)",
+    "exact because the tokenizer splits at special tokens before BPE; control tokens with lstrip/rstrip attributes are not used as cut points"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "ple-prefetch",
+   "title": "per-layer embedding rows read ahead on a thread",
+   "module": "host",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_PLE_PREFETCH_TURN",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_PLE_PREFETCH_TURN",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
+     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on (switch on in the identical-switch arm; no check mode). base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/ship-prefill-20261118 (ab-ID: untimed identity session; ab-SCR: timed screen)): ab-ID (this patch, built as the series 01-15): off vs on (LLAMA_PLE_PREFETCH_TURN=1 with 14 + its check), 59-turn session to 129k, recorded history: reply sha256 59/59 equal; server exits in 2.8 s, not killed (the earlier version hung at exit: fixed). ab-SCR turns 40-59: 20/20 equal. Earlier version (hook before the checkpoint restore, at n_past - 64), 3 timed pairs: text 59/59 x3, decode x1.000",
+     "match": {
+      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
+      "equal": 8,
+      "of": 8
+     }
+    }
+   },
+   "exercised_by": "models whose per-layer token-embedding table is a lazily mapped tensor read through the mmap (the qwen4exp graph's PLE rows); llama-server prompts of more than one prefill pass",
+   "limits": [
+    "a model-level hook (llama_model::prefetch_inputs): only the qwen4exp graph overrides it; every other architecture is a no-op (by construction, not run on another architecture)",
+    "only when the table is lazily mapped (the condition the graph's own prefetch uses); a table in RAM or VRAM gets nothing",
+    "one background thread for the process lifetime, started at the first hint; it is detached and never joined",
+    "a hint (madvise MADV_WILLNEED): gains depend on the page cache and storage; the first pass's own rows still wait as stock",
+    "no check mode: no byte the model reads changes"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the mod only issues an OS read-ahead hint (madvise) on a background thread; no computed value or read byte changes, so there is nothing to compare. Identity rests on the full-session text match."
+    }
+   ]
+  },
+  {
+   "name": "sched-async-inputs",
+   "title": "scheduler uploads host inputs on the split's stream, no host sync",
+   "module": "host",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_SCHED_ASYNC_INPUTS",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "GGML_SCHED_ASYNC_INPUTS_CHECK",
+    "needs": [
+     "GGML_SCHED_ASYNC_INPUTS"
+    ]
+   },
+   "reads": [],
+   "marker": "GGML_SCHED_ASYNC_INPUTS",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/host-idle-b-20261118 (ab-chk20, ab-confirm20); boltbeam-runs/host-idle-a-20261118 (ab-ident, 1.0.0)",
+     "numbers": "on b12521 + 02-19 (build20, the 0.3.29 switch set, -ncmoe 0, region manifest for 6f311d7a): check mode (every staged copy synced, read back and compared) at least 20,000 copies (the check logs every 20,000), 0 differ, replies 8/8 equal to the switch-off arm (ab-chk20, turns 1-8). Confirm, 6 alternating pairs, 59-turn 128k session: decode 237.7 -> 240.9 tok/s, +3.2 [+1.3, +5.2] (+1.35%; clean turns +3.5 [+1.2, +5.9]); by depth +4.2 / +3.7 / +3.7 / +1.8 tok/s (<=31k / 66k / 97k / 129k); session wall 145.8 -> 143.8 s, -2.0 [-5.0, +1.0]; prefill -7 ms/turn [-39, +25]; replies 59/59 in all 12 runs. On 1.0.0 (host-idle-a): >= 260,000 staged copies, 0 differ; 2 x 3-pair confirms within noise (+0.4%, +1.3%).",
+     "match": {
+      "what": "reply sha256 per turn on b12521, switch on vs off (ab-confirm20, 6 pairs, 59 turns; ab-chk20 with check mode, turns 1-8)",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "exercised_by": "every graph compute whose split inputs come from host buffers of a CPU backend into device buffers, one backend copy (n_copies 1) with set_tensor_async: measured on llama's per-ubatch inputs (tokens, positions, masks, out ids, index lists, draft inputs) at -ncmoe 0; CPU-split results (experts in RAM) were exercised on 1.0.0 only",
+   "limits": [
+    "only host-buffer sources from a CPU backend into device buffers with set_tensor_async and n_copies == 1; others keep the stock sync and copy",
+    "staging uses the first device backend it meets; on several GPUs the others keep the stock path",
+    "a pinned 4 x 1 MiB staging ring per scheduler (each graph slot's scheduler has its own); a chunk is reused after an event behind its last copy completes",
+    "GGML_SCHED_ASYNC_INPUTS_CHECK turns check mode on when set to any value, 0 included",
+    "decode gain ~1.35% on the 128k chat (smaller at the deepest band); prefill and session wall within noise"
+   ],
+   "rule_exceptions": []
+  }
+ ],
+ "parked": [],
+ "retired": [
   {
    "name": "seq-rm-indexed",
    "title": "seq_rm walks an index, not the cache",
-   "patch": "patches/06-seq-rm-indexed.patch",
+   "patch": "retired/06-seq-rm-indexed.patch",
    "engine": "llama.cpp",
    "base": "b12521",
    "switch": {
@@ -307,911 +1050,13 @@
    "static": {
     "hunks_removing_stock_lines": 1,
     "note": "1 stock line changed (the entry branch); additive otherwise."
-   }
-  },
-  {
-   "name": "fattn-vec-skip",
-   "title": "vector attention kernel skips masked rows",
-   "patch": "patches/07-fattn-vec-skip.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_FATTN_VEC_SKIP",
-    "on": "1"
    },
-   "check": {
-    "kind": "env",
-    "name": "LLAMA_FATTN_VEC_SKIP_CHECK",
-    "needs": [
-     "GGML_CUDA_DISABLE_GRAPHS"
-    ]
-   },
-   "reads": [],
-   "marker": "LLAMA_FATTN_VEC_SKIP",
-   "files": [
-    "ggml/src/ggml-cuda/fattn-common.cuh",
-    "ggml/src/ggml-cuda/fattn-vec.cuh",
-    "ggml/src/ggml-cuda/fattn.cu"
-   ],
-   "lines": {
-    "added": 102,
-    "removed": 10
-   },
-   "budget": {
-    "added": 110,
-    "removed": 10
-   },
-   "depends_on": {
-    "apply": [
-     "sparse-direct"
-    ],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
-     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_FATTN_VEC_SKIP_CHECK: 0 bit patterns differ. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/draft-attn-sparse-20261115): check session: 0 value differences on every draft pass; text, n, draft_n, accepted identical on 59/59 turns",
-     "match": {
-      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
-   "limits": [
-    "one-query calls only (the vector kernel, q8_0 K/V, with a sparse mask): the draft passes",
-    "apply order needs patch 02 (shares its env helper and check block); the two switches are independent at run time",
-    "an accumulator that is exactly -0 would stay -0 where stock gives +0 (equal as values; never observed)"
-   ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 5,
-    "note": "10 stock lines changed in the vector kernel and the check block. Not provable statically."
-   }
-  },
-  {
-   "name": "idx-inplace",
-   "title": "indexer scores pooled q8_0 keys in place",
-   "patch": "patches/08-idx-inplace.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_IDX_INPLACE",
-    "on": "1"
-   },
-   "check": {
-    "kind": "env",
-    "name": "LLAMA_IDX_INPLACE_CHECK",
-    "needs": [
-     "GGML_CUDA_DISABLE_GRAPHS"
-    ]
-   },
-   "reads": [],
-   "marker": "LLAMA_IDX_INPLACE",
-   "files": [
-    "ggml/src/ggml-cuda/lightning-indexer.cu",
-    "src/llama-memory-hybrid-idx.cpp",
-    "src/llama-memory-hybrid-idx.h",
-    "src/models/qwen4exp.cpp"
-   ],
-   "lines": {
-    "added": 59,
-    "removed": 0
-   },
-   "budget": {
-    "added": 70,
-    "removed": 0
-   },
-   "depends_on": {
-    "apply": [
-     "idx-pooled"
-    ],
-    "run": [
-     "idx-pooled"
-    ]
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
-     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_IDX_INPLACE_CHECK: 0 score bit patterns differ. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/mask-indexer-20261115): check session: 116k indexer calls, 6.55e9 scores, 0 bit patterns differ; text sha, n, draft counts identical on 59/59 turns in 6 arms",
-     "match": {
-      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
-   "limits": [
-    "decode shapes only (fewer than 8 query tokens); prefill keeps the stock copy",
-    "needs LLAMA_IDX_POOLED=1 and q8_0 indexer keys; otherwise stock path",
-    "falls back to the stock copy when padded pools exceed the store rows (above about 130.8k tokens)"
-   ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 0,
-    "note": "purely additive (0 lines removed). One added object runs on every indexer node and returns at once unless the check is on."
-   }
-  },
-  {
-   "name": "ext-kernels",
-   "title": "external kernel hook",
-   "patch": "patches/09-ext-kernels.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "GGML_CUDA_EXT_KERNELS",
-    "on": "/path/manifest.json"
-   },
-   "check": {
-    "kind": "env",
-    "name": "GGML_CUDA_EXT_KERNELS_CHECK",
-    "needs": [
-     "GGML_CUDA_DISABLE_GRAPHS"
-    ]
-   },
-   "reads": [
-    "GGML_CUDA_PDL"
-   ],
-   "marker": "GGML_CUDA_EXT_KERNELS",
-   "files": [
-    "ggml/src/ggml-cuda/CMakeLists.txt",
-    "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
-   ],
-   "lines": {
-    "added": 292,
-    "removed": 0
-   },
-   "budget": {
-    "added": 310,
-    "removed": 0
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-xcheck)",
-     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/ext-kernel-hook-20261115): identity kernel: 71,425 checks past 98.6k context, 0 differences (bitwise); text and n identical 59/59 with the switch on vs off",
-     "match": {
-      "what": "reply sha256 per turn, check mode on vs the unchecked arm, same build and manifest (ab-xcheck, turns 1-4)",
-      "equal": 4,
-      "of": 4
-     }
-    }
-   },
-   "exercised_by": "any graph node the manifest matches by op, types and shape; measured with a BF16 mul_mat_vec instance",
-   "limits": [
-    "a window of one op; one device",
-    "\"identical\" holds for an identity kernel only: each installed kernel carries its own tolerance and evidence"
-   ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 0,
-    "note": "purely additive (0 lines removed): one new file, one guarded call site, one build-list line."
-   }
-  },
-  {
-   "name": "moe-inplace",
-   "title": "prefill reads cached experts in place",
-   "patch": "patches/10-moe-inplace.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_MOE_INPLACE",
-    "on": "1"
-   },
-   "check": {
-    "kind": "env",
-    "name": "LLAMA_MOE_INPLACE_CHECK",
-    "needs": [
-     "GGML_CUDA_DISABLE_GRAPHS"
-    ]
-   },
-   "reads": [],
-   "marker": "LLAMA_MOE_INPLACE",
-   "files": [
-    "ggml/src/ggml-cuda/common.cuh",
-    "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/mmq.cu",
-    "ggml/src/ggml-cuda/mmq.cuh",
-    "src/llama-context.cpp",
-    "src/llama-context.h",
-    "src/llama-moe-cache.cpp",
-    "src/llama-moe-cache.h"
-   ],
-   "lines": {
-    "added": 148,
-    "removed": 16
-   },
-   "budget": {
-    "added": 160,
-    "removed": 16
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/prefill-expert-inplace-20261115; boltbeam-runs/guardrails-20261118 (ab-mods3)",
-     "numbers": "on b12521 (boltbeam-runs/guardrails-20261118 ab-mods3: the 59-turn session's turns 1-8, -ncmoe 16 --moe-cache-mib 4096, graphs off): LLAMA_MOE_INPLACE_CHECK on 1,200 calls, 0 bytes differ; replies 8/8 equal to the switch-off arm. (At --moe-cache-mib 6240 this build does not load the draft: out of memory.) The match below was measured on 1.0.0. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0: check session (graphs off, 59 turns): 49,392 checks of every prefill MMQ mul_mat_id output of the host expert layers, in place vs staged, 0 bytes differ; -lv 5 off/on pair: 65,673 draft candidate lines and 7,259 accepted lines equal, text sha + n 59/59; 8,015,016 experts read in place = the 8,015,016 stock copied",
-     "match": {
-      "what": "reply sha256 per turn on b12521, switch and check mode on vs off (ab-mods3, turns 1-8, --moe-cache-mib 4096)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "prefill batches (more than 32 tokens) through MMQ mul_mat_id on host-RAM experts with the engine's MoE expert cache on (--moe-cache-mib with -ncmoe); measured on one MoE model with an MTP draft head",
-   "limits": [
-    "batches over 32 tokens through the MMQ mul_mat_id kernel only; decode and small batches keep the stock path",
-    "experts that miss the cache are still uploaded one by one into the staging copy, as stock (about 116 ms a turn at 100k remains)",
-    "one device-side offset table per staged host expert tensor (2 KB each, kept for the life of the backend context)",
-    "a cold first turn is unchanged (nothing is cached yet)",
-    "rebased with a one-line port: x_delta is passed at upstream's new GCN force_tiling launch (llama.cpp #30022)"
-   ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 11,
-    "note": "11 hunks rewrite stock lines: the MMQ kernel and its launch take one more argument (x_delta), and its tile call sites (and upstream's GCN force_tiling launch) read x + x_delta[zt] when x_delta is set; with the switch unset x_delta is nullptr and the weight base is x, as stock. The MoE cache callback computes the offsets only with the switch on."
-   }
-  },
-  {
-   "name": "ckpt-pinned",
-   "title": "context checkpoints in a pinned pool",
-   "patch": "patches/11-ckpt-pinned.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_CKPT_PINNED",
-    "on": "1"
-   },
-   "check": {
-    "kind": "env",
-    "name": "LLAMA_CKPT_PINNED_CHECK",
-    "needs": []
-   },
-   "reads": [],
-   "marker": "LLAMA_CKPT_PINNED",
-   "files": [
-    "common/common.cpp",
-    "common/common.h",
-    "tools/server/server-context.cpp"
-   ],
-   "lines": {
-    "added": 184,
-    "removed": 0
-   },
-   "budget": {
-    "added": 200,
-    "removed": 0
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
-     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_CKPT_PINNED_CHECK: 25 saves and 7 restores, 0 differing bytes. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/prefill-ckpt-20261115): check session (59 turns): 178 saves each also taken through the stock path and 54 restores each loaded from both copies, 0 differing bytes; -lv 5 off/on pair: 65,673 draft candidate lines and 7,259 accepted lines equal, text + n 59/59; restore test (last and earlier user message edited): 9 requests, 8 restores, equal off vs on. Together with 10 at -ub 512 (prefill-combined-20261115): 66,672 draft candidate lines and 7,370 accepted lines equal, text 59/59",
-     "match": {
-      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "llama-server context checkpoints (three a prompt) on a CUDA device with a pinned host buffer type; any model whose state saves are 1 MiB or more",
-   "limits": [
-    "costs 3.7 GB of pinned host RAM (33 x 113 MiB here: --ctx-checkpoints + 1 buffers of the state size) from the first checkpoint until the process exits",
-    "the first checkpoint of a server's life takes about 2.3 s once (all pool buffers are pinned at once)",
-    "costs 8 MiB of VRAM (measured stacked on 10 at -ub 512)",
-    "a checkpoint of another size or past the reserved count is pinned when first needed (slower host CUDA calls while that happens); buffers under 1 MiB and hosts without a pinned host buffer type take the stock path",
-    "the check mode doubles checkpoint memory",
-    "rebased: the check call moved into upstream's refactored checkpoint restore (llama.cpp #32154)"
-   ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 0,
-    "note": "purely additive (0 lines removed): the pool is behind the state buffer allocator and is never entered with the switch unset; 65 of the 70 server lines are the check mode."
-   }
-  },
-  {
-   "name": "topk-fused",
-   "title": "radix top-k of a few rows in one launch",
-   "patch": "patches/12-topk-fused.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_TOPK_FUSED",
-    "on": "1"
-   },
-   "check": {
-    "kind": "env",
-    "name": "LLAMA_TOPK_FUSED_CHECK",
-    "needs": [
-     "GGML_CUDA_DISABLE_GRAPHS"
-    ]
-   },
-   "reads": [
-    "GGML_CUDA_PDL"
-   ],
-   "marker": "LLAMA_TOPK_FUSED",
-   "files": [
-    "ggml/src/ggml-cuda/top-k.cu"
-   ],
-   "lines": {
-    "added": 314,
-    "removed": 1
-   },
-   "budget": {
-    "added": 330,
-    "removed": 1
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
-     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_TOPK_FUSED_CHECK: total diff 0. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/decode-topk-fused-20261115): check session (59 turns, graphs off): 166,000+ fused calls each compared with the stock kernels and a host reference (picks above the threshold as a set, tie slots word for word in order), total diff 0, verify rows 4 x up to 32,320 columns and the 1-row sampler over 248,320; -lv 5 off/on pair: 65,790 draft candidate lines and 7,268 accepted lines equal, text + n 59/59; 6 timed arms: text sha, n, draft_n, accepted 59/59 equal",
-     "match": {
-      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "ggml_top_k calls that take the CUDA radix path with at most 8 rows (and rows <= SM count): the indexer's per-layer top-k at decode and draft, and, on builds without CUB DeviceTopK (CCCL < 3.4.3), the backend sampler's top-k over the vocabulary",
-   "limits": [
-    "CUDA only: compiled out on HIP and MUSA builds (warp size 32, cudaStreamCreate), which keep the stock path",
-    "only calls with rows <= 8 and rows x blocks <= SM count use it (an in-kernel barrier needs every block resident); larger calls (prefill) keep the stock path",
-    "residency is derived from the SM count, not checked: not for MPS thread-percentage limits or green contexts (the barrier could hang); a faulted launch leaves the row state set and later calls on that stream hang",
-    "row state is keyed by stream handle only: a process that destroys a stream and gets the same handle on another GPU would reuse a buffer on the wrong device (single-GPU runs measured)",
-    "the order of picks above the threshold is the atomicAdd order, as in stock (no fixed order); ties fill the last slots in ascending column order, as in stock",
-    "keeps 8 x 128 bytes of zeroed device state per stream for the life of the process",
-    "the check mode needs GGML_CUDA_DISABLE_GRAPHS=1 (it syncs the stream) and does not enforce it",
-    "measured gain is 70% of the derived 0.46 ms/step at ~100k"
-   ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 1,
-    "note": "one stock line changed: the stock top_k_radix_cuda is renamed top_k_radix_stock_cuda and a new top_k_radix_cuda dispatches to it unless the switch is set. Not provable statically."
-   }
-  },
-  {
-   "name": "graph-slots",
-   "title": "draft context keeps a graph per small ubatch size",
-   "patch": "patches/13-graph-slots.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_GRAPH_SLOTS",
-    "on": "1"
-   },
-   "check": null,
-   "reads": [
-    "GGML_CUDA_GRAPH_OPT"
-   ],
-   "marker": "LLAMA_GRAPH_SLOTS",
-   "files": [
-    "src/llama-context.cpp",
-    "src/llama-context.h"
-   ],
-   "lines": {
-    "added": 102,
-    "removed": 0
-   },
-   "budget": {
-    "added": 110,
-    "removed": 0
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
-     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on (switch on in the identical-switch arm; no check mode). base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/graph-reuse-20261116): -lv 5 off/on pair (LLAMA_GRAPH_SLOTS=1 with the archived graph-recapture switch also on): 65,790 draft candidate lines and 7,268 accepted lines equal, text sha + n and draft_n/accepted 59/59; 6 timed arms of the switch alone (3 off, 3 on) and 6 of both switches: text sha, n, draft_n, accepted 59/59 equal to the first off arm",
-     "match": {
-      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "speculative decoding with an MTP draft context (context type MTP) whose forwards alternate between a catch-up of a few tokens and 1-token draft passes; measured on one MoE model with an MTP draft head",
-   "limits": [
-    "MTP draft contexts only (context type MTP); target and other contexts keep the stock single scheduler",
-    "measured at N=1 only: N>1 (one scheduler per ubatch size 1..N) costs about 60 MiB more VRAM, not explained, and ran out of memory at 128k on the measured flags; N=1 costs about 4 MiB",
-    "the slot schedulers' compute buffers are not counted in memory_breakdown (each slot logs its size once, at its first graph)",
-    "no check mode",
-    "refused (stock path) when GGML_CUDA_GRAPH_OPT is set: its concurrent-stream events are per backend and rebuilt only when a graph is built; also off when graph reuse is disabled",
-    "the measured gain is a third of the CPU time the rebuilds cost (0.59 ms/step); the rest overlapped GPU work"
-   ],
-   "rule_exceptions": [
-    {
-     "rule": "check",
-     "why": "no check mode: the switch changes which scheduler holds a draft graph (compute buffer addresses), not what is computed; identity rests on the -lv 5 pair and the 12 timed arms. A check (run each slot graph once more on slot 0 and compare) is not built"
-    }
-   ],
-   "static": {
-    "hunks_removing_stock_lines": 0,
-    "note": "purely additive (0 lines removed): every added call site is behind gslot_max > 0, which stays 0 with the switch unset. No check switch: rule exception, recorded here."
-   }
-  },
-  {
-   "name": "tokenize-incr",
-   "title": "server tokenizes only the prompt's new part",
-   "patch": "patches/14-tokenize-incr.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_TOKENIZE_INCR",
-    "on": "1"
-   },
-   "check": {
-    "kind": "env",
-    "name": "LLAMA_TOKENIZE_INCR_CHECK",
-    "needs": [
-     "LLAMA_TOKENIZE_INCR"
-    ]
-   },
-   "reads": [],
-   "marker": "LLAMA_TOKENIZE_INCR",
-   "files": [
-    "tools/server/server-common.cpp"
-   ],
-   "lines": {
-    "added": 109,
-    "removed": 1
-   },
-   "budget": {
-    "added": 120,
-    "removed": 1
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
-     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on; check mode in that arm: LLAMA_TOKENIZE_INCR_CHECK: piecewise == full tokenization on every call. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/ship-prefill-20261118 (ab-ID: untimed identity session; ab-SCR: timed screen)): ab-ID (this patch, built as the series 01-15): off vs on (LLAMA_TOKENIZE_INCR=1 + LLAMA_TOKENIZE_INCR_CHECK=1 + LLAMA_PLE_PREFETCH_TURN=1), 59-turn session to 129k, recorded history: reply sha256 59/59 equal; 60 check calls (59 turns + warm-up), piecewise == full tokenization on every one (up to 128,856 tokens), 0 failures; server exits in 2.8 s, not killed. ab-SCR turns 40-59: 20/20 equal. Unit test (earlier build of the same code): 7 vocabs x 5 templates x 8 turns x add_special on/off = 560 cases, 0 failures. Earlier version (first-token cut, 4096-byte threshold), 3 timed pairs: text 59/59 x3",
-     "match": {
-      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "llama-server string prompts (the chat template's output) that hold control-token text, on a multi-turn chat whose history repeats from request to request",
-   "limits": [
-    "TTFT only (template + tokenize before the server's prefill); prompt processing and decode are unchanged",
-    "stock path when the prompt holds no control token of the vocab, when special-token parsing is off, or when the vocab adds EOS",
-    "the cache holds the pieces of the last call only (one prompt's text and tokens); with -np > 1 interleaved conversations reuse less (exact either way; how much less is unmeasured)",
-    "exact because the tokenizer splits at special tokens before BPE; control tokens with lstrip/rstrip attributes are not used as cut points"
-   ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 1,
-    "note": "one stock line rewritten: the string-prompt call of common_tokenize goes through tokenize_incr, whose first statement returns common_tokenize unchanged when LLAMA_TOKENIZE_INCR is unset."
-   }
-  },
-  {
-   "name": "ple-prefetch",
-   "title": "per-layer embedding rows read ahead on a thread",
-   "patch": "patches/15-ple-prefetch.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_PLE_PREFETCH_TURN",
-    "on": "1"
-   },
-   "check": null,
-   "reads": [],
-   "marker": "LLAMA_PLE_PREFETCH_TURN",
-   "files": [
-    "include/llama.h",
-    "src/llama-mmap.cpp",
-    "src/llama-mmap.h",
-    "src/llama-model.cpp",
-    "src/llama-model.h",
-    "src/models/models.h",
-    "src/models/qwen4exp.cpp",
-    "tools/server/server-context.cpp"
-   ],
-   "lines": {
-    "added": 115,
-    "removed": 0
-   },
-   "budget": {
-    "added": 130,
-    "removed": 0
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
-     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on (switch on in the identical-switch arm; no check mode). base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/ship-prefill-20261118 (ab-ID: untimed identity session; ab-SCR: timed screen)): ab-ID (this patch, built as the series 01-15): off vs on (LLAMA_PLE_PREFETCH_TURN=1 with 14 + its check), 59-turn session to 129k, recorded history: reply sha256 59/59 equal; server exits in 2.8 s, not killed (the earlier version hung at exit: fixed). ab-SCR turns 40-59: 20/20 equal. Earlier version (hook before the checkpoint restore, at n_past - 64), 3 timed pairs: text 59/59 x3, decode x1.000",
-     "match": {
-      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "models whose per-layer token-embedding table is a lazily mapped tensor read through the mmap (the qwen4exp graph's PLE rows); llama-server prompts of more than one prefill pass",
-   "limits": [
-    "a model-level hook (llama_model::prefetch_inputs): only the qwen4exp graph overrides it; every other architecture is a no-op (by construction, not run on another architecture)",
-    "only when the table is lazily mapped (the condition the graph's own prefetch uses); a table in RAM or VRAM gets nothing",
-    "one background thread for the process lifetime, started at the first hint; it is detached and never joined",
-    "a hint (madvise MADV_WILLNEED): gains depend on the page cache and storage; the first pass's own rows still wait as stock",
-    "no check mode: no byte the model reads changes"
-   ],
-   "rule_exceptions": [
-    {
-     "rule": "check",
-     "why": "no check mode: the mod only issues an OS read-ahead hint (madvise) on a background thread; no computed value or read byte changes, so there is nothing to compare. Identity rests on the full-session text match."
-    }
-   ],
-   "static": {
-    "hunks_removing_stock_lines": 0,
-    "note": "purely additive (0 lines removed): the server calls the hook only with LLAMA_PLE_PREFETCH_TURN set; the base-class hook is empty."
-   }
-  },
-  {
-   "name": "rs-one-copy",
-   "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
-   "patch": "patches/16-rs-one-copy.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_RS_ONE_COPY",
-    "on": "1"
-   },
-   "check": {
-    "kind": "env",
-    "name": "LLAMA_RS_ONE_COPY_CHECK",
-    "needs": [
-     "LLAMA_RS_ONE_COPY"
-    ]
-   },
-   "reads": [
-    "GGML_CUDA_GRAPH_OPT"
-   ],
-   "marker": "LLAMA_RS_ONE_COPY",
-   "files": [
-    "src/llama-context.cpp",
-    "src/llama-graph.cpp",
-    "src/llama-graph.h",
-    "src/llama-memory-recurrent.cpp",
-    "src/llama-memory-recurrent.h",
-    "src/llama-model.h",
-    "src/models/delta-net-base.cpp",
-    "src/models/models.h",
-    "src/models/qwen4exp.cpp"
-   ],
-   "lines": {
-    "added": 549,
-    "removed": 6
-   },
-   "budget": {
-    "added": 580,
-    "removed": 6
-   },
-   "depends_on": {
-    "apply": [
-     "ple-prefetch"
-    ],
-    "run": []
-   },
-   "output": {
-    "label": "quality-gated",
-    "evidence": {
-     "run": "boltbeam-runs/conversation-server-design-20261117 (OC1, ab-OC3, OC6, RT; BUILD.md); boltbeam-runs/guardrails-20261118 (ab-xcheck, ab-screen2)",
-     "numbers": "on b12521: switch on in the full-stack arms of ab-xcheck and ab-screen2 (no stock comparison of this mod alone); the gate object below was measured on 1.0.0. Separately, the base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0: check mode compares the replayed state with the stock K-plane state at every graph: 7,633 steps over the 59-turn session (54 checkpoint restores, all with 0 kept tokens) and 738 steps at turns 1-5, sum |diff| 0 on every step; a forced-restore test (RT: 10 rounds of generate with the draft, save and restore the slot, continue the same tokens, plus 3 rollbacks 2 tokens inside the last reply) made 13 restores, 10 of them with a replay pending (2-4 kept tokens), 207 check steps at LLAMA_RS_ONE_COPY_CHECK=2, 0 differing, and the reply tokens equal check vs on vs off in 10/10 rounds; screen ab-OC3 turns 40-59 text 20/20 on vs off. Gate class because it ships with the resident setup (all experts on the GPU, -b 1024, a hot-set draft), which changes batch shapes and the draft: FR vs the shipped setup text 11/59, so the stage-1 agreement gate decides",
-     "gate": {
-      "name": "session-gate stage 1 (top-1 agreement over the session's positions vs the declared floor -b 5 -ub 5)",
-      "run": "boltbeam-runs/conversation-server-design-20261117/ab-OC6",
-      "verdict": "pass: FR 0.9960 [0.9935, 0.9985] vs floor 0.9965, excess 0.0005 of 0.0028 allowed (measured on 1.0.0); on b12521 pass as part of the full stack: gate-q-stdlib 0.9965 vs floor 0.9945, gate-q-go 0.9925 vs floor 0.9945, excess +0.0020 of 0.0023 allowed"
-     }
-    }
-   },
-   "exercised_by": "hybrid models whose linear-attention (gated delta-net) layers keep a recurrent state with rollback planes for speculative decoding (n_rs_seq > 0), on an architecture that declares supports_rs_one_copy (the qwen4exp graph); llama-server -np 1",
-   "limits": [
-    "-np 1 only (one sequence, one cell); refused with the stock layout otherwise",
-    "an architecture opts in (supports_rs_one_copy); only the qwen4exp graph does; others keep the stock layout",
-    "refused (stock layout) with GGML_CUDA_GRAPH_OPT=1: its stream reordering could run the keep copies before the replay reads them",
-    "an f32 recurrent state only",
-    "a state saved with the switch on carries a one-copy section: it restores only into a server with the switch on and the same K",
-    "the speed gain needs the freed memory spent (here on expert residency with 17 and a hot-set draft); alone it costs +0.09 ms a step",
-    "check mode keeps the stock planes too (the freed memory comes back) and is for correctness, not timing"
-   ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 6,
-    "note": "6 stock lines rewritten: the S tensor's row count (n_rows unless the switch is on), the ctx size for 2 more tensors a layer when on, build_recurrent_attn and its declaration gain a defaulted s_ref argument, and the qwen4exp linear-attention layer chooses the state gather and passes s_ref; with the switch unset each takes the stock value or path."
-   }
-  },
-  {
-   "name": "cublas-shared",
-   "title": "one cuBLAS handle and workspace per device for every context",
-   "patch": "patches/17-cublas-shared.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_CUBLAS_SHARED",
-    "on": "1"
-   },
-   "check": null,
-   "reads": [],
-   "marker": "LLAMA_CUBLAS_SHARED",
-   "files": [
-    "ggml/src/ggml-cuda/common.cuh"
-   ],
-   "lines": {
-    "added": 29,
-    "removed": 0
-   },
-   "budget": {
-    "added": 40,
-    "removed": 0
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-ident2)",
-     "numbers": "on b12521 (ab-ident2: the 59-turn session's turns 1-8, recorded history, -ncmoe 16): reply sha256 8/8 equal for stock b12521 = series build with every switch unset = identical-labelled switches on = every check mode on (switch on in the identical-switch arm; no check mode). base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/conversation-server-design-20261117 (P4: FP0c vs FP0n)): switch on (FP0c) vs off (FP0n), resident placement, -b 1024, 59 turns: reply text 59/59 equal; decode 201.6 vs 201.4 tok/s (untimed)",
-     "match": {
-      "what": "reply sha256 per turn, stock b12521 vs the series build with the identical-labelled switches on and with every check mode on (ab-ident2, turns 1-8)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "processes with more than one CUDA backend context on a device (a target and a draft context) that call cuBLAS",
-   "limits": [
-    "any value of LLAMA_CUBLAS_SHARED turns it on (it tests set, not 1)",
-    "contexts must run one at a time on one thread (llama-server's target and draft do); the handle is re-bound to the calling stream when it changes",
-    "stream 0 of each context only; other streams keep their own handles",
-    "CUDA builds; HIP and MUSA builds skip the workspace as stock does",
-    "no check mode"
-   ],
-   "rule_exceptions": [
-    {
-     "rule": "check",
-     "why": "no check mode: the same cuBLAS calls run on one shared handle and workspace instead of one per context; nothing computed differs to compare beside it. Identity rests on the 59/59 session"
-    }
-   ],
-   "static": {
-    "hunks_removing_stock_lines": 0,
-    "note": "purely additive (0 lines removed): the shared branch is taken only with LLAMA_CUBLAS_SHARED set."
-   }
-  },
-  {
-   "name": "draft-route-count",
-   "title": "diagnostic: count the experts the draft's router picks",
-   "patch": "patches/18-draft-route-count.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "LLAMA_DRAFT_ROUTE_COUNT",
-    "on": "a file path"
-   },
-   "check": null,
-   "reads": [],
-   "marker": "LLAMA_DRAFT_ROUTE_COUNT",
-   "files": [
-    "common/speculative.cpp"
-   ],
-   "lines": {
-    "added": 56,
-    "removed": 0
-   },
-   "budget": {
-    "added": 60,
-    "removed": 0
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/conversation-server-design-20261117 (S2a: ID0, RC; P7a: HA0); boltbeam-runs/guardrails-20261118 (ab-mods3)",
-     "numbers": "on b12521 (ab-mods3, turns 1-8): switch on (a route file written: 2,909 decode and 21,538 catch-up tokens counted) vs off: replies 8/8 equal. The match below was measured on 1.0.0. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0: switch on (RC, graph slots off) vs the same flags on the frozen series build (HA0): reply sha256 59/59 equal; switch off on the diagnostic build (ID0) vs the frozen build 12/12",
-     "match": {
-      "what": "reply sha256 per turn on b12521, switch on vs off (ab-mods3, turns 1-8)",
-      "equal": 8,
-      "of": 8
-     }
-    }
-   },
-   "exercised_by": "llama-server with a mixture-of-experts draft model (-md) whose graph names its router output ffn_moe_probs",
-   "limits": [
-    "slow: an eval callback reads the router output of every draft forward to the host (a sync per layer); for a counting run, not for serving",
-    "the file is written every 20,000 forwards and when the process exits normally",
-    "the draft context only; the target is not counted",
-    "no check mode"
-   ],
-   "rule_exceptions": [
-    {
-     "rule": "check",
-     "why": "no check mode: a diagnostic that reads the router output and computes nothing the model uses; identity rests on the 59/59 session"
-    }
-   ],
-   "static": {
-    "hunks_removing_stock_lines": 0,
-    "note": "purely additive (0 lines removed): the callback is installed only with LLAMA_DRAFT_ROUTE_COUNT set to a non-empty path and a draft model."
-   }
-  },
-  {
-   "name": "ext-kernels-window",
-   "title": "kernel hook takes a window of nodes: one generated kernel for a region",
-   "patch": "patches/19-ext-kernels-window.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": null,
-   "switch_null_why": "extends ext-kernels (09): engaged by the same GGML_CUDA_EXT_KERNELS when its manifest is a boltbeam.kernel_manifest.v2 with multi-node entries; unset = stock, a v1 manifest = 09's behaviour",
-   "check": null,
-   "reads": [
-    "GGML_CUDA_EXT_KERNELS_DUMP",
-    "GGML_CUDA_PDL"
-   ],
-   "marker": "GGML_CUDA_EXT_KERNELS_DUMP",
-   "files": [
-    "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
-   ],
-   "lines": {
-    "added": 271,
-    "removed": 63
-   },
-   "budget": {
-    "added": 290,
-    "removed": 63
-   },
-   "depends_on": {
-    "apply": [
-     "ext-kernels"
-    ],
-    "run": [
-     "ext-kernels"
-    ]
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/guardrails-20261118 (ab-xcheck)",
-     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm)): check mode (09's GGML_CUDA_EXT_KERNELS_CHECK, extended to every live output of a window; graphs off, turns 40-41, tolerance 0): shared gate 6,145 checks, inject region 12,545, down tail 12,801, shipped one-op entries 12,545, 0 differences, worst 0; with kernels/region-chain-k2560-k10240 on vs the shipped one-op manifest: reply sha256 identical 59/59 in all 6 runs of the 3-pair confirm",
-     "match": {
-      "what": "reply sha256 per turn, check mode on vs the unchecked arm, same build and manifest (ab-xcheck, turns 1-4)",
-      "equal": 4,
-      "of": 4
-     }
-    }
-   },
-   "exercised_by": "a kernel_manifest.v2 entry whose match.ops lists N consecutive graph nodes with their wiring; measured with three windows (gemv + sigmoid + mul + add; gemv + scale + sigmoid + scale; scale + silu)",
-   "limits": [
-    "a window is N consecutive compute nodes (no views between, every tensor contiguous); interior nodes must be read only inside the window; a live output may share memory with an input only exactly and only where the entry allows it (alias_ok), else the engine's own nodes run",
-    "a GGML_OP_SCALE op matches only on its op_params (factor, bias); a SCALE entry without them is refused at load",
-    "one launch per entry; region entries must come before one-op entries in the manifest (first match wins)",
-    "GGML_CUDA_EXT_KERNELS_DUMP=<file> appends each graph shape the hook sees (JSON lines) for the region finder; off when unset"
-   ],
-   "rule_exceptions": [
-    {
-     "rule": "switch",
-     "why": "no switch of its own: it widens 09's hook, which GGML_CUDA_EXT_KERNELS turns on; a v1 manifest keeps 09's one-node behaviour (its entries checked 0 differ through this code)"
-    },
-    {
-     "rule": "check",
-     "why": "no check switch of its own: 09's GGML_CUDA_EXT_KERNELS_CHECK now compares every live output of a window"
-    }
-   ],
-   "static": {
-    "hunks_removing_stock_lines": 11,
-    "note": "rewrites lines of 09's ext-kernels.cpp (the loader and the match/launch function) and its one call site in ggml-cuda.cu (the returned node count is now used: i += n - 1); no engine line outside 09's is changed"
-   }
-  },
-  {
-   "name": "sched-async-inputs",
-   "title": "scheduler uploads host inputs on the split's stream, no host sync",
-   "patch": "patches/20-sched-async-inputs.patch",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "GGML_SCHED_ASYNC_INPUTS",
-    "on": "1"
-   },
-   "check": {
-    "kind": "env",
-    "name": "GGML_SCHED_ASYNC_INPUTS_CHECK",
-    "needs": [
-     "GGML_SCHED_ASYNC_INPUTS"
-    ]
-   },
-   "reads": [],
-   "marker": "GGML_SCHED_ASYNC_INPUTS",
-   "files": [
-    "ggml/src/ggml-backend.cpp"
-   ],
-   "lines": {
-    "added": 82,
-    "removed": 0
-   },
-   "budget": {
-    "added": 90,
-    "removed": 0
-   },
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/host-idle-b-20261118 (ab-chk20, ab-confirm20); boltbeam-runs/host-idle-a-20261118 (ab-ident, 1.0.0)",
-     "numbers": "on b12521 + 02-19 (build20, the 0.3.29 switch set, -ncmoe 0, region manifest for 6f311d7a): check mode (every staged copy synced, read back and compared) at least 20,000 copies (the check logs every 20,000), 0 differ, replies 8/8 equal to the switch-off arm (ab-chk20, turns 1-8). Confirm, 6 alternating pairs, 59-turn 128k session: decode 237.7 -> 240.9 tok/s, +3.2 [+1.3, +5.2] (+1.35%; clean turns +3.5 [+1.2, +5.9]); by depth +4.2 / +3.7 / +3.7 / +1.8 tok/s (<=31k / 66k / 97k / 129k); session wall 145.8 -> 143.8 s, -2.0 [-5.0, +1.0]; prefill -7 ms/turn [-39, +25]; replies 59/59 in all 12 runs. On 1.0.0 (host-idle-a): >= 260,000 staged copies, 0 differ; 2 x 3-pair confirms within noise (+0.4%, +1.3%).",
-     "match": {
-      "what": "reply sha256 per turn on b12521, switch on vs off (ab-confirm20, 6 pairs, 59 turns; ab-chk20 with check mode, turns 1-8)",
-      "equal": 59,
-      "of": 59
-     }
-    }
-   },
-   "exercised_by": "every graph compute whose split inputs come from host buffers of a CPU backend into device buffers, one backend copy (n_copies 1) with set_tensor_async: measured on llama's per-ubatch inputs (tokens, positions, masks, out ids, index lists, draft inputs) at -ncmoe 0; CPU-split results (experts in RAM) were exercised on 1.0.0 only",
-   "limits": [
-    "only host-buffer sources from a CPU backend into device buffers with set_tensor_async and n_copies == 1; others keep the stock sync and copy",
-    "staging uses the first device backend it meets; on several GPUs the others keep the stock path",
-    "a pinned 4 x 1 MiB staging ring per scheduler (each graph slot's scheduler has its own); a chunk is reused after an event behind its last copy completes",
-    "GGML_SCHED_ASYNC_INPUTS_CHECK turns check mode on when set to any value, 0 included",
-    "decode gain ~1.35% on the 128k chat (smaller at the deepest band); prefill and session wall within noise"
-   ],
-   "rule_exceptions": [],
-   "static": {
-    "hunks_removing_stock_lines": 0,
-    "note": "additive: with the switch unset stage_mode is 0 and ggml_backend_sched_copy_input runs the stock path"
+   "retired": {
+    "date": "2026-11-18",
+    "why": "upstream does it: llama.cpp #32380 (commit 21fa9c043f0e, in this base) removes a sequence's cells through its position index on every seq_rm, always on, so the switch chose between two equal paths; 83 lines for no gain on this base. Kept on 1.0.0, whose base lacks #32380"
    }
   }
  ],
- "parked": [],
  "archived": [],
  "kernels": [
   {
@@ -1288,29 +1133,17 @@
  ],
  "tested_trees": [
   {
-   "id": "guardrails-tree-mods",
-   "path": "boltbeam-runs/guardrails-20261118/tree-mods",
-   "what": "the tree the series build (build-mods) of ab-ident2, ab-xcheck and ab-screen2 was built from",
-   "contains": "exactly the series 02-19 on the base (the series-b12521 branch checked out on b12521)",
+   "id": "modules-tree",
+   "path": "boltbeam-runs/mods-modules-20261118/tree-modules",
+   "what": "the tree the module build (build-modules) was built from",
+   "contains": "exactly the 6 modules on the base",
    "apply": [
-    "patches/02-sparse-direct.patch",
-    "patches/03-idx-pooled.patch",
-    "patches/04-mtp-share-head.patch",
-    "patches/05-kpool-input-device.patch",
-    "patches/06-seq-rm-indexed.patch",
-    "patches/07-fattn-vec-skip.patch",
-    "patches/08-idx-inplace.patch",
-    "patches/09-ext-kernels.patch",
-    "patches/10-moe-inplace.patch",
-    "patches/11-ckpt-pinned.patch",
-    "patches/12-topk-fused.patch",
-    "patches/13-graph-slots.patch",
-    "patches/14-tokenize-incr.patch",
-    "patches/15-ple-prefetch.patch",
-    "patches/16-rs-one-copy.patch",
-    "patches/17-cublas-shared.patch",
-    "patches/18-draft-route-count.patch",
-    "patches/19-ext-kernels-window.patch"
+    "patches/kv.patch",
+    "patches/indexer.patch",
+    "patches/kernels.patch",
+    "patches/experts.patch",
+    "patches/state.patch",
+    "patches/host.patch"
    ]
   }
  ],
@@ -1342,6 +1175,46 @@
      "compare": "base-move gate: gate-timed-* (3-pair timed confirm) and gate-q-* (quality gate) on b12521",
      "setup": "b12359 + 01-19 (C4 0.3.29 build) vs this series on b12521, the 0.3.29 switch set and flags (-ncmoe 0, -b 1024, hot draft, region manifest listing 6f311d7a); the 59-turn session (59 turns, matched lengths) and the held-out Go session (BoltBeam data/session_go_nethttp_256k.json, turns 1-56); recorded history; 3 pairs timed; one block with the stage-1 session-gate (reference = the b12359 stack, floor = it at -b 5 -ub 5)",
      "numbers": "session wall 147.0 -> 146.2 s, -0.8 [-1.6, +0.0] (59-turn) and 156.5 -> 155.2 s, -1.2 [-7.1, +4.6] (Go 1-56); decode -2.1 [-3.3, -1.0] and -2.7 [-10.6, +5.2] tok/s, prefill -18 [-24, -13] and -31 [-69, +7] ms/turn; stage-1 pass: 0.9965 vs floor 0.9945 and 0.9925 vs floor 0.9945 (excess +0.0020 of 0.0023 allowed)"
+    }
+   ]
+  },
+  {
+   "id": "modules-b12521",
+   "date": "2026-11-19",
+   "tree": "boltbeam-runs/mods-modules-20261118/tree-modules",
+   "contains": "exactly the 6 modules on b12521",
+   "build": "boltbeam-runs/mods-modules-20261118/build-modules (CUDA, Release; job_build_modules.out); the 02-20 series build it is compared with: boltbeam-runs/mods-modules-20261118/bin-series; stock b12521 build: boltbeam-runs/guardrails-20261118/build-stock",
+   "runs": "boltbeam-runs/mods-modules-20261118 (ab-ident, ab-moe, ab-xcheck2, ab-rs, ab-speed, ab-speed-rev; README.md)",
+   "results": [
+    {
+     "compare": "tree: the module tree against the 02-20 series tree",
+     "setup": "git diff of the two trees",
+     "numbers": "the module tree is the series tree without seq-rm-indexed's hunks (src/llama-kv-cache.cpp), with two rs-one-copy declarations moved (src/llama-model.h, src/models/models.h) and the ple-prefetch function moved from src/models/qwen4exp.cpp to src/models/qwen4exp-prefetch.cpp; no other file differs"
+    },
+    {
+     "compare": "ab-ident: stock b12521 (S) vs module build all switches unset (M0), identical-labelled switches on (MI), every check mode on (MC), and the 02-20 series build with the same switches (OI)",
+     "setup": "59-turn session, turns 1-8, recorded history, -ncmoe 16 -b 2048 with a tuned draft (stock b12521 runs out of memory at -ncmoe 0)",
+     "numbers": "reply sha256 8/8 equal in every arm; check modes 0 differences: kpool-input, sparse-direct, fattn-vec-skip, idx-inplace, idx-pooled, ckpt-pinned (stock vs pooled 0 bytes), topk-fused, tokenize-incr, sched-async-inputs (20,000 copies), ext-kernels (1,311 ok lines)"
+    },
+    {
+     "compare": "ab-moe: module build, moe-inplace with its check mode vs off",
+     "setup": "turns 1-8, -ncmoe 16, expert cache 4,096 MiB",
+     "numbers": "1,200 checked calls, 0 bytes differ; replies 8/8 equal"
+    },
+    {
+     "compare": "ab-xcheck2: module build, full stack, ext-kernels check mode (X) vs unchecked (X0) vs the series build (XO)",
+     "setup": "turns 1-4, -ncmoe 0 -b 1024, hot-set draft, region manifest listing 6f311d7a",
+     "numbers": "region_shexp_gate 26,881, region_inject_tail 54,017, region_down_tail 55,809 checks, 0 differ, worst 0; replies 4/4 equal in all three arms"
+    },
+    {
+     "compare": "ab-rs: rs-one-copy at the full stack: series build (O0) vs module build (R0); its check mode (R2C) vs unchecked (R2U) with 2 layers' experts on the host",
+     "setup": "turns 1-8, -lv 4 (the mod's lines are INFO); the check keeps a second state plane (108 MiB) and does not fit at -ncmoe 0 (the next 95.59 MiB allocation fails), so it ran at -ncmoe 2",
+     "numbers": "O0 = R0 replies 8/8; check 1,033 steps, sum|diff| 0, nonzero 0 of 1,033; R2C = R2U replies 8/8"
+    },
+    {
+     "compare": "ab-speed, ab-speed-rev: the 02-20 series build (O) vs the module build (N), one pair in each order",
+     "setup": "59-turn 128k session with matched lengths, full stack (every switch of the 0.3.29 set plus sched-async-inputs, -ncmoe 0, -b 1024, hot-set draft, region manifest), 450 W",
+     "numbers": "session wall 143.7 -> 144.1 s (+0.4, O first) and 143.7 -> 143.7 s (+0.1, N first); decode 241.1 -> 240.3 and 241.1 -> 240.7 tok/s; replies 59/59 equal in all 4 runs. Noise bound for a difference of two single runs: 1.2 s (4 runs of the series binary on this session: 143.1, 143.8, 144.0, 143.7 s, SD 0.36 s; one-sided 95%, 3 degrees of freedom). No gain or loss is claimed"
     }
    ]
   }

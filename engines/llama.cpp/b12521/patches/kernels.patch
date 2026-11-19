@@ -1,54 +1,66 @@
+diff --git a/ggml/src/ggml-cuda/CMakeLists.txt b/ggml/src/ggml-cuda/CMakeLists.txt
+index 211a8dac7..3ab3adef7 100644
+--- a/ggml/src/ggml-cuda/CMakeLists.txt
++++ b/ggml/src/ggml-cuda/CMakeLists.txt
+@@ -127,12 +127,14 @@ if (CUDAToolkit_FOUND)
+ 
+     ggml_cuda_fattn_vec_instances(${CMAKE_CURRENT_SOURCE_DIR} SRCS)
+     list(APPEND GGML_SOURCES_CUDA ${SRCS})
++    list(APPEND GGML_SOURCES_CUDA ext-kernels.cpp ../../../vendor/hash/sha256/sha256.c)  # opt-in mod GGML_CUDA_EXT_KERNELS
+ 
+     ggml_add_backend_library(ggml-cuda
+                              ${GGML_HEADERS_CUDA}
+                              ${GGML_SOURCES_CUDA}
+                             )
+ 
++    target_include_directories(ggml-cuda PRIVATE ../../../vendor ../../../vendor/hash)
+     if (GGML_CUDA_GRAPHS)
+         add_compile_definitions(GGML_CUDA_USE_GRAPHS)
+     endif()
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
-index 5e5e4c5..db93558 100644
---- a/ggml/src/ggml-cuda/ext-kernels.cpp
+new file mode 100644
+index 000000000..db9355881
+--- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -1,8 +1,10 @@
--// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1 file in place
--// of the engine's own, for graph nodes that match an entry's op, types and shapes (never a model or tensor name).
+@@ -0,0 +1,482 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
 +// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N.
- // Unset = the stock engine. This file holds no kernels: they arrive as cubin / PTX files, verified by sha256.
- // Anything that does not match or does not load falls back to the engine's own path for that node.
--// GGML_CUDA_EXT_KERNELS_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1) runs both and compares at the entry's tolerance.
++// Unset = the stock engine. This file holds no kernels: they arrive as cubin / PTX files, verified by sha256.
++// Anything that does not match or does not load falls back to the engine's own path for that node.
 +// GGML_CUDA_EXT_KERNELS_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1) runs both and compares every live output at the
 +// entry's tolerance.
- #include "ggml-impl.h"
- 
- #include <cuda.h>
-@@ -11,6 +13,7 @@ extern "C" {
- #include <sha256/sha256.h>
- }
- 
++#include "ggml-impl.h"
++
++#include <cuda.h>
++#include <nlohmann/json.hpp>
++extern "C" {
++#include <sha256/sha256.h>
++}
++
 +#include <algorithm>
- #include <array>
- #include <cmath>
- #include <cstring>
-@@ -26,25 +29,36 @@ namespace {
- using json = nlohmann::json;
- typedef std::array<int64_t, GGML_MAX_DIMS> ext_ne;
- 
--struct ext_arg {
--    int      src;   // -1: the node's output, 0..: its src, -2: a constant
--    uint64_t bits;  // the constant (i32 / u32 / f32 in the low 4 bytes, i64 in 8)
--};
--
--struct ext_entry {
--    std::string            id;
++#include <array>
++#include <cmath>
++#include <cstring>
++#include <fstream>
++#include <iterator>
++#include <string>
++#include <vector>
++
++int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx);
++
++namespace {
++
++using json = nlohmann::json;
++typedef std::array<int64_t, GGML_MAX_DIMS> ext_ne;
++
 +struct ext_op {
-     ggml_op                op;
++    ggml_op                op;
 +    int                    unary = -1;     // GGML_OP_UNARY: the unary op, else -1
-     ggml_type              type;
-     ext_ne                 ne;
-     std::vector<ggml_type> src_types;
-     std::vector<ext_ne>    src_ne;
--    CUfunction             fn;
--    unsigned               grid[3], block[3], shmem;
--    bool                   pdl;  // the kernel waits (griddepcontrol.wait) before it reads a node input
--    double                 tol;  // check mode: largest allowed |ext - stock|, 0 = bit-identical
--    std::vector<ext_arg>   args;
--    uint64_t               n_check = 0, n_diff = 0;
--    double                 worst = 0;
++    ggml_type              type;
++    ext_ne                 ne;
++    std::vector<ggml_type> src_types;
++    std::vector<ext_ne>    src_ne;
 +    std::vector<int>       src_node;       // per src: the window node it is (0..), or -1 = a tensor from outside
 +    int                    uses = 0;       // in-window uses (filled at load)
 +    std::vector<float>     params;         // the op's leading op_params as f32, matched bitwise (a scale's factor and bias)
@@ -72,22 +84,27 @@ index 5e5e4c5..db93558 100644
 +    std::vector<ext_arg>             args;
 +    uint64_t                         n_match = 0, n_check = 0, n_diff = 0, n_refused = 0;
 +    double                           worst = 0;
- };
- 
- ggml_type ext_type(const std::string & s) {
-@@ -57,7 +71,7 @@ ggml_type ext_type(const std::string & s) {
-     throw std::runtime_error("unknown type " + s);
- }
- 
--ggml_op ext_op(const std::string & s) {
++};
++
++ggml_type ext_type(const std::string & s) {
++    for (int t = 0; t < GGML_TYPE_COUNT; ++t) {
++        const char * name = ggml_type_name((ggml_type) t);
++        if (name != nullptr && s == name) {
++            return (ggml_type) t;
++        }
++    }
++    throw std::runtime_error("unknown type " + s);
++}
++
 +ggml_op ext_op_of(const std::string & s) {
-     for (int o = 0; o < GGML_OP_COUNT; ++o) {
-         if (s == std::string("GGML_OP_") + ggml_op_name((ggml_op) o)) {
-             return (ggml_op) o;
-@@ -66,6 +80,15 @@ ggml_op ext_op(const std::string & s) {
-     throw std::runtime_error("unknown op " + s);
- }
- 
++    for (int o = 0; o < GGML_OP_COUNT; ++o) {
++        if (s == std::string("GGML_OP_") + ggml_op_name((ggml_op) o)) {
++            return (ggml_op) o;
++        }
++    }
++    throw std::runtime_error("unknown op " + s);
++}
++
 +int ext_unary_of(const std::string & s) {
 +    for (int u = 0; u < GGML_UNARY_OP_COUNT; ++u) {
 +        if (s == std::string("GGML_UNARY_OP_") + ggml_unary_op_name((ggml_unary_op) u)) {
@@ -97,31 +114,41 @@ index 5e5e4c5..db93558 100644
 +    throw std::runtime_error("unknown unary op " + s);
 +}
 +
- ext_ne ext_shape(const json & j) {
-     ext_ne ne;
-     ne.fill(1);
-@@ -91,27 +114,76 @@ void ext_ok(CUresult r, const char * what) {
-     }
- }
- 
--ext_entry ext_load_entry(const json & j, const std::string & dir, const std::string & chip) {
++ext_ne ext_shape(const json & j) {
++    ext_ne ne;
++    ne.fill(1);
++    for (size_t d = 0; d < j.size(); ++d) {
++        ne.at(d) = j[d].get<int64_t>();
++    }
++    return ne;
++}
++
++std::string ext_sha256(const std::string & blob) {
++    unsigned char digest[SHA256_DIGEST_SIZE];
++    char          hex[2*SHA256_DIGEST_SIZE + 1];
++    sha256_hash(digest, (const unsigned char *) blob.data(), blob.size());
++    for (int b = 0; b < SHA256_DIGEST_SIZE; ++b) {
++        snprintf(hex + 2*b, 3, "%02x", digest[b]);
++    }
++    return hex;
++}
++
++void ext_ok(CUresult r, const char * what) {
++    if (r != CUDA_SUCCESS) {
++        throw std::runtime_error(std::string(what) + " failed: " + std::to_string((int) r));
++    }
++}
++
 +ext_entry ext_load_entry(const json & j, const std::string & dir, const std::string & chip, bool v2) {
-     ext_entry e;
-     e.id = j.at("id").get<std::string>();
-     if (j.at("target") != chip) {
-         throw std::runtime_error("built for " + j.at("target").get<std::string>() + ", this device is " + chip);
-     }
-     const json & ops = j.at("match").at("ops");
--    if (ops.size() != 1) {
--        throw std::runtime_error("this hook version takes a window of one op");
++    ext_entry e;
++    e.id = j.at("id").get<std::string>();
++    if (j.at("target") != chip) {
++        throw std::runtime_error("built for " + j.at("target").get<std::string>() + ", this device is " + chip);
++    }
++    const json & ops = j.at("match").at("ops");
 +    if (ops.empty() || (!v2 && ops.size() != 1)) {
 +        throw std::runtime_error("a v1 entry takes a window of one op, a v2 entry at least one");
-     }
--    e.op   = ext_op(ops[0].at("op").get<std::string>());
--    e.type = ext_type(ops[0].at("type").get<std::string>());
--    e.ne   = ext_shape(ops[0].at("ne"));
--    for (const json & t : ops[0].at("src_types")) {
--        e.src_types.push_back(ext_type(t.get<std::string>()));
++    }
 +    for (size_t k = 0; k < ops.size(); ++k) {
 +        const json & o = ops[k];
 +        ext_op       op;
@@ -167,9 +194,7 @@ index 5e5e4c5..db93558 100644
 +            }
 +        }
 +        e.ops.push_back(op);
-     }
--    for (const json & s : ops[0].at("src_ne")) {
--        e.src_ne.push_back(ext_shape(s));
++    }
 +    for (const json & o : j.at("match").value("outputs", json::array({(int) ops.size() - 1}))) {
 +        const int n = o.get<int>();
 +        if (n < 0 || n >= (int) ops.size()) {
@@ -181,64 +206,102 @@ index 5e5e4c5..db93558 100644
 +        if (e.ops[k].uses == 0 && std::find(e.outputs.begin(), e.outputs.end(), (int) k) == e.outputs.end()) {
 +            throw std::runtime_error("node " + std::to_string(k) + " is read by no one: it must be a listed output");
 +        }
-     }
--    if (!ops[0].value("contiguous", false) || e.src_ne.size() != e.src_types.size()) {
--        throw std::runtime_error("needs contiguous: true and one src_ne per src_types");
++    }
 +    for (const json & a : j.at("match").value("alias_ok", json::array())) {
 +        e.alias_ok.emplace_back(a.at("node").get<int>(), a.at("src").get<int>());
-     }
-     const json & k = j.at("kernel");
-     std::ifstream f(dir + k.at("file").get<std::string>(), std::ios::binary);
-@@ -131,10 +203,11 @@ ext_entry ext_load_entry(const json & j, const std::string & dir, const std::str
-     e.pdl   = l.value("pdl", false);
-     e.tol   = j.value("tolerance", 0.0);
-     for (const json & a : j.at("args")) {
--        ext_arg arg = { -2, 0 };
++    }
++    const json & k = j.at("kernel");
++    std::ifstream f(dir + k.at("file").get<std::string>(), std::ios::binary);
++    std::string   blob((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
++    if (!f || k.at("format") == "hsaco" || ext_sha256(blob) != k.at("sha256")) {
++        throw std::runtime_error("kernel file missing, wrong format or wrong sha256");
++    }
++    CUmodule mod;
++    ext_ok(cuModuleLoadData(&mod, blob.c_str()), "cuModuleLoadData");  // cubin or PTX, into the current (primary) context
++    ext_ok(cuModuleGetFunction(&e.fn, mod, k.at("symbol").get<std::string>().c_str()), "cuModuleGetFunction");
++    const json & l = j.at("launch");
++    for (int d = 0; d < 3; ++d) {
++        e.grid[d]  = l.at("grid").at(d).get<unsigned>();
++        e.block[d] = l.at("block").at(d).get<unsigned>();
++    }
++    e.shmem = l.value("shared_bytes", 0u);
++    e.pdl   = l.value("pdl", false);
++    e.tol   = j.value("tolerance", 0.0);
++    for (const json & a : j.at("args")) {
 +        ext_arg arg = { -1, -1, 0 };
-         if (a.contains("node")) {
--            arg.src = a.at("src").get<int>();
--            if (a.at("node") != 0 || arg.src < -1 || arg.src >= (int) e.src_types.size()) {
++        if (a.contains("node")) {
 +            arg.node = a.at("node").get<int>();
 +            arg.src  = a.at("src").get<int>();
 +            if (arg.node < 0 || arg.node >= (int) e.ops.size() || arg.src < -1 || arg.src >= (int) e.ops[arg.node].src_types.size()) {
-                 throw std::runtime_error("argument names a tensor outside the window");
-             }
-         } else if (a.at("type") == "f32") {
-@@ -153,7 +226,8 @@ std::vector<ext_entry> ext_load() {
-     const std::string      path = getenv("GGML_CUDA_EXT_KERNELS");
-     try {
-         const json m = json::parse(std::ifstream(path));
--        if (m.at("schema") != "boltbeam.kernel_manifest.v1") {
++                throw std::runtime_error("argument names a tensor outside the window");
++            }
++        } else if (a.at("type") == "f32") {
++            const float v = a.at("scalar").get<float>();
++            memcpy(&arg.bits, &v, sizeof(v));
++        } else {
++            arg.bits = (uint64_t) a.at("scalar").get<int64_t>();
++        }
++        e.args.push_back(arg);
++    }
++    return e;
++}
++
++std::vector<ext_entry> ext_load() {
++    std::vector<ext_entry> entries;
++    const std::string      path = getenv("GGML_CUDA_EXT_KERNELS");
++    try {
++        const json m = json::parse(std::ifstream(path));
 +        const bool v2 = m.at("schema") == "boltbeam.kernel_manifest.v2";
 +        if (!v2 && m.at("schema") != "boltbeam.kernel_manifest.v1") {
-             throw std::runtime_error("unknown schema");
-         }
-         std::string commit = ggml_commit();
-@@ -176,8 +250,8 @@ std::vector<ext_entry> ext_load() {
-         const std::string dir  = path.substr(0, path.find_last_of('/') + 1);
-         for (const json & j : m.at("entries")) {
-             try {
--                entries.push_back(ext_load_entry(j, dir, chip));
--                GGML_LOG_WARN("%s: loaded %s\n", __func__, entries.back().id.c_str());
++            throw std::runtime_error("unknown schema");
++        }
++        std::string commit = ggml_commit();
++        commit             = commit.substr(0, commit.find('-'));
++        bool build_ok      = false;
++        for (const json & b : m.at("engine").at("builds")) {
++            const std::string s = b.get<std::string>();
++            const size_t      n = std::min(s.size(), commit.size());
++            build_ok            = build_ok || (n >= 7 && s.compare(0, n, commit, 0, n) == 0);
++        }
++        if (!build_ok) {
++            throw std::runtime_error("this build (" + commit + ") is not one the manifest was checked on");
++        }
++        CUdevice dev;
++        int      major = 0, minor = 0;
++        ext_ok(cuCtxGetDevice(&dev), "cuCtxGetDevice");
++        ext_ok(cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev), "cuDeviceGetAttribute");
++        ext_ok(cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev), "cuDeviceGetAttribute");
++        const std::string chip = "nvidia_sm" + std::to_string(10*major + minor);
++        const std::string dir  = path.substr(0, path.find_last_of('/') + 1);
++        for (const json & j : m.at("entries")) {
++            try {
 +                entries.push_back(ext_load_entry(j, dir, chip, v2));
 +                GGML_LOG_WARN("%s: loaded %s (%zu ops)\n", __func__, entries.back().id.c_str(), entries.back().ops.size());
-             } catch (const std::exception & err) {
-                 GGML_LOG_WARN("%s: entry %s dropped, the engine's own kernel runs: %s\n", __func__, j.value("id", "?").c_str(), err.what());
-             }
-@@ -196,41 +270,156 @@ bool ext_same(const ggml_tensor * t, ggml_type type, const ext_ne & ne) {
-            (uintptr_t) t->data % 16 == 0;
- }
- 
--std::vector<float> ext_read(void * stream, const ggml_tensor * t) {
--    std::vector<float> v(ggml_nbytes(t) / sizeof(float));
++            } catch (const std::exception & err) {
++                GGML_LOG_WARN("%s: entry %s dropped, the engine's own kernel runs: %s\n", __func__, j.value("id", "?").c_str(), err.what());
++            }
++        }
++    } catch (const std::exception & err) {
++        GGML_LOG_WARN("%s: %s not used, the engine's own kernels run: %s\n", __func__, path.c_str(), err.what());
++    }
++    if (getenv("GGML_CUDA_EXT_KERNELS_CHECK") != nullptr && getenv("GGML_CUDA_DISABLE_GRAPHS") == nullptr) {
++        GGML_LOG_WARN("%s: GGML_CUDA_EXT_KERNELS_CHECK checks only uncaptured runs: set GGML_CUDA_DISABLE_GRAPHS=1\n", __func__);
++    }
++    return entries;
++}
++
++bool ext_same(const ggml_tensor * t, ggml_type type, const ext_ne & ne) {
++    return t != nullptr && t->type == type && memcmp(t->ne, ne.data(), sizeof(t->ne)) == 0 && ggml_is_contiguous(t) &&
++           (uintptr_t) t->data % 16 == 0;
++}
++
 +std::vector<uint8_t> ext_read(void * stream, const ggml_tensor * t) {
 +    std::vector<uint8_t> v(ggml_nbytes(t));
-     ext_ok(cuStreamSynchronize((CUstream) stream), "cuStreamSynchronize");
--    ext_ok(cuMemcpyDtoH(v.data(), (CUdeviceptr) t->data, ggml_nbytes(t)), "cuMemcpyDtoH");
++    ext_ok(cuStreamSynchronize((CUstream) stream), "cuStreamSynchronize");
 +    ext_ok(cuMemcpyDtoH(v.data(), (CUdeviceptr) t->data, v.size()), "cuMemcpyDtoH");
-     return v;
- }
- 
++    return v;
++}
++
 +// the window at i for entry e, or empty: ops, types, shapes, wiring; interior nodes dead outside; no partial aliasing
 +std::vector<ggml_tensor *> ext_match(ext_entry & e, ggml_cgraph * cgraph, int i) {
 +    const int n = (int) e.ops.size();
@@ -347,39 +410,28 @@ index 5e5e4c5..db93558 100644
 +    std::ofstream(path, std::ios::app) << json{{"schema", "boltbeam.engine_graph_dump.v1"}, {"n_nodes", cgraph->n_nodes}, {"nodes", nodes}}.dump() << "\n";
 +}
 +
- }  // namespace
- 
--// Returns the number of nodes the external kernel replaced (1), or 0: the engine's own path runs.
++}  // namespace
++
 +// Returns the number of nodes the external kernel replaced (the window's length), or 0: the engine's own path runs.
- int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx) {
-     static std::vector<ext_entry> entries = ext_load();
-     static const bool             check   = getenv("GGML_CUDA_EXT_KERNELS_CHECK") != nullptr;
-     static const bool             pdl_on  = getenv("GGML_CUDA_PDL") == nullptr || atoi(getenv("GGML_CUDA_PDL")) != 0;
++int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx) {
++    static std::vector<ext_entry> entries = ext_load();
++    static const bool             check   = getenv("GGML_CUDA_EXT_KERNELS_CHECK") != nullptr;
++    static const bool             pdl_on  = getenv("GGML_CUDA_PDL") == nullptr || atoi(getenv("GGML_CUDA_PDL")) != 0;
 +    ext_dump(cgraph);   // once per graph shape, only with GGML_CUDA_EXT_KERNELS_DUMP set
- 
--    ggml_tensor * node = cgraph->nodes[i];
-     for (ext_entry & e : entries) {
--        if (node->op != e.op || !ext_same(node, e.type, e.ne)) {
--            continue;
--        }
--        bool match = e.src_types.size() == GGML_MAX_SRC || node->src[e.src_types.size()] == nullptr;
--        for (size_t s = 0; match && s < e.src_types.size(); ++s) {
--            match = ext_same(node->src[s], e.src_types[s], e.src_ne[s]);
--        }
--        if (!match) {
++
++    for (ext_entry & e : entries) {
 +        const std::vector<ggml_tensor *> w = ext_match(e, cgraph, i);
 +        if (w.empty()) {
-             continue;
-         }
-         std::vector<uint64_t> values;
-         std::vector<void *>   params;
-         for (const ext_arg & a : e.args) {
--            values.push_back(a.src == -2 ? a.bits : (uint64_t) (uintptr_t) (a.src == -1 ? node : node->src[a.src])->data);
++            continue;
++        }
++        std::vector<uint64_t> values;
++        std::vector<void *>   params;
++        for (const ext_arg & a : e.args) {
 +            values.push_back(a.node < 0 ? a.bits : (uint64_t) (uintptr_t) (a.src == -1 ? w[a.node] : w[a.node]->src[a.src])->data);
-         }
-         for (uint64_t & v : values) {
-             params.push_back(&v);
-         }
++        }
++        for (uint64_t & v : values) {
++            params.push_back(&v);
++        }
 +        CUstreamCaptureStatus capture = CU_STREAM_CAPTURE_STATUS_NONE;
 +        const bool do_check = check && cuStreamIsCapturing((CUstream) stream, &capture) == CUDA_SUCCESS &&
 +                              capture == CU_STREAM_CAPTURE_STATUS_NONE;
@@ -393,19 +445,24 @@ index 5e5e4c5..db93558 100644
 +                }
 +            }
 +        }
-         CUlaunchAttribute attr;
-         attr.id                                         = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
-         attr.value.programmaticStreamSerializationAllowed = 1;
-@@ -249,17 +438,32 @@ int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (
-             GGML_LOG_WARN("%s: %s launch failed (%d), the engine's own kernel runs\n", __func__, e.id.c_str(), (int) r);
-             return 0;
-         }
--        CUstreamCaptureStatus capture = CU_STREAM_CAPTURE_STATUS_NONE;
--        if (check && node->type == GGML_TYPE_F32 && cuStreamIsCapturing((CUstream) stream, &capture) == CUDA_SUCCESS &&
--            capture == CU_STREAM_CAPTURE_STATUS_NONE) {
--            const std::vector<float> ext = ext_read(stream, node);
--            GGML_ASSERT(stock(stock_ctx, node));
--            const std::vector<float> ref = ext_read(stream, node);  // the engine's result stays in the node
++        CUlaunchAttribute attr;
++        attr.id                                         = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
++        attr.value.programmaticStreamSerializationAllowed = 1;
++        CUlaunchConfig cfg = {};
++        cfg.gridDimX       = e.grid[0];
++        cfg.gridDimY       = e.grid[1];
++        cfg.gridDimZ       = e.grid[2];
++        cfg.blockDimX      = e.block[0];
++        cfg.blockDimY      = e.block[1];
++        cfg.blockDimZ      = e.block[2];
++        cfg.sharedMemBytes = e.shmem;
++        cfg.hStream        = (CUstream) stream;
++        cfg.attrs          = &attr;
++        cfg.numAttrs       = e.pdl && pdl_on ? 1 : 0;
++        if (const CUresult r = cuLaunchKernelEx(&cfg, e.fn, params.data(), nullptr); r != CUDA_SUCCESS) {
++            GGML_LOG_WARN("%s: %s launch failed (%d), the engine's own kernel runs\n", __func__, e.id.c_str(), (int) r);
++            return 0;
++        }
 +        if (e.n_match++ == 0) {
 +            GGML_LOG_WARN("%s: %s first match at node %d (%s), %zu nodes\n", __func__, e.id.c_str(), i, w[0]->name, w.size());
 +        }
@@ -420,11 +477,7 @@ index 5e5e4c5..db93558 100644
 +            for (ggml_tensor * node : w) {
 +                GGML_ASSERT(stock(stock_ctx, node));
 +            }
-             double worst = 0;
--            for (size_t k = 0; k < ref.size(); ++k) {
--                if (memcmp(&ext[k], &ref[k], sizeof(float)) != 0) {  // bitwise first: a NaN or a signed zero counts
--                    const double d = fabs((double) ext[k] - ref[k]);
--                    worst          = d > 0 ? std::max(worst, d) : INFINITY;
++            double worst = 0;
 +            for (size_t q = 0; q < e.outputs.size(); ++q) {
 +                const ggml_tensor *        t   = w[e.outputs[q]];
 +                const std::vector<uint8_t> ref = ext_read(stream, t);  // the engine's result stays in the node
@@ -436,34 +489,53 @@ index 5e5e4c5..db93558 100644
 +                        const double d = t->type == GGML_TYPE_F32 ? fabs((double) x - y) : INFINITY;
 +                        worst          = d > 0 ? std::max(worst, d) : INFINITY;
 +                    }
-                 }
-             }
-             e.worst = std::max(e.worst, worst);
-@@ -272,7 +476,7 @@ int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (
-                               e.id.c_str(), (unsigned long long) e.n_check, (unsigned long long) e.n_diff, e.worst);
-             }
-         }
--        return 1;
++                }
++            }
++            e.worst = std::max(e.worst, worst);
++            if (worst > e.tol) {
++                e.n_diff++;
++                GGML_LOG_WARN("GGML_CUDA_EXT_KERNELS_CHECK differs: %s worst |ext - stock| %g > %g\n", e.id.c_str(), worst, e.tol);
++            }
++            if (e.n_check++ % 256 == 0) {
++                GGML_LOG_WARN("GGML_CUDA_EXT_KERNELS_CHECK %s: %s checks %llu, differ %llu, worst %g\n", e.n_diff ? "DIFF" : "ok",
++                              e.id.c_str(), (unsigned long long) e.n_check, (unsigned long long) e.n_diff, e.worst);
++            }
++        }
 +        return (int) w.size();
-     }
-     return 0;
- }
++    }
++    return 0;
++}
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 6af276a..c8ac15c 100644
+index 3d8d30d81..9506d5078 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5379,8 +5379,12 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+@@ -4371,6 +4371,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
+     return false;
+ }
  
-                 // opt-in mod: an external kernel from a manifest takes this node (ext-kernels.cpp); unset = stock
-                 static const bool ext_kernels = getenv("GGML_CUDA_EXT_KERNELS") != nullptr;
--                if (ext_kernels && ggml_cuda_ext_kernels_run(cuda_ctx->stream(), cgraph, i, [](void * ctx, ggml_tensor * t) {
--                        return ggml_cuda_compute_forward(*(ggml_backend_cuda_context *) ctx, t); }, cuda_ctx) != 0) {
++int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx);
++
+ // try and fuse nodes and return the number of nodes to skip
+ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+ 
+@@ -5372,6 +5374,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+                     continue;
+                 }
+ 
++                // opt-in mod: an external kernel from a manifest takes this node (ext-kernels.cpp); unset = stock
++                static const bool ext_kernels = getenv("GGML_CUDA_EXT_KERNELS") != nullptr;
 +                if (const int ext_n = ext_kernels ? ggml_cuda_ext_kernels_run(cuda_ctx->stream(), cgraph, i, [](void * ctx, ggml_tensor * t) {
 +                        return ggml_cuda_compute_forward(*(ggml_backend_cuda_context *) ctx, t); }, cuda_ctx) : 0; ext_n != 0) {
 +                    if (ext_n > 1) {
 +                        i += ext_n - 1;  // a window: skipped like a stock fusion (the next node sees the jump)
 +                        continue;
 +                    }
-                     if (!is_concurrent_event_active) {
-                         try_launch_concurrent_event(node);
-                     }
++                    if (!is_concurrent_event_active) {
++                        try_launch_concurrent_event(node);
++                    }
++                    continue;
++                }
++
+                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
+ 
+                 if (nodes_to_skip != 0) {

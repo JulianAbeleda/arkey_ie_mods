@@ -34,6 +34,9 @@ Per folder
               (measured + ceil(measured / series mods)) or an Owner-approved raise to the measured value; a stack
               health summary prints on every run; a cap whose metric dropped (a mod retired or shrunk) fails until it
               is lowered to measured + ceil(measured / series mods) (the ratchet: freed room is not silently reused)
+Modules (a version's mods.json modules list): one patch per engine extension point; a mod row that names a module is a
+  feature of it (switch, check, label, evidence) and holds no patch. Checks 2, 4, 6 and 10 run on the module patches,
+  check 3 becomes: every module applies alone on the base; check 5's declared literals are those of the module's rows
 Retired (engines.json retired_versions, or a version's mods.json retired list): linted for format (checks 4, 5, 5b,
   7, 8) and kept in the repo; never applied, never in the stack measurement, never in index.json's current lists
   (index.json retired names them)
@@ -53,10 +56,12 @@ LOCAL, GIT = {}, None
 LABELS = {"identical", "quality-gated", "untested"}
 ROW_KEYS = {"name", "title", "patch", "engine", "base", "switch", "switch_null_why", "check", "reads", "marker", "files", "lines", "budget",
             "budget_raised", "depends_on", "output", "gain", "exercised_by", "limits", "rule_exceptions", "static", "scrubbed_from",
-            "parked_why", "applies_after", "retired"}
+            "parked_why", "applies_after", "retired", "module"}
 ARCH_KEYS = {"name", "kind", "date", "patch", "switch", "written_on", "why", "evidence", "files", "lines", "sha256", "scrubbed_from"}
-SPEC_KEYS = {"schema", "engine", "version", "base", "about", "budget_rule", "mods", "parked", "archived", "retired", "tools", "kernels", "engine_flags",
+SPEC_KEYS = {"schema", "engine", "version", "base", "about", "budget_rule", "modules", "mods", "parked", "archived", "retired", "tools", "kernels", "engine_flags",
              "tested_trees", "tested_trees_none", "verified", "also_applies_to"}
+MODULE_FACTS = ("patch", "files", "lines", "budget", "budget_raised", "static")  # what a module holds for its feature rows
+MODULE_KEYS = {"name", "title", "point", *MODULE_FACTS}
 GAIN_KEYS = {"value", "unit", "vs", "conditions", "run", "basis"}
 EVID_KEYS = {"run", "numbers", "match", "gate"}
 TOP_FILES = {".git", ".githooks", ".gitignore", "DETAILS.md", "LICENSE", "LICENSES", "README.md", "engines", "engines.json", "index.json",
@@ -65,7 +70,7 @@ VERSION_ENTRIES = {"mods.json", "stack_budget.json", "patches", "parked", "archi
 RETIRED_KEYS = {"date", "why"}  # a retired mod's row "retired", and an engines.json retired_versions entry
 KERNEL_KEYS = {"name", "dir", "hook", "files", "source", "lines", "budget", "output", "gain", "exercised_by", "limits"}
 INDEX_MOD_KEYS = {"id", "engine", "version", "name", "title", "state", "order", "applier", "base", "switch", "switch_null_why", "check", "check_needs",
-                  "marker", "knobs", "output", "patch", "sha256", "lines", "budget", "files", "depends_on", "rule_exceptions"}
+                  "marker", "knobs", "output", "patch", "sha256", "lines", "budget", "files", "depends_on", "rule_exceptions", "module"}
 TITLE_MAX = 80  # a mod's title: what it changes, in one line (a consumer's list shows it first)
 BUDGET_RULES = {"measured": lambda n: n, "ceil_105_10": lambda n: int(math.ceil(n * 1.05 / 10) * 10)}
 
@@ -256,6 +261,47 @@ class PipWheel:
 BASES = {"git_commit": GitCommit, "pip_version_wheel_hash": PipWheel}
 
 
+def load_spec(path):
+    """mods.json with its modules expanded. A module is the code unit: one patch on one extension point, which applies
+    alone on the base. A row that names a module is a feature of it (a switch, its check, label and evidence) and takes
+    the module's patch, files, lines, budget and static, so every reader of a row keeps working. Returns (spec, bad)."""
+    spec = json.load(open(path))
+    units, bad = spec.get("modules", []), []
+    by = {u.get("name"): u for u in units}
+    bad += [f"module {u.get('name')}: keys must be {sorted(MODULE_KEYS - {'budget_raised'})} (+ budget_raised)" for u in units
+            if set(u) - MODULE_KEYS or (MODULE_KEYS - {"budget_raised"}) - set(u)]
+    bad += ["module names not unique"] * (len(by) != len(units))
+    bad += [f"module {u['name']}: title must be one line of 1-{TITLE_MAX} characters" for u in units
+            if not isinstance(u.get("title"), str) or not u["title"].strip() or "\n" in u["title"] or len(u["title"]) > TITLE_MAX]
+    order = []
+    for m in spec.get("mods", []) + spec.get("parked", []):
+        if "module" not in m:
+            bad += [f"{m['name']}: a folder with modules has every series row in one"] * bool(units and m in spec.get("mods", []))
+            continue
+        u = by.get(m["module"])
+        if not u or set(m) & set(MODULE_FACTS):
+            bad.append(f"{m['name']}: " + (f"module {m['module']!r} is not in modules" if not u else f"a feature row keeps {sorted(set(m) & set(MODULE_FACTS))} in its module"))
+            m.update({"patch": "patches/none", "files": [], "lines": {"added": 0, "removed": 0}, "budget": {"added": 0, "removed": 0}, "static": {"hunks_removing_stock_lines": 0}})
+            continue
+        if m not in spec.get("mods", []):
+            bad.append(f"{m['name']}: a parked row cannot be in a module (the module's patch is in every build): park a patch of its own")
+        if (m.get("depends_on") or {}).get("apply"):
+            bad.append(f"{m['name']}: a feature row has no depends_on.apply (its module applies alone on the base)")
+        m.update({k: u[k] for k in MODULE_FACTS if k in u})
+        order += [m["module"]] * (m in spec.get("mods", []) and m["module"] not in order[-1:])
+    if units and order != [u["name"] for u in units]:
+        bad.append(f"series rows grouped by module give {order}, modules lists {[u['name'] for u in units]}: same order, every module used")
+    return spec, bad
+
+
+def units_of(spec):
+    """the series' code units in apply order: its modules as rows (name, patch, lines, budget, no apply dependency), or
+    its mods when the folder has no modules."""
+    if not spec.get("modules"):
+        return spec.get("mods", [])
+    return [{**u, "depends_on": {"apply": [], "run": []}} for u in spec["modules"]]
+
+
 def same(a, b):
     if os.path.exists(a) != os.path.exists(b):
         return False
@@ -376,9 +422,13 @@ def present(engine_row, kind, name, text):
 def check_folder(folder, engine_row, reg, lint, ledger, strict):
     rel = os.path.relpath(folder, ROOT)
     print(f"\n{rel}")
-    spec = json.load(open(os.path.join(folder, "mods.json")))
+    spec, mbad = load_spec(os.path.join(folder, "mods.json"))
     if set(spec) - SPEC_KEYS:
         say("FAIL", f"spec    unknown keys {sorted(set(spec) - SPEC_KEYS)}")
+    for b in mbad:
+        say("FAIL", f"module  {b}")
+    if mbad:
+        return
     rows = spec.get("mods", []) + spec.get("parked", [])
     retired = spec.get("retired", [])
     retired_v = retired_version(engine_row, spec["version"])
@@ -403,11 +453,14 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
     if kind not in APPLIERS or not reg["appliers"].get(kind, {}).get("implemented") or bkind not in BASES:
         say("FAIL", f"engine  no applier or base check for this engine (applier {kind}, base {bkind})")
         return
+    units = units_of(spec)
     info = {m["name"]: parse(os.path.join(folder, m["patch"])) for m in rows + retired}
     path = lambda m: os.path.join(folder, m["patch"])
     by_name = {m["name"]: m for m in rows + retired}
     old = head_json(f"{rel}/mods.json")
-    old_rows = {m["name"]: m for k in ("mods", "parked", "retired") for m in (old or {}).get(k, [])} if old else {}
+    old_rows = {m["name"]: m for k in ("mods", "parked", "retired") for m in (old or {}).get(k, []) if "module" not in m} if old else {}
+    old_units = {u["name"]: u for u in (old or {}).get("modules", [])}
+    peers = lambda m: [x for x in rows if m.get("module") and x.get("module") == m["module"]]  # the rows one patch serves
     if GIT is None:
         say("SKIP", "history no git history here: budget changes against HEAD unchecked")
 
@@ -429,7 +482,8 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
         files, a, r, mod, text, _ = info[m["name"]]
         hdr = header(path(m))
         series = m in spec["mods"]
-        tot_a, tot_r = tot_a + a * series, tot_r + r * series
+        first = not m.get("module") or peers(m)[0] is m  # a module's lines are checked and counted once, at its first row
+        tot_a, tot_r = tot_a + a * series * first, tot_r + r * series * first
         b = m["budget"]
         bad = []
         if (a, r) != (m["lines"]["added"], m["lines"]["removed"]):
@@ -441,13 +495,15 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
         if rule and (b["added"], b["removed"]) != (rule(m["lines"]["added"]), m["lines"]["removed"]):
             if not (last and last.get("to") == b and last.get("why") and last.get("date")):
                 bad.append(f"budget {b} is not budget_rule {spec.get('budget_rule')} of the lines and no budget_raised entry ends at it")
-        o = old_rows.get(m["name"])
+        o = old_units.get(m["module"]) if m.get("module") else old_rows.get(m["name"])
         if o and (o["lines"] != m["lines"] or o["budget"] != m["budget"]):
             if not (last and last.get("from") == o["budget"] and last.get("to") == m["budget"] and last.get("why") and last.get("date")):
                 bad.append(f"lines/budget changed against HEAD ({o['lines']} {o['budget']} -> {m['lines']} {m['budget']}) without budget_raised {{from, to, why, date}}")
         if sorted(files) != sorted(m["files"]):
             bad.append("file list differs from the row")
-        say("FAIL" if bad else "ok", f"lines   {m['name']:22} +{a:<4} -{r:<3} budget +{b['added']:<4} -{b['removed']:<3} files {len(files)}" + ("  " + "; ".join(bad) if bad else ""))
+        if first:
+            say("FAIL" if bad else "ok", f"lines   {m.get('module', m['name']):22} +{a:<4} -{r:<3} budget +{b['added']:<4} -{b['removed']:<3} files {len(files)}"
+                + (f" (module: {', '.join(x['name'] for x in peers(m))})" if m.get("module") else "") + ("  " + "; ".join(bad) if bad else ""))
         sw, ck = sw_name(m), (m.get("check") or {}).get("name")
         bad = check_row(m, spec, engine_row, lint, rel) + ["a series mod needs a title"] * (m in spec.get("mods", []) and not m.get("title"))
         if m in retired:
@@ -467,6 +523,8 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
         if m.get("marker") and m["marker"] not in text:
             bad.append(f"marker {m['marker']!r} not in the added lines")
         allowed = {sw, ck} | set(m.get("reads", [])) | set((m.get("check") or {}).get("needs", []))
+        for x in peers(m):  # the patch is the module's: a literal is declared when one of its rows declares it
+            allowed |= {sw_name(x), (x.get("check") or {}).get("name")} | set(x.get("reads", [])) | set((x.get("check") or {}).get("needs", []))
         for d in closure(m["name"], []):
             allowed |= {sw_name(by_name[d]), (by_name[d].get("check") or {}).get("name")}
         found = {x if isinstance(x, str) else next((y for y in x if y), '') for rx in regexes for x in rx.findall(text)} - {''}
@@ -486,7 +544,7 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
         guard = "additive only" if mod == 0 else f"{mod} hunks rewrite stock lines"
         exc = f"; exceptions: {', '.join(e['rule'] for e in m.get('rule_exceptions', []))}" if m.get("rule_exceptions") else ""
         say("FAIL" if bad else "ok", f"switch  {m['name']:22} {swtxt}; {note}; {guard}; output {m['output']['label']}{exc}" + ("  " + "; ".join(bad) if bad else ""))
-    print(f"  total   series: {len(spec['mods'])} patches, +{tot_a} -{tot_r} lines; parked: {len(spec.get('parked', []))}; "
+    print(f"  total   series: {len(units)} patches" + (f" (modules), {len(spec['mods'])} features" if spec.get("modules") else "") + f", +{tot_a} -{tot_r} lines; parked: {len(spec.get('parked', []))}; "
           f"retired: {len(retired)}; archived: {len(spec.get('archived', []))}")
     if retired_v:
         say("ok", f"retired version ({retired_v.get('date') if isinstance(retired_v, dict) else '?'}): linted only; not applied, not in the stack measurement, not in "
@@ -523,7 +581,7 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
 
     # 2 series, in order, then revert
     tmp, applied = ap.fresh(), []
-    for m in spec["mods"]:
+    for m in units:
         ok, err = ap.apply(tmp, path(m))
         say("ok" if ok else "FAIL", f"apply   {m['patch']}" + ("" if ok else f": {err[0]}"))
         if not ok:
@@ -542,11 +600,19 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
         if bad:
             say("FAIL", f"deps    {m['name']}: depends on {bad}, not an earlier mod")
             continue
+        if m.get("module"):
+            continue  # its module applies alone on the base (below)
         chain = (list(names[:len(spec["mods"])]) if m.get("applies_after") else closure(m["name"], [])) + [m["name"]]
         tmp = ap.fresh()
         res = [ap.apply(tmp, path(by_name[n])) for n in chain]
         shutil.rmtree(tmp)
         say("ok" if all(r[0] for r in res) else "FAIL", f"deps    {m['name']} applies on base + {chain[:-1] or 'nothing'}")
+
+    for u in units if spec.get("modules") else []:
+        tmp = ap.fresh()
+        ok, err = ap.apply(tmp, path(u))
+        shutil.rmtree(tmp)
+        say("ok" if ok else "FAIL", f"deps    module {u['name']} applies alone on the base" + ("" if ok else f": {err[0]}"))
 
     # 8 also_applies_to: each series and parked patch alone on the other base
     for t in spec.get("also_applies_to", []):
@@ -733,7 +799,7 @@ def stack_depth(mods):
 
 
 def stack_values(spec, folder, base=None):
-    mods = spec.get("mods", [])
+    mods = units_of(spec)
     per_file, stacked, by_func, problems = stack_measure(mods, folder, base)
     total = sum(m["lines"]["added"] + m["lines"]["removed"] for m in mods)
     hot = sorted(per_file.items(), key=lambda kv: (-len(kv[1]["mods"]), -kv[1]["overlap"], kv[0]))
@@ -791,7 +857,7 @@ def check_stack(folder, spec, base=None, head=None):
     """10 stack: per version folder, the series' total lines, file hot spots, dependency depth and mods stacked on
     mods against the caps in stack_budget.json; a cap rises only by an Owner-approved raise to the measured value."""
     rel = os.path.relpath(folder, ROOT)
-    mods = spec.get("mods", [])
+    mods, n = units_of(spec), len(spec.get("mods", []))  # measured on the code units; the margin is one more average row
     p = os.path.join(folder, "stack_budget.json")
     if not mods:
         if os.path.exists(p):
@@ -802,7 +868,7 @@ def check_stack(folder, spec, base=None, head=None):
         say("FAIL", f"stack   {x}")
     if not os.path.exists(p):
         say("FAIL", f"stack   {rel}/stack_budget.json missing; derived caps for today's series (cap = measured + ceil(measured / "
-                    f"{len(mods)} mods)): " + ", ".join(f"{k} {v} -> {stack_margin(v, len(mods))}" for k, v in vals.items()))
+                    f"{n} mods)): " + ", ".join(f"{k} {v} -> {stack_margin(v, n)}" for k, v in vals.items()))
         return
     try:
         with open(p) as fh:
@@ -819,13 +885,13 @@ def check_stack(folder, spec, base=None, head=None):
         e = caps[name]
         auth, basis, b = stack_authorized(name, e)
         bad += b
-        if auth is not None and e.get("cap") == auth and vals[name] < basis and stack_margin(vals[name], len(mods)) < auth:
+        if auth is not None and e.get("cap") == auth and vals[name] < basis and stack_margin(vals[name], n) < auth:
             lows.append((name, vals[name], auth, basis))
         h = head_caps.get(name)
         s = e.get("set") or {}
-        if s != (h or {}).get("set") and (s.get("measured"), s.get("mods")) != (vals[name], len(mods)):
+        if s != (h or {}).get("set") and (s.get("measured"), s.get("mods")) != (vals[name], n):
             bad.append(f"{name}: set {{measured {s.get('measured')}, mods {s.get('mods')}}} is new against HEAD and is not "
-                       f"today's measurement {{measured {vals[name]}, mods {len(mods)}}}")
+                       f"today's measurement {{measured {vals[name]}, mods {n}}}")
         new = (e.get("raised") or [])[len((h or {}).get("raised") or []):]
         bad += [f"{name}: new raise measured {r.get('measured')} is not today's value {vals[name]}" for r in new
                 if isinstance(r, dict) and r.get("measured") != vals[name]]
@@ -845,12 +911,12 @@ def check_stack(folder, spec, base=None, head=None):
     PLACED = ("overlap_hunks_per_file", "stacked_hunks")  # hunk placement: exact only with the base checkout
     if base is None and any(n in PLACED for n, *_ in lows):
         say("SKIP", f"stack   ratchet: {', '.join(n for n, *_ in lows if n in PLACED)} dropped, but without the base checkout hunk "
-                    f"placement is approximate; run with the checkout to lower: " + stack_lower_hint(rel, [x for x in lows if x[0] in PLACED], len(mods), {n: caps[n].get("raised") or [] for n in caps}))
+                    f"placement is approximate; run with the checkout to lower: " + stack_lower_hint(rel, [x for x in lows if x[0] in PLACED], n, {n: caps[n].get("raised") or [] for n in caps}))
         lows = [x for x in lows if x[0] not in PLACED]
     if lows:
         say("FAIL", f"stack   ratchet: {', '.join(n for n, *_ in lows)} dropped below the measurement the cap rests on (a mod "
-                    f"retired or shrunk); freed room is not kept as headroom. Lower to measured + ceil(measured / {len(mods)} mods): "
-                    + stack_lower_hint(rel, lows, len(mods), {n: caps[n].get("raised") or [] for n in caps}))
+                    f"retired or shrunk); freed room is not kept as headroom. Lower to measured + ceil(measured / {n} mods): "
+                    + stack_lower_hint(rel, lows, n, {n: caps[n].get("raised") or [] for n in caps}))
     hot, top = why["hot"], why["hot"][0] if why["hot"] else (None, {"mods": []})
 
     def funcs(f):
@@ -879,7 +945,7 @@ def check_stack(folder, spec, base=None, head=None):
             detail = f"hottest file {top[0]} ({len(top[1]['mods'])} mods: {', '.join(top[1]['mods'])})" if top[0] else ""
         say("FAIL", f"stack   {name} {val} > cap {cap} ({what}). Suggested refactor: {fix}. {detail}. {stack_raise_hint(rel, name, val, cap)}")
     # the summary: printed on every run, never fails
-    print(f"  stack health ({len(mods)} series mods; cap = measured + ceil(measured / mods) unless Owner-approved)")
+    print(f"  stack health (" + (f"{len(mods)} modules, " if spec.get("modules") else "") + f"{n} series mods; cap = measured + ceil(measured / mods) unless Owner-approved)")
     for name in STACK_METRICS:
         val, cap = vals[name], caps[name]["cap"]
         print(f"    {name:23} {val:>6} / cap {cap:<6} headroom {cap - val}")
@@ -1011,7 +1077,7 @@ def check_docs(reg, lint):
                 say("FAIL", f"docs    {rel}:{i}: {x}")
                 n += 1
     for f in folders_all():
-        spec = json.load(open(os.path.join(f, "mods.json")))
+        spec, _ = load_spec(os.path.join(f, "mods.json"))
         rest = {k: v for k, v in spec.items() if k not in ("mods", "parked", "archived", "retired")}
         for s_ in strings(rest):
             for x in lint.text(spec["engine"], s_):
@@ -1097,7 +1163,7 @@ def build_index(reg):
            "requires": {k: v for k, v in (reg.get("requires") or {}).items() if k != "why"},
            "versions": [], "mods": [], "kernels": [], "archived": [], "tools": [], "retired": {"versions": [], "mods": []}}
     for f in folders_all():
-        spec = json.load(open(os.path.join(f, "mods.json")))
+        spec, _ = load_spec(os.path.join(f, "mods.json"))
         e, v = spec["engine"], spec["version"]
         row = reg["engines"].get(e, {})
         rel = os.path.relpath(f, ROOT)
@@ -1135,7 +1201,7 @@ def build_index(reg):
                     "knobs": [x for x in [sw_name(m)] + m.get("reads", []) if x],
                     "output": m["output"]["label"], "patch": os.path.join(rel, m["patch"]), "sha256": sha256(os.path.join(f, m["patch"])),
                     "lines": m["lines"], "budget": m["budget"], "files": m["files"], "depends_on": m["depends_on"],
-                    "rule_exceptions": [x["rule"] for x in m.get("rule_exceptions", [])]})
+                    "rule_exceptions": [x["rule"] for x in m.get("rule_exceptions", [])], "module": m.get("module")})
         for z in spec.get("archived", []):
             out["archived"].append({"id": f"{e}/{v}/{z['name']}", "engine": e, "version": v, "name": z["name"], "kind": z["kind"],
                                     "switch": z.get("switch"), "date": z["date"], "patch": os.path.join(rel, z["patch"]),

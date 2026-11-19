@@ -1,5 +1,93 @@
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index b40eb5535..69438f73c 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -9,6 +9,7 @@
+ #include "ngram-map.h"
+ #include "ngram-mod.h"
+ #include "sampling.h"
++#include "ggml-backend.h"
+ 
+ #include <algorithm>
+ #include <cassert>
+@@ -3089,6 +3090,48 @@ common_params common_base_params_to_speculative(const common_params & params) {
+     return result;
+ }
+ 
++// LLAMA_DRAFT_ROUTE_COUNT=path (diagnostic, off = stock): count the experts the draft's MoE router picks. Observes the
++// draft context's "ffn_moe_probs" tensor ([n_expert, n_tokens] F32) through the eval callback and takes the top n_used on
++// the host. Rows written: expert, hits and weight mass in 1-token passes (decode), hits and mass in larger passes (catch-up).
++struct draft_route_count {
++    std::string path; int n_used = 0; uint64_t n_tok[2] = {0, 0}; uint64_t calls = 0;
++    std::vector<uint64_t> hits[2]; std::vector<double> mass[2]; std::vector<float> buf;
++    void dump() const {
++        FILE * f = fopen(path.c_str(), "w");
++        if (!f) { return; }
++        fprintf(f, "# n_expert %zu n_used %d tokens_decode %" PRIu64 " tokens_catchup %" PRIu64 "\n", hits[0].size(), n_used, n_tok[0], n_tok[1]);
++        for (size_t e = 0; e < hits[0].size(); e++) {
++            fprintf(f, "%zu %" PRIu64 " %.6f %" PRIu64 " %.6f\n", e, hits[0][e], mass[0][e], hits[1][e], mass[1][e]);
++        }
++        fclose(f);
++    }
++    ~draft_route_count() { if (!path.empty() && calls > 0) { dump(); } }
++};
++static draft_route_count g_draft_route_count;
++static bool draft_route_count_cb(struct ggml_tensor * t, bool ask, void * ud) {
++    auto * rc = (draft_route_count *) ud;
++    const bool want = strncmp(t->name, "ffn_moe_probs-", 14) == 0;
++    if (ask || !want) { return ask ? want : true; }
++    const int64_t n_expert = t->ne[0], n_tokens = t->ne[1];
++    if (t->type != GGML_TYPE_F32 || n_expert < rc->n_used) { return true; }
++    for (int k = 0; k < 2; k++) { rc->hits[k].resize(n_expert); rc->mass[k].resize(n_expert); }
++    rc->buf.resize(n_expert*n_tokens);
++    ggml_backend_tensor_get(t, rc->buf.data(), 0, rc->buf.size()*sizeof(float));
++    const int k = n_tokens == 1 ? 0 : 1;
++    std::vector<int32_t> idx(n_expert);
++    for (int64_t j = 0; j < n_tokens; j++) {
++        const float * p = rc->buf.data() + j*n_expert;
++        for (int64_t e = 0; e < n_expert; e++) { idx[e] = (int32_t) e; }
++        std::partial_sort(idx.begin(), idx.begin() + rc->n_used, idx.end(), [p](int32_t a, int32_t b) { return p[a] > p[b] || (p[a] == p[b] && a < b); });
++        double sum = 0.0;
++        for (int u = 0; u < rc->n_used; u++) { sum += p[idx[u]]; }
++        for (int u = 0; u < rc->n_used; u++) { rc->hits[k][idx[u]]++; rc->mass[k][idx[u]] += sum > 0 ? p[idx[u]]/sum : 0.0; }
++    }
++    rc->n_tok[k] += n_tokens;
++    if (++rc->calls % 20000 == 0) { rc->dump(); }
++    return true;
++}
++
+ struct common_speculative_init_result::impl {
+     impl() = default;
+     ~impl() = default;
+@@ -3122,6 +3165,12 @@ common_speculative_init_result::common_speculative_init_result(
+     //       the extra memory for small models is likely negligible?
+     cparams.n_rs_seq  = 0;
+     cparams.ctx_other = ctx_tgt;
++    if (const char * rc_path = getenv("LLAMA_DRAFT_ROUTE_COUNT"); rc_path != nullptr && *rc_path != '\0' && has_draft) {
++        g_draft_route_count.path = rc_path; // filled once the draft model is loaded (n_used below)
++        cparams.cb_eval           = draft_route_count_cb;
++        cparams.cb_eval_user_data = &g_draft_route_count;
++        LOG_WRN("%s: LLAMA_DRAFT_ROUTE_COUNT: counting the draft's routed experts into %s\n", __func__, rc_path);
++    }
+ 
+     std::string model_path;
+     if (has_draft) {
+@@ -3135,6 +3184,13 @@ common_speculative_init_result::common_speculative_init_result(
+         }
+ 
+         pimpl->model.reset(model_dft);
++        if (cparams.cb_eval == draft_route_count_cb) {
++            char arch[64] = {0}, val[32] = {0};
++            llama_model_meta_val_str(model_dft, "general.architecture", arch, sizeof(arch));
++            llama_model_meta_val_str(model_dft, (std::string(arch) + ".expert_used_count").c_str(), val, sizeof(val));
++            g_draft_route_count.n_used = atoi(val);
++            GGML_ASSERT(g_draft_route_count.n_used > 0);
++        }
+ 
+         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
+         if (ctx_dft == nullptr) {
 diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
-index bfbd6b6..04aee60 100644
+index bfbd6b621..8d906605a 100644
 --- a/ggml/src/ggml-cuda/common.cuh
 +++ b/ggml/src/ggml-cuda/common.cuh
 @@ -1412,6 +1412,12 @@ struct ggml_backend_cuda_context {
@@ -15,8 +103,44 @@ index bfbd6b6..04aee60 100644
      explicit ggml_backend_cuda_context(int device);
  
      std::unique_ptr<ggml_cuda_stream_context> concurrent_stream_context;
+@@ -1431,6 +1437,35 @@ struct ggml_backend_cuda_context {
+     ggml_cuda_stream_context & stream_context() { return *concurrent_stream_context; }
+ 
+     cublasHandle_t cublas_handle() {
++        // LLAMA_CUBLAS_SHARED=1 (off = stock): one cuBLAS handle + workspace per device for every backend context of the
++        // process (the target and the draft context each created their own: ~100 MiB a context). Contexts run one at a
++        // time on one thread; the handle is re-bound to the calling context's stream when it changes. cublasSetStream
++        // resets the workspace, so it is set again after it, as the stock path does at creation.
++        static const bool shared = getenv("LLAMA_CUBLAS_SHARED") != nullptr;
++        if (shared && curr_stream_no == 0) {
++            static cublasHandle_t sh[GGML_CUDA_MAX_DEVICES] = {};
++            static void *         sw[GGML_CUDA_MAX_DEVICES] = {};
++            static cudaStream_t   ss[GGML_CUDA_MAX_DEVICES] = {};
++            static size_t         sz[GGML_CUDA_MAX_DEVICES] = {};
++            if (sh[device] == nullptr) {
++                ggml_cuda_set_device(device);
++                CUBLAS_CHECK(cublasCreate(&sh[device]));
++                CUBLAS_CHECK(cublasSetMathMode(sh[device], CUBLAS_TF32_TENSOR_OP_MATH));
++#if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2)))
++                sz[device] = (ggml_cuda_info().devices[device].cc >= GGML_CUDA_CC_HOPPER) ? 32 * 1024 * 1024 : 4 * 1024 * 1024;
++                CUDA_CHECK(cudaMalloc(&sw[device], sz[device]));
++#endif
++                fprintf(stderr, "cublas_shared: on (device %d)\n", device);
++            }
++            if (ss[device] != stream()) {
++                ss[device] = stream();
++                CUBLAS_CHECK(cublasSetStream(sh[device], ss[device]));
++#if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2)))
++                CUBLAS_CHECK(cublasSetWorkspace(sh[device], sw[device], sz[device]));
++#endif
++            }
++            return sh[device];
++        }
+         if (cublas_handles[device][curr_stream_no] == nullptr) {
+             ggml_cuda_set_device(device);
+             CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 7a9e578..6af276a 100644
+index 3d8d30d81..b23e543a8 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -918,6 +918,9 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
@@ -29,7 +153,7 @@ index 7a9e578..6af276a 100644
      for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
          for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
              if (streams[i][j] != nullptr) {
-@@ -6913,8 +6916,42 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6901,8 +6904,42 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      GGML_UNUSED(reg);
  }
  
@@ -73,7 +197,7 @@ index 7a9e578..6af276a 100644
          return (void *)ggml_backend_cuda_comm_init;
      }
 diff --git a/ggml/src/ggml-cuda/mmq.cu b/ggml/src/ggml-cuda/mmq.cu
-index c9bcbc2..c57bd97 100644
+index c9bcbc2aa..c57bd972b 100644
 --- a/ggml/src/ggml-cuda/mmq.cu
 +++ b/ggml/src/ggml-cuda/mmq.cu
 @@ -380,6 +380,11 @@ void ggml_cuda_mul_mat_q(
@@ -130,7 +254,7 @@ index c9bcbc2..c57bd97 100644
  
  bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts) {
 diff --git a/ggml/src/ggml-cuda/mmq.cuh b/ggml/src/ggml-cuda/mmq.cuh
-index 7fb09a3..191f9cd 100644
+index 7fb09a353..191f9cda8 100644
 --- a/ggml/src/ggml-cuda/mmq.cuh
 +++ b/ggml/src/ggml-cuda/mmq.cuh
 @@ -1029,7 +1029,9 @@ static __global__ void mul_mat_q(
@@ -207,10 +331,10 @@ index 7fb09a3..191f9cd 100644
      if (!fixup_needed) {
          return;
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index cc25727..a596bfb 100644
+index 1d8f66d0e..e13bc1d00 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -3189,12 +3189,20 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -3175,12 +3175,20 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
  
      auto & st = lctx->copy_experts;
  
@@ -236,7 +360,7 @@ index cc25727..a596bfb 100644
          return false;
      }
  
-@@ -3223,6 +3231,21 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -3209,6 +3217,21 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
          st.ids = ids;
      }
  
@@ -258,7 +382,7 @@ index cc25727..a596bfb 100644
      // group consecutive experts and copy them together
      for (int64_t first = 0; first < n_expert; ) {
          if (!st.used[first]) {
-@@ -3237,13 +3260,13 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -3223,13 +3246,13 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
          // the experts in the MoE cache are copied from device memory, the others are uploaded
          int64_t next = first;
          for (int64_t e = first; e <= last && lctx->moe_cache; ) {
@@ -274,7 +398,7 @@ index cc25727..a596bfb 100644
              }
              e   += n;
              next = e;
-@@ -3253,7 +3276,7 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -3239,7 +3262,7 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
          const size_t offset  = next*expert_size;
          const size_t padding = last < n_expert - 1 ? std::min<size_t>(expert_size, 512) : 0;
          const size_t size    = (last + 1 - next)*expert_size + padding;
@@ -284,7 +408,7 @@ index cc25727..a596bfb 100644
          }
  
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 3e3921c..b1ea494 100644
+index 3e3921c7d..b1ea494ce 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -416,6 +416,7 @@ private:
@@ -296,7 +420,7 @@ index 3e3921c..b1ea494 100644
          void reset() {
              ids = nullptr;
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index ba35af0..cb9616d 100644
+index ba35af021..cb9616d06 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
 @@ -373,6 +373,7 @@ struct llama_moe_cache::impl {
@@ -352,7 +476,7 @@ index ba35af0..cb9616d 100644
      std::map<ggml_backend_buffer_type_t, size_t> res;
      for (const auto & d : pimpl->devices) {
 diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
-index 833eac3..334462f 100644
+index 833eac360..334462fdb 100644
 --- a/src/llama-moe-cache.h
 +++ b/src/llama-moe-cache.h
 @@ -60,6 +60,9 @@ public:

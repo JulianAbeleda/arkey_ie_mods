@@ -1,0 +1,724 @@
+diff --git a/common/common.cpp b/common/common.cpp
+index 657dcdbf5..07d400c4f 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -1,4 +1,5 @@
+ #include "ggml.h"
++#include "ggml-backend.h"
+ #include "ggml-cpp.h"
+ #include "gguf.h"
+ 
+@@ -31,6 +32,8 @@
+ #include <sstream>
+ #include <string>
+ #include <thread>
++#include <mutex>
++#include <unordered_map>
+ #include <unordered_set>
+ #include <vector>
+ 
+@@ -2413,6 +2416,106 @@ bool common_prompt_batch_decode(
+     return true;
+ }
+ 
++// LOCAL (ckpt-pinned): LLAMA_CKPT_PINNED=1. A context checkpoint is a new state buffer every time; stock allocates it
++// pageable and the CUDA read then pins, maps and unpins the whole span per save. The pool hands out pinned host buffers
++// (the device's host buffer type) and keeps the buffers of erased checkpoints for the next checkpoint of the same size.
++namespace {
++struct common_state_pool {
++    std::mutex mtx;
++    ggml_backend_buffer_type_t buft = nullptr;
++    std::unordered_map<void *, ggml_backend_buffer_t> live;
++    std::vector<std::pair<size_t, ggml_backend_buffer_t>> idle;
++    size_t n_reserve = 0; // buffers to pin at the first allocation; 0 once done
++    size_t max_idle  = 8;
++};
++constexpr size_t COMMON_STATE_POOL_MIN_BYTES = 1024 * 1024;
++
++common_state_pool * common_state_pool_get() {
++    static common_state_pool * pool = [] () -> common_state_pool * {
++        const char * env = getenv("LLAMA_CKPT_PINNED");
++        if (env == nullptr || atoi(env) == 0) {
++            return nullptr;
++        }
++        auto * res = new common_state_pool(); // never destroyed: checkpoints may outlive static destruction
++        for (size_t i = 0; i < ggml_backend_dev_count() && res->buft == nullptr; i++) {
++            res->buft = ggml_backend_dev_host_buffer_type(ggml_backend_dev_get(i));
++        }
++        LOG_INF("%s: LLAMA_CKPT_PINNED=1, host buffer type = %s\n", __func__, res->buft ? ggml_backend_buft_name(res->buft) : "none (stock path)");
++        return res;
++    }();
++    return pool;
++}
++}
++
++void * common_state_pool_alloc(size_t n_bytes) {
++    auto * pool = n_bytes < COMMON_STATE_POOL_MIN_BYTES ? nullptr : common_state_pool_get();
++    if (pool == nullptr || pool->buft == nullptr) {
++        return nullptr;
++    }
++    std::lock_guard<std::mutex> lock(pool->mtx);
++    ggml_backend_buffer_t buf = nullptr;
++    for (size_t i = 0; i < pool->idle.size(); i++) {
++        if (pool->idle[i].first == n_bytes) {
++            buf = pool->idle[i].second;
++            pool->idle.erase(pool->idle.begin() + i);
++            break;
++        }
++    }
++    if (buf == nullptr) {
++        buf = ggml_backend_buft_alloc_buffer(pool->buft, n_bytes);
++    }
++    if (buf == nullptr) {
++        return nullptr;
++    }
++    if (pool->n_reserve > 0) {
++        // pinned allocations slow the whole host side while they happen: take them all now, not one per checkpoint
++        const int64_t t_start = ggml_time_us();
++        size_t n = 1;
++        for (; n < pool->n_reserve; n++) {
++            ggml_backend_buffer_t cur = ggml_backend_buft_alloc_buffer(pool->buft, n_bytes);
++            if (cur == nullptr) {
++                break;
++            }
++            pool->idle.emplace_back(n_bytes, cur);
++        }
++        pool->max_idle  = std::max(pool->max_idle, n);
++        pool->n_reserve = 0;
++        LOG_INF("%s: LLAMA_CKPT_PINNED reserved %zu buffers of %.3f MiB in %.1f ms\n", __func__, n, n_bytes / 1024.0 / 1024.0, (ggml_time_us() - t_start) / 1000.0);
++    }
++    void * ptr = ggml_backend_buffer_get_base(buf);
++    pool->live[ptr] = buf;
++    return ptr;
++}
++
++void common_state_pool_reserve(size_t n) {
++    static bool done = false; // server thread only
++    auto * pool = done ? nullptr : common_state_pool_get();
++    done = true;
++    if (pool != nullptr) {
++        std::lock_guard<std::mutex> lock(pool->mtx);
++        pool->n_reserve = n;
++    }
++}
++
++bool common_state_pool_free(void * ptr, size_t n_bytes) {
++    auto * pool = common_state_pool_get();
++    if (pool == nullptr) {
++        return false;
++    }
++    std::lock_guard<std::mutex> lock(pool->mtx);
++    const auto it = pool->live.find(ptr);
++    if (it == pool->live.end()) {
++        return false;
++    }
++    if (pool->idle.size() >= pool->max_idle) {
++        ggml_backend_buffer_free(pool->idle.front().second);
++        pool->idle.erase(pool->idle.begin());
++    }
++    pool->idle.emplace_back(n_bytes, it->second);
++    pool->live.erase(it);
++    return true;
++}
++
+ size_t common_prompt_checkpoint::size() const {
+     return data_tgt.size() + data_dft.size() + data_spec.size();
+ }
+diff --git a/common/common.h b/common/common.h
+index 9b9e892d8..96565aa33 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -1318,6 +1318,13 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
+ // prompt utils
+ //
+ 
++// LOCAL (ckpt-pinned): pool of pinned host buffers for sequence state data. Unset LLAMA_CKPT_PINNED = never used (stock).
++// alloc returns nullptr and free returns false when the block is not the pool's.
++void * common_state_pool_alloc(size_t n_bytes);
++bool   common_state_pool_free(void * ptr, size_t n_bytes);
++// pin n buffers at once at the pool's first allocation (its size), so that no later checkpoint waits for a pinned allocation
++void   common_state_pool_reserve(size_t n);
++
+ // leave default-inserted elements uninitialized; callers must fill them before use
+ template <typename T>
+ struct common_no_init_allocator : std::allocator<T> {
+@@ -1327,6 +1334,10 @@ struct common_no_init_allocator : std::allocator<T> {
+     template <typename U> common_no_init_allocator(const common_no_init_allocator<U> &) {}
+ 
+     template <typename U> void construct(U * p) { ::new ((void *) p) U; }
++
++    // LOCAL (ckpt-pinned): LLAMA_CKPT_PINNED=1 takes large blocks from a pool of pinned host buffers that are reused
++    T * allocate(size_t n) { void * p = common_state_pool_alloc(n * sizeof(T)); return p ? (T *) p : std::allocator<T>::allocate(n); }
++    void deallocate(T * p, size_t n) { if (!common_state_pool_free(p, n * sizeof(T))) { std::allocator<T>::deallocate(p, n); } }
+ };
+ 
+ // sequence state data, filled by llama_state_seq_get_data_ext()
+@@ -1348,6 +1359,10 @@ struct common_prompt_checkpoint {
+     // (e.g. eagle3's deferred-boundary g_embd row)
+     std::vector<uint8_t> data_spec;
+ 
++    // LOCAL (ckpt-pinned): LLAMA_CKPT_PINNED_CHECK=1 keeps the same states saved through the stock pageable path
++    std::vector<uint8_t> chk_tgt;
++    std::vector<uint8_t> chk_dft;
++
+     size_t size() const;
+ 
+     bool empty() const;
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index 2e2f9c036..df0865045 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -1255,6 +1255,16 @@ struct ggml_backend_sched {
+     int n_prefetched;
+     int prefetch_split;     // the split that reads the prefetched inputs
+     int prefetch_backend_id; // the backend that copies them
++
++    // GGML_SCHED_ASYNC_INPUTS: host -> device split input copies staged in a pinned ring and queued on the split
++    // backend's stream (stream order replaces the host syncs); see ggml_backend_sched_stage_copy
++    int                   stage_mode; // 0 off, 1 on, 2 on + check
++    ggml_backend_t        stage_backend;
++    ggml_backend_buffer_t stage_buf;
++    ggml_backend_event_t  stage_events[4];
++    int    stage_chunk;
++    size_t stage_off;
++    size_t stage_checked, stage_differ;
+ };
+ 
+ #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
+@@ -2097,6 +2107,64 @@ static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
+         ggml_backend_buffer_is_host(t->buffer);
+ }
+ 
++// GGML_SCHED_ASYNC_INPUTS=1: a split input that lives in a host buffer is snapshotted into a pinned staging ring and
++// copied with set_tensor_async on the split backend's stream. The stream orders the copy after the earlier work that
++// reads the destination and before the split that reads it, so the host syncs before and after the copy are not
++// needed; the snapshot keeps the "copied immediately" contract for the source. A ring chunk is reused only after an
++// event recorded behind its last copy has completed. =2 also reads every copy back after a sync and compares it.
++#define GGML_SCHED_STAGE_CHUNK (1u << 20)
++static bool ggml_backend_sched_stage_copy(ggml_backend_sched_t sched, ggml_backend_t backend, ggml_backend_t input_backend,
++        struct ggml_tensor * input, struct ggml_tensor * input_cpy) {
++    ggml_backend_buffer_t src_buf = input->view_src ? input->view_src->buffer : input->buffer;
++    ggml_backend_buffer_t dst_buf = input_cpy->view_src ? input_cpy->view_src->buffer : input_cpy->buffer;
++    const size_t n = ggml_nbytes(input);
++    // the source must be final on the host: written by the user or by a host (CPU) backend, which computes synchronously
++    if (sched->stage_mode == 0 || sched->n_copies != 1 || backend->iface.set_tensor_async == NULL || n > GGML_SCHED_STAGE_CHUNK ||
++        input_backend == NULL || ggml_backend_dev_type(ggml_backend_get_device(input_backend)) != GGML_BACKEND_DEVICE_TYPE_CPU ||
++        src_buf == NULL || !ggml_backend_buffer_is_host(src_buf) || dst_buf == NULL || ggml_backend_buffer_is_host(dst_buf) ||
++        !ggml_is_contiguous(input) || (sched->stage_backend != NULL && sched->stage_backend != backend)) {
++        return false;
++    }
++    if (sched->stage_buf == NULL) {
++        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
++        ggml_backend_buffer_type_t host = dev ? ggml_backend_dev_host_buffer_type(dev) : NULL;
++        sched->stage_buf = host ? ggml_backend_buft_alloc_buffer(host, 4 * (size_t) GGML_SCHED_STAGE_CHUNK) : NULL;
++        sched->stage_backend = backend;
++        for (int i = 0; i < 4 && sched->stage_buf; i++) {
++            sched->stage_events[i] = ggml_backend_event_new(dev);
++            if (sched->stage_events[i] == NULL || backend->iface.event_record == NULL) {
++                sched->stage_mode = 0; // no events: stay on the stock path
++                return false;
++            }
++        }
++        if (sched->stage_buf == NULL) {
++            sched->stage_mode = 0;
++            return false;
++        }
++    }
++    if (sched->stage_off + n > GGML_SCHED_STAGE_CHUNK) { // next chunk: wait until the copies that last read it are done
++        ggml_backend_event_record(sched->stage_events[sched->stage_chunk], backend);
++        sched->stage_chunk = (sched->stage_chunk + 1) % 4;
++        ggml_backend_event_synchronize(sched->stage_events[sched->stage_chunk]);
++        sched->stage_off = 0;
++    }
++    char * stage = (char *) ggml_backend_buffer_get_base(sched->stage_buf) + (size_t) sched->stage_chunk * GGML_SCHED_STAGE_CHUNK + sched->stage_off;
++    memcpy(stage, input->data, n);
++    sched->stage_off += GGML_PAD(n, 256);
++    ggml_backend_tensor_set_async(backend, input_cpy, stage, 0, n);
++    if (sched->stage_mode == 2) {
++        std::vector<char> back(n);
++        ggml_backend_synchronize(backend);
++        ggml_backend_tensor_get(input_cpy, back.data(), 0, n);
++        sched->stage_differ += memcmp(back.data(), input->data, n) != 0;
++        if (++sched->stage_checked % 20000 == 0 || memcmp(back.data(), input->data, n) != 0) {
++            GGML_LOG_WARN("%s: GGML_SCHED_ASYNC_INPUTS check: %zu copies, %zu differ (last %s, %zu bytes)\n", __func__,
++                sched->stage_checked, sched->stage_differ, input->name, n);
++        }
++    }
++    return true;
++}
++
+ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
+     const int split_backend_id = split->backend_id;
+     ggml_backend_t split_backend = sched->backends[split_backend_id];
+@@ -2115,6 +2183,9 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
+ 
+     if (input->flags & GGML_TENSOR_FLAG_INPUT) {
+         // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
++        if (ggml_backend_sched_stage_copy(sched, split_backend, input_backend, input, input_cpy)) {
++            return;
++        }
+         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+         } else {
+@@ -2124,6 +2195,10 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
+         return;
+     }
+ 
++    if (!ggml_backend_sched_is_host_weight(input) && ggml_backend_sched_stage_copy(sched, split_backend, input_backend, input, input_cpy)) {
++        return;
++    }
++
+     // wait for the split backend to finish using the input before overwriting it
+     if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+         ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
+@@ -2314,6 +2389,8 @@ ggml_backend_sched_t ggml_backend_sched_new(
+ 
+     const char * GGML_SCHED_DEBUG = getenv("GGML_SCHED_DEBUG");
+     sched->debug = GGML_SCHED_DEBUG ? atoi(GGML_SCHED_DEBUG) : 0;
++    const char * GGML_SCHED_ASYNC_INPUTS = getenv("GGML_SCHED_ASYNC_INPUTS");
++    sched->stage_mode = GGML_SCHED_ASYNC_INPUTS && atoi(GGML_SCHED_ASYNC_INPUTS) > 0 ? (getenv("GGML_SCHED_ASYNC_INPUTS_CHECK") ? 2 : 1) : 0;
+ 
+     sched->debug_realloc = 0;
+ #ifdef GGML_SCHED_NO_REALLOC
+@@ -2382,6 +2459,11 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
+         }
+         ggml_backend_event_free(sched->prefetch_events[b]);
+     }
++    // no backend call here: llama_context frees its backends first. Freeing the pinned buffer waits for the device
++    ggml_backend_buffer_free(sched->stage_buf);
++    for (int i = 0; i < 4; i++) {
++        ggml_backend_event_free(sched->stage_events[i]);
++    }
+     ggml_gallocr_free(sched->galloc);
+     ggml_free(sched->ctx);
+     ggml_hash_set_free(&sched->hash_set);
+diff --git a/include/llama.h b/include/llama.h
+index 7122143e5..6b6570767 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -1259,6 +1259,11 @@ extern "C" {
+ 
+     LLAMA_API enum llama_token_attr llama_vocab_get_attr(const struct llama_vocab * vocab, llama_token token);
+ 
++    // LOCAL (ple-prefetch): ask the model to hint the OS about input rows that tokens[i_first..n_tokens) will read from
++    // lazily mapped tensors (predecessors from tokens[] itself), on a background thread. A hint only: no output changes.
++    // No-op unless the architecture overrides llama_model::prefetch_inputs.
++    LLAMA_API void llama_model_prefetch_inputs(const struct llama_model * model, const llama_token * tokens, int32_t n_tokens, int32_t i_first);
++
+     // Check if the token is supposed to end generation (end-of-generation, eg. EOS, EOT, etc.)
+     LLAMA_API bool llama_vocab_is_eog(const struct llama_vocab * vocab, llama_token token);
+ 
+diff --git a/src/llama-mmap.cpp b/src/llama-mmap.cpp
+index 9688a7ed4..dcc60b6ec 100644
+--- a/src/llama-mmap.cpp
++++ b/src/llama-mmap.cpp
+@@ -10,6 +10,10 @@
+ #include <stdexcept>
+ #include <cerrno>
+ #include <algorithm>
++#include <condition_variable> // LLAMA_PLE_PREFETCH_TURN: llama_prefetch_async
++#include <deque>
++#include <mutex>
++#include <thread>
+ 
+ #ifdef __has_include
+     #if __has_include(<unistd.h>)
+@@ -1141,6 +1145,36 @@ void llama_prefetch(llama_memory_ranges mr) {
+ #endif
+ }
+ 
++// LLAMA_PLE_PREFETCH_TURN (caller: llama_model::prefetch_inputs overrides): the same hint as llama_prefetch, on one background
++// thread, so the caller does not wait for the madvise calls. A hint changes no byte that is read later.
++void llama_prefetch_async(llama_memory_ranges mr) {
++    // heap objects that are never destroyed: the detached worker may still wait on them while static destructors run at exit
++    // (function-local statics here hung the process at exit)
++    static std::mutex & mtx = *new std::mutex;
++    static std::condition_variable & cv = *new std::condition_variable;
++    static std::deque<llama_memory_ranges> & q = *new std::deque<llama_memory_ranges>;
++    static std::once_flag once;
++    std::call_once(once, [] {
++        std::thread([] {
++            for (;;) {
++                llama_memory_ranges job;
++                {
++                    std::unique_lock<std::mutex> lock(mtx);
++                    cv.wait(lock, [] { return !q.empty(); });
++                    job = std::move(q.front());
++                    q.pop_front();
++                }
++                llama_prefetch(std::move(job));
++            }
++        }).detach();
++    });
++    {
++        std::lock_guard<std::mutex> lock(mtx);
++        q.push_back(std::move(mr));
++    }
++    cv.notify_one();
++}
++
+ size_t llama_path_max() {
+     return PATH_MAX;
+ }
+diff --git a/src/llama-mmap.h b/src/llama-mmap.h
+index 6c6393d57..6af1261d3 100644
+--- a/src/llama-mmap.h
++++ b/src/llama-mmap.h
+@@ -88,5 +88,6 @@ using llama_memory_ranges = std::vector<llama_memory_range>;
+ 
+ // Prefetch the host pages covering these memory ranges.
+ void llama_prefetch(llama_memory_ranges mr);
++void llama_prefetch_async(llama_memory_ranges mr); // LOCAL (ple-prefetch): background thread
+ 
+ size_t llama_path_max();
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index ac5266a42..49b46a1e1 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -4258,3 +4258,10 @@ uint32_t llama_model_get_tok_embd_rows(const struct llama_model * model, const l
+ 
+     return n_tokens * (uint32_t) tensor->ne[0];
+ }
++
++// LOCAL (ple-prefetch)
++void llama_model_prefetch_inputs(const llama_model * model, const llama_token * tokens, int32_t n_tokens, int32_t i_first) {
++    if (model != nullptr) {
++        model->prefetch_inputs(tokens, n_tokens, i_first);
++    }
++}
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 8d2f5629e..c1dc4528c 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -1045,6 +1045,11 @@ struct llama_model {
+     // same, for the keys of the lightning indexer
+     virtual llama_rope_params get_rope_params_indexer(const llama_cparams & cparams, int il) const;
+ 
++    // LOCAL (ple-prefetch): hint reads of lazily mapped input rows for tokens[i_first..n_tokens); default: nothing to prefetch
++    virtual void prefetch_inputs(const llama_token * tokens, int32_t n_tokens, int32_t i_first) const {
++        GGML_UNUSED(tokens); GGML_UNUSED(n_tokens); GGML_UNUSED(i_first);
++    }
++
+     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
+     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
+ 
+diff --git a/src/models/models.h b/src/models/models.h
+index 8d74c5018..863642642 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -2840,6 +2840,8 @@ struct llama_model_clef : public llama_model_qwen35 {
+ struct llama_model_qwen4exp : public llama_model_base {
+     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
+ 
++    void prefetch_inputs(const llama_token * tokens, int32_t n_tokens, int32_t i_first) const override; // LOCAL (ple-prefetch)
++
+     class llm_graph_input_kpool;
+ 
+     void load_arch_hparams(llama_model_loader & ml) override;
+diff --git a/src/models/qwen4exp-prefetch.cpp b/src/models/qwen4exp-prefetch.cpp
+new file mode 100644
+index 000000000..6c84810c8
+--- /dev/null
++++ b/src/models/qwen4exp-prefetch.cpp
+@@ -0,0 +1,55 @@
++// LOCAL (ple-prefetch): kept in its own file so the mod adds no line to the architecture file
++#include "models.h"
++#include "llama-mmap.h"
++#include "llama-model.h"
++
++#include <algorithm>
++#include <vector>
++
++// LOCAL (ple-prefetch): the row ids of llm_graph_input_qwen4exp_ple::set_input, from a flat token list
++void llama_model_qwen4exp::prefetch_inputs(const llama_token * tokens, int32_t n_tokens, int32_t i_first) const {
++    if (tokens == nullptr || i_first >= n_tokens) {
++        return;
++    }
++    const ggml_tensor * ple = per_layer_tok_embd;
++    // nothing to do unless the table is lazily mapped (the same condition set_input uses for its own prefetch)
++    if (ple == nullptr || !can_prefetch.count(ple) || ple->data == nullptr) {
++        return;
++    }
++    const auto & hp = hparams;
++    const int64_t n_gram = hp.ple_ngram_size, n_heads = hp.ple_n_heads, per_gram = hp.ple_heads_per_ngram, eos = hp.ple_eos_token_id;
++    if (n_gram < 2 || n_heads <= 0) {
++        return;
++    }
++    i_first = std::max(i_first, 0);
++    const size_t row_bytes = ggml_row_size(ple->type, ple->ne[0]);
++    const auto * base = (const char *) ple->data;
++    llama_memory_ranges mr;
++    mr.reserve((size_t) (n_tokens - i_first) * n_heads);
++    std::vector<int64_t> ctx(n_gram);
++    for (int64_t i = i_first; i < n_tokens; ++i) {
++        ctx[0] = tokens[i];
++        bool cut = false;
++        for (int64_t q = 1; q < n_gram; ++q) {
++            const int64_t j = i - q;
++            const llama_token t = (cut || j < 0) ? LLAMA_TOKEN_NULL : tokens[j];
++            cut = cut || t < 0 || t == eos;
++            ctx[q] = cut ? eos : t;
++        }
++        for (int64_t n = 2; n <= n_gram; ++n) {
++            uint64_t mixed = (uint64_t) ctx[0] * hp.ple_layer_multipliers[0];
++            for (int64_t j = 1; j < n; ++j) {
++                mixed ^= (uint64_t) ctx[j] * hp.ple_layer_multipliers[j];
++            }
++            const int64_t b = (n - 2) * per_gram;
++            for (int64_t g = 0; g < per_gram; ++g) {
++                const int64_t h = b + g;
++                const int64_t row = (int64_t) (mixed % hp.ple_head_vocab_sizes[h] + hp.ple_head_offsets[h]);
++                if (row >= 0 && row < ple->ne[1]) {
++                    mr.push_back({ base + (size_t) row * ple->nb[1], row_bytes });
++                }
++            }
++        }
++    }
++    llama_prefetch_async(std::move(mr));
++}
+diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
+index eb5781e74..bf0a25a5d 100644
+--- a/tools/server/server-common.cpp
++++ b/tools/server/server-common.cpp
+@@ -22,6 +22,8 @@
+ #include <cstring>
+ #include <type_traits>
+ #include <atomic>
++#include <mutex>
++#include <unordered_map>
+ #include <chrono>
+ #include <iostream>
+ #include <thread>
+@@ -1080,6 +1082,112 @@ json json_get_nested_values(const std::vector<std::string> & paths, const json &
+     return result;
+ }
+ 
++// LOCAL (tokenize-incr): LLAMA_TOKENIZE_INCR=1 - the prompt string is cut before every occurrence of a control token's text (from
++// the vocab; no strip attributes). The tokenizer splits the text at special tokens before it runs BPE on the text between them, so
++// the pieces tokenize independently: tokens(prompt) == concat(tokens(piece)). Pieces seen in the previous call (the conversation
++// history) reuse their tokens; only new pieces are tokenized. Literals: 256 = one bucket per first byte value. No size threshold:
++// the piecewise path is exact at any size. LLAMA_TOKENIZE_INCR_CHECK=1 also tokenizes the whole string and aborts on any difference.
++// Unset = stock.
++static llama_tokens tokenize_incr(const llama_vocab * vocab, const std::string & s, bool add_special, bool parse_special) {
++    static const bool on  = getenv("LLAMA_TOKENIZE_INCR") != nullptr && atoi(getenv("LLAMA_TOKENIZE_INCR")) > 0;
++    static const bool chk = getenv("LLAMA_TOKENIZE_INCR_CHECK") != nullptr && atoi(getenv("LLAMA_TOKENIZE_INCR_CHECK")) > 0;
++    // EOS added by add_special would land after the first piece instead of the end: stock path for such vocabs
++    if (!on || !parse_special || (add_special && llama_vocab_get_add_eos(vocab))) {
++        return common_tokenize(vocab, s, add_special, parse_special);
++    }
++    // cut points = every occurrence of a control token's text (no strip attributes), taken from the vocab once per vocab and
++    // bucketed by first byte, longest first: the tokenizer splits the text at special tokens before BPE, so the pieces between
++    // them tokenize independently. No control token in the text -> stock path.
++    static std::mutex mtx_d;
++    static std::unordered_map<const llama_vocab *, std::vector<std::vector<std::string>>> ctrl;
++    const std::vector<std::vector<std::string>> * buckets = nullptr;
++    {
++        std::lock_guard<std::mutex> lock(mtx_d);
++        auto it = ctrl.find(vocab);
++        if (it == ctrl.end()) {
++            std::vector<std::vector<std::string>> b(256);
++            const int32_t n_vocab = llama_vocab_n_tokens(vocab);
++            for (llama_token t = 0; t < n_vocab; ++t) {
++                const auto attr = llama_vocab_get_attr(vocab, t);
++                if ((attr & LLAMA_TOKEN_ATTR_CONTROL) && !(attr & (LLAMA_TOKEN_ATTR_LSTRIP | LLAMA_TOKEN_ATTR_RSTRIP))) {
++                    std::string piece = common_token_to_piece(vocab, t, true);
++                    if (!piece.empty()) {
++                        b[(unsigned char) piece[0]].push_back(std::move(piece));
++                    }
++                }
++            }
++            for (auto & v : b) {
++                std::sort(v.begin(), v.end(), [](const std::string & x, const std::string & y) { return x.size() > y.size(); });
++            }
++            it = ctrl.emplace(vocab, std::move(b)).first;
++        }
++        buckets = &it->second;
++    }
++    std::vector<size_t> cuts; // start offsets of the pieces
++    cuts.push_back(0);
++    for (size_t pos = 0; pos < s.size(); ) {
++        size_t len = 0;
++        for (const auto & c : (*buckets)[(unsigned char) s[pos]]) {
++            if (s.compare(pos, c.size(), c) == 0) {
++                len = c.size();
++                break;
++            }
++        }
++        if (len == 0) {
++            pos++;
++            continue;
++        }
++        if (pos > 0) {
++            cuts.push_back(pos);
++        }
++        pos += len;
++    }
++    if (cuts.size() == 1) {
++        return common_tokenize(vocab, s, add_special, parse_special);
++    }
++    cuts.push_back(s.size());
++
++    const int64_t t0 = ggml_time_us();
++    // the pieces of the previous call (one prompt's text + tokens: memory bounded by one prompt); per process, so interleaved
++    // conversations (-np > 1) reuse less but stay exact (every piece is either tokenized or an exact string match)
++    static std::mutex mtx;
++    static std::unordered_map<std::string, llama_tokens> prev;
++    std::unordered_map<std::string, llama_tokens> next;
++    llama_tokens out;
++    size_t n_new = 0, n_reused = 0;
++    std::lock_guard<std::mutex> lock(mtx);
++    for (size_t k = 0; k + 1 < cuts.size(); ++k) {
++        const bool first = k == 0;
++        std::string piece = s.substr(cuts[k], cuts[k + 1] - cuts[k]);
++        // the first piece carries add_special (BOS); a marker byte keeps it apart from the same text elsewhere
++        std::string key = first && add_special ? std::string("\x01") + piece : piece;
++        llama_tokens toks;
++        if (auto it = prev.find(key); it != prev.end()) {
++            toks = it->second;
++            n_reused++;
++        } else if (auto jt = next.find(key); jt != next.end()) {
++            toks = jt->second;
++            n_reused++;
++        } else {
++            toks = common_tokenize(vocab, piece, first && add_special, true);
++            n_new++;
++        }
++        out.insert(out.end(), toks.begin(), toks.end());
++        next.emplace(std::move(key), std::move(toks));
++    }
++    prev.swap(next);
++    const int64_t t1 = ggml_time_us();
++    if (chk) {
++        const llama_tokens full = common_tokenize(vocab, s, add_special, parse_special);
++        if (full != out) {
++            GGML_ABORT("LLAMA_TOKENIZE_INCR_CHECK: piecewise tokens differ from the full tokenization (%zu vs %zu tokens)\n", out.size(), full.size());
++        }
++        fprintf(stderr, "tokenize_incr check: %zu tokens equal, pieces new %zu reused %zu, incr %.2f ms, full %.2f ms\n",
++            out.size(), n_new, n_reused, (t1 - t0)/1e3, (ggml_time_us() - t1)/1e3);
++    }
++    return out;
++}
++
+ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt, bool add_special, bool parse_special) {
+     // If `add_bos` is true, we only add BOS, when json_prompt is a string,
+     // or the first element of the json_prompt array is a string.
+@@ -1110,7 +1218,7 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
+         }
+     } else {
+         auto s = json_prompt.template get<std::string>();
+-        prompt_tokens = common_tokenize(vocab, s, add_special, parse_special);
++        prompt_tokens = tokenize_incr(vocab, s, add_special, parse_special); // LOCAL (tokenize-incr): stock unless LLAMA_TOKENIZE_INCR=1
+     }
+ 
+     return prompt_tokens;
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 0cdc02284..2678bbfda 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -2652,6 +2652,64 @@ private:
+         return true;
+     }
+ 
++    // LOCAL (ckpt-pinned): LLAMA_CKPT_PINNED_CHECK=1 - every checkpoint save is also taken through the stock pageable
++    // path and compared; every restore loads the stock copy and the pooled copy and compares the two restored states
++    const bool ckpt_pinned_check = [] { const char * e = getenv("LLAMA_CKPT_PINNED_CHECK"); return e && atoi(e) != 0; }();
++    size_t ckpt_chk_n_save = 0, ckpt_chk_n_restore = 0;
++
++    static std::vector<uint8_t> ckpt_chk_read(llama_context * ctx, llama_seq_id id) {
++        std::vector<uint8_t> res(ctx ? llama_state_seq_get_size_ext(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) : 0);
++        if (ctx) {
++            GGML_ASSERT(llama_state_seq_get_data_ext(ctx, res.data(), res.size(), id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == res.size());
++        }
++        return res;
++    }
++
++    static size_t ckpt_chk_diff(const uint8_t * a, size_t na, const uint8_t * b, size_t nb) {
++        size_t n = na > nb ? na - nb : nb - na;
++        for (size_t i = 0; i < std::min(na, nb); i++) {
++            n += a[i] != b[i];
++        }
++        return n;
++    }
++
++    void ckpt_chk_save(server_slot & slot, common_prompt_checkpoint & cur) {
++        cur.chk_tgt = ckpt_chk_read(ctx_tgt, slot.id);
++        cur.chk_dft = ckpt_chk_read(ctx_dft, slot.id);
++        const size_t d_tgt = ckpt_chk_diff(cur.chk_tgt.data(), cur.chk_tgt.size(), cur.data_tgt.data(), cur.data_tgt.size());
++        const size_t d_dft = ckpt_chk_diff(cur.chk_dft.data(), cur.chk_dft.size(), cur.data_dft.data(), cur.data_dft.size());
++        SLT_INF(slot, "ckpt_pinned check: save %zu n_tokens = %" PRId64 ", tgt %zu bytes, dft %zu bytes, differing bytes vs stock save: tgt %zu, dft %zu\n",
++                ++ckpt_chk_n_save, cur.n_tokens, cur.data_tgt.size(), cur.data_dft.size(), d_tgt, d_dft);
++        if (d_tgt || d_dft) {
++            GGML_ABORT("LLAMA_CKPT_PINNED_CHECK: saved checkpoint differs from the stock save\n");
++        }
++    }
++
++    // called after the checkpoint was restored from its own (pooled) buffers
++    void ckpt_chk_restore(server_slot & slot, const common_prompt_checkpoint & cur) {
++        if (cur.chk_tgt.size() != cur.data_tgt.size()) {
++            return; // not created under the check (e.g. loaded from a slot file)
++        }
++        const auto new_tgt = ckpt_chk_read(ctx_tgt, slot.id);
++        const auto new_dft = ckpt_chk_read(ctx_dft, slot.id);
++        GGML_ASSERT(llama_state_seq_set_data_ext(ctx_tgt, cur.chk_tgt.data(), cur.chk_tgt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == cur.chk_tgt.size());
++        if (ctx_dft && !cur.chk_dft.empty()) {
++            GGML_ASSERT(llama_state_seq_set_data_ext(ctx_dft, cur.chk_dft.data(), cur.chk_dft.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == cur.chk_dft.size());
++        }
++        const auto old_tgt = ckpt_chk_read(ctx_tgt, slot.id);
++        const auto old_dft = ckpt_chk_read(ctx_dft, slot.id);
++        const size_t d_tgt = ckpt_chk_diff(old_tgt.data(), old_tgt.size(), new_tgt.data(), new_tgt.size());
++        const size_t d_dft = ckpt_chk_diff(old_dft.data(), old_dft.size(), new_dft.data(), new_dft.size());
++        const size_t d_blob = ckpt_chk_diff(new_tgt.data(), new_tgt.size(), cur.data_tgt.data(), cur.data_tgt.size());
++        // leave the context as the pooled restore left it
++        GGML_ASSERT(cur.load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) && cur.load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
++        SLT_INF(slot, "ckpt_pinned check: restore %zu n_tokens = %" PRId64 ", restored state %zu + %zu bytes, differing bytes stock vs pooled restore: tgt %zu, dft %zu; read-back vs checkpoint: tgt %zu\n",
++                ++ckpt_chk_n_restore, cur.n_tokens, new_tgt.size(), new_dft.size(), d_tgt, d_dft, d_blob);
++        if (d_tgt || d_dft) {
++            GGML_ABORT("LLAMA_CKPT_PINNED_CHECK: restored state differs from the stock restore\n");
++        }
++    }
++
+     // n_tokens_cur: the number of tokens added to the batch for the current slot
+     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
+         const int id_task = slot.task->id;
+@@ -2709,8 +2767,12 @@ private:
+         //       this is not true for SWA models: https://github.com/ggml-org/llama.cpp/pull/24411#issuecomment-4677983225
+         cur.update_pos(slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
+ 
++        common_state_pool_reserve(params_base.n_ctx_checkpoints + 1); // LOCAL (ckpt-pinned): no-op unless LLAMA_CKPT_PINNED=1
+         cur.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+         cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++        if (ckpt_pinned_check) {
++            ckpt_chk_save(slot, cur);
++        }
+         // stash the draft's speculative state with the checkpoint
+         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
+ 
+@@ -4215,6 +4277,10 @@ private:
+                                         SLT_WRN(slot, "%s", "failed to load context checkpoint restored from a slot file\n");
+                                         reuse = {};
+                                     } else {
++                                        if (ckpt_pinned_check) {
++                                            ckpt_chk_restore(slot, cur);
++                                        }
++
+                                         // restore the draft's speculative state
+                                         common_speculative_set_state(spec.get(), slot.id, cur.data_spec);
+ 
+@@ -4259,6 +4325,17 @@ private:
+ 
+                         slot.prompt.tokens.keep_first(n_past);
+ 
++                        // LOCAL (ple-prefetch): LLAMA_PLE_PREFETCH_TURN=1 - n_past is now final (after any checkpoint restore):
++                        // hint the reads of the input rows every token from n_past on will gather, on a background thread, so the
++                        // passes after the first find them cached. Model-level hook (no-op for models without such rows). Unset = stock.
++                        {
++                            static const bool ple_turn = getenv("LLAMA_PLE_PREFETCH_TURN") != nullptr && atoi(getenv("LLAMA_PLE_PREFETCH_TURN")) > 0;
++                            if (ple_turn && !slot.task->tokens.has_mtmd) {
++                                const auto & toks = slot.task->tokens.get_tokens();
++                                llama_model_prefetch_inputs(model_tgt, toks.data(), (int32_t) toks.size(), n_past);
++                            }
++                        }
++
+                         // this is to signal the client that the request has started processing
+                         if (slot.task->params.stream) {
+                             if (slot.task->params.return_progress) {

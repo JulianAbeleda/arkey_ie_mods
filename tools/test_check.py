@@ -331,10 +331,10 @@ class Ratchet(Fixture):
 class Retired(Fixture):
     """A retired mod or version: linted, never applied, never in the stack measurement or index.json's current lists."""
 
-    def run_folder(self, mods, retired=(), version_retired=None):
+    def run_folder(self, mods, retired=(), version_retired=None, modules=None):
         spec = {"schema": "x", "engine": "eng", "version": "1.0", "base": {"kind": "git_commit", "commit": "0" * 40},
                 "about": "fixture", "budget_rule": "measured", "mods": mods, "parked": [], "retired": list(retired), "archived": [],
-                "tested_trees_none": {"why": "fixture"}}
+                "tested_trees_none": {"why": "fixture"}, **({"modules": modules} if modules else {})}
         write(os.path.join(self.folder, "mods.json"), json.dumps(spec))
         self.erow = {"applier": "git_apply", "base_identity": {"kind": "git_commit"}, "switch_kinds": {},
                      "switch_literal_regex": "\"(ZZZ_[A-Z]+)\"", "env_read_regex": "getenv\\(\"([^\"]+)\"\\)", "switch_presence": {},
@@ -404,6 +404,60 @@ class Retired(Fixture):
         self.write_budget(budget_for(self.mods, self.folder))
         _, fails = self.run_folder(self.mods, version_retired=RETIRED)
         self.assertTrue(any("a retired version keeps no stack_budget.json" in f for f in fails))
+
+
+class Modules(Fixture):
+    """A folder with modules: the three stacked mods as features of one module (one patch that applies alone)."""
+    run_folder, index = Retired.run_folder, Retired.index
+    ONE = "--- a/src/f.c\n+++ b/src/f.c\n@@ -2,2 +2,5 @@ int run(void)\n line2\n+A\n+B\n+C\n line3\n"
+
+    def module_spec(self):
+        write(os.path.join(self.folder, "patches", "m.patch"), self.ONE)
+        for n in PATCHES:
+            os.remove(os.path.join(self.folder, "patches", n))
+        unit = {"name": "m", "title": "module m", "point": "f.c", "patch": "patches/m.patch", "files": ["src/f.c"],
+                "lines": {"added": 3, "removed": 0}, "budget": {"added": 3, "removed": 0}, "static": {"hunks_removing_stock_lines": 0}}
+        feats = [{k: v for k, v in dict(m, module="m", depends_on={"apply": [], "run": []}).items() if k not in c.MODULE_FACTS} for m in self.mods]
+        return [unit], feats
+
+    def run_modules(self, units, feats):
+        spec = {"modules": units, "mods": feats}
+        write(os.path.join(self.folder, "mods.json"), json.dumps(spec))
+        loaded, _ = c.load_spec(os.path.join(self.folder, "mods.json"))
+        vals, _ = c.stack_values(loaded, self.folder)
+        self.write_budget({"schema": "arkey_ie_mods.stack_budget.v1", "about": "fixture", "margin_rule": "one mod", "caps": {
+            k: {"cap": c.stack_margin(v, len(feats)), "set": {"measured": v, "mods": len(feats), "date": "2026-11-18"}, "raised": []} for k, v in vals.items()}})
+        out, fails = self.run_folder(feats, modules=units)
+        return vals, out, fails
+
+    def test_one_module_has_no_stack_and_its_features_keep_their_ids(self):
+        vals, out, fails = self.run_modules(*self.module_spec())
+        self.assertEqual(fails, [], out)
+        self.assertEqual(vals, {"total_lines": 3, "mods_per_file": 1, "overlap_hunks_per_file": 0, "depth": 1, "stacked_hunks": 0})
+        self.assertIn("series: 1 patches (modules), 3 features, +3 -0", out)
+        self.assertIn("stack health (1 modules, 3 series mods", out)
+        idx = self.index()
+        self.assertEqual([(m["id"], m["module"], m["patch"].split("/")[-1], m["lines"]["added"]) for m in idx["mods"]],
+                         [("eng/1.0/a", "m", "m.patch", 3), ("eng/1.0/b", "m", "m.patch", 3), ("eng/1.0/c", "m", "m.patch", 3)])
+
+    def test_a_feature_row_holds_no_patch_and_no_apply_dependency(self):
+        units, feats = self.module_spec()
+        feats[1]["patch"] = "patches/m.patch"
+        feats[2]["depends_on"] = {"apply": ["a"], "run": []}
+        _, _, fails = self.run_modules(units, feats)
+        self.assertTrue(any("b: a feature row keeps ['patch'] in its module" in f for f in fails), fails)
+        self.assertTrue(any("c: a feature row has no depends_on.apply" in f for f in fails), fails)
+
+    def test_every_series_row_is_in_a_module_and_every_module_is_used(self):
+        units, feats = self.module_spec()
+        _, _, fails = self.run_modules(units + [dict(units[0], name="unused")], feats)
+        self.assertTrue(any("same order, every module used" in f for f in fails), fails)
+
+    def test_a_parked_row_cannot_be_in_a_module(self):
+        units, feats = self.module_spec()
+        write(os.path.join(self.folder, "mods.json"), json.dumps({"modules": units, "mods": feats[:2], "parked": feats[2:]}))
+        _, bad = c.load_spec(os.path.join(self.folder, "mods.json"))
+        self.assertTrue(any("c: a parked row cannot be in a module" in b for b in bad), bad)
 
 
 if __name__ == "__main__":
