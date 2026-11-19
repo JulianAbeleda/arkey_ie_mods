@@ -28,9 +28,10 @@ its layout and the check. The [README](README.md) has how to apply and the numbe
 | 17 | +29 -0 | -96 MiB VRAM; speed unchanged | identical |
 | 18 | +56 -0 | none: a diagnostic, the draft's routing for a hot-set draft | identical |
 | 21 | +922 -8 | at 256k with every expert on the GPU: session -88.9 s [-89.2, -88.6] (-19.8%); a cost at 128k | quality-gated: stage-1 gate pass (identical vs off) |
+| 22 | +190 -9 | at 256k: warm decode +11.8 tok/s [+5.1, +18.5], turns 60-116 (+6.1%); grows with depth | identical |
 | kernel | 2 kernels | -0.56 ms/step [0.51, 0.62] (3.2%) vs the hook off | identical (59/59 turns, ~142k check comparisons) |
 
-Series total: +4,327 -209 lines (01-21). Evidence and conditions per mod: `engines/llama.cpp/1.0.0/mods.json`.
+Series total: +4,517 -218 lines (01-22). 1.0.0 is frozen after 22 (crash fixes only); new work lands on b12521 modules. Evidence and conditions per mod: `engines/llama.cpp/1.0.0/mods.json`.
 
 ## llama.cpp master 7592b61d3: each mod
 
@@ -133,6 +134,7 @@ Set the check switch beside the mod's switch. Rows marked G also need `GGML_CUDA
 | 17 | none | |
 | 18 | none | |
 | 21 | `LLAMA_KV_STREAM_CHECK=1` (aborts on a differing byte or attention output) | G |
+| 22 | `LLAMA_SPARSE_SPLIT_CHECK=1` (aborts on a differing index-list word) | G |
 
 A check run is slow. It is for correctness, not timing.
 
@@ -148,9 +150,10 @@ A check run is slow. It is for correctness, not timing.
 
 ### Parked
 
-Parallel mask compaction (`LLAMA_FATTN_COMPACT_PAR`). Identical output. 0.10 ms/step for 119 lines,
-a third of the derived gain. `parked/fattn-compact-par.patch` applies after the series.
-Rejected patches (KV host old, staged gather a2, sparse-direct half 2, graph recapture) are in `archive/`.
+Nothing is parked. Parallel mask compaction (`LLAMA_FATTN_COMPACT_PAR`, one block per list, 0.10 ms/step) is archived:
+sparse-split (22; b12521: kv/sparse-split) splits the same compaction over blocks.
+Rejected or superseded patches (KV host old, staged gather a2, sparse-direct half 2, graph recapture, fattn-compact-par)
+are in `archive/`.
 
 ## Rules (the same for every engine)
 
@@ -212,7 +215,7 @@ so a module is one patch on one engine extension point: the engine files that up
   patch, sha256, files and lines: a consumer applies each patch once.
 - Code that needs no engine internals goes in the module's own new file: a new file cannot conflict on a base move.
 
-llama.cpp b12521 modules: `kv` (sparse-direct, fattn-vec-skip, kv-stream), `indexer` (idx-pooled, kpool-input-device,
+llama.cpp b12521 modules: `kv` (sparse-direct, fattn-vec-skip, kv-stream, sparse-split), `indexer` (idx-pooled, kpool-input-device,
 idx-inplace, topk-fused), `kernels` (ext-kernels, ext-kernels-window, graph-cap), `experts` (moe-inplace, cublas-shared,
 draft-route-count), `state` (mtp-share-head, graph-slots, rs-one-copy), `host` (ckpt-pinned, tokenize-incr,
 ple-prefetch, sched-async-inputs). The switches, check modes and limits are those of the same mods on 1.0.0, above.

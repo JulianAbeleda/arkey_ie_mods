@@ -24,21 +24,22 @@
     "ggml/src/ggml-cuda/ggml-cuda.cu",
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
+    "ggml/src/ggml-cuda/top-k-mask.cu",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
     "src/llama-kv-stream.h"
    ],
    "lines": {
-    "added": 1122,
-    "removed": 17
+    "added": 1312,
+    "removed": 26
    },
    "budget": {
-    "added": 1180,
-    "removed": 17
+    "added": 1380,
+    "removed": 26
    },
    "static": {
-    "hunks_removing_stock_lines": 11
+    "hunks_removing_stock_lines": 18
    },
    "budget_raised": [
     {
@@ -51,6 +52,18 @@
       "removed": 17
      },
      "why": "kv-stream joins the module (its extension point: the K/V store and its attention read)",
+     "date": "2026-11-19"
+    },
+    {
+     "from": {
+      "added": 1180,
+      "removed": 17
+     },
+     "to": {
+      "added": 1380,
+      "removed": 26
+     },
+     "why": "sparse-split joins the kv module (its extension point: the flash-attention sparse path that reads the K/V, fattn.cu / fattn-common.cuh, and the top_k_mask op that builds its mask)",
      "date": "2026-11-19"
     }
    ]
@@ -350,6 +363,57 @@
     "a SET_ROWS ext kernel (09) on a streamed layer would skip write-through",
     "check mode needs GGML_CUDA_DISABLE_GRAPHS=1 and is for correctness, not timing",
     "N: a multiple of 4, >= 4096 and below the context, else ignored with a warning (stock path)"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "sparse-split",
+   "title": "sparse mask build and index compaction split over blocks (rows < SMs)",
+   "module": "kv",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_SPARSE_SPLIT",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_SPARSE_SPLIT_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_SPARSE_SPLIT",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/sparse-chain-20261119 (ident128-b12521; bench.out, check/, screen/, confirm/ measured on 1.0.0 with the same code)",
+     "numbers": "on b12521 (ident128-b12521: 128k context, 30 turns of a 256k session, recorded history, full stack, LLAMA_KV_STREAM=32768, every expert on the GPU): reply sha256 30/30 equal in all four arms: module build with this feature, switch off; the module build before the feature (build-modules-kv2); switch on; switch on in check mode (graphs off: 47,000 compactions compared word for word with the stock kernel, no abort). On 1.0.0 (engines/llama.cpp/1.0.0/mods.json, sparse-split): microbench 0 mask bytes / list words / counts differ; check session 158,000 compactions, 77/77; confirm 57/57 in 6 runs",
+     "match": {
+      "what": "reply sha256 per turn, switch on and check mode vs off, and vs the module build without the feature (ident128-b12521)",
+      "equal": 30,
+      "of": 30
+     }
+    }
+   },
+   "gain": {
+    "value": "+11.8",
+    "unit": "tok/s warm decode [+5.1, +18.5], turns 60-116 of a 256k session, measured on 1.0.0 with the same code (engines/llama.cpp/1.0.0/mods.json, sparse-split); session wall of those 57 turns -9.9 s [-18.8, -0.9]",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 116-turn session to 256k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048, 4-token verify), q8_0 KV, MTP draft head k=3, the shipped 256k plan (LLAMA_KV_STREAM=52848, GGML_CUDA_GRAPH_MAX_KEYS=2); 3 alternating pairs; a b12521 256k number is pending its baseline",
+    "run": "boltbeam-runs/sparse-chain-20261119/confirm"
+   },
+   "exercised_by": "sparse flash attention with a mask (one query per index list) and the fused top_k_mask op, with fewer query rows than the GPU's SMs (decode verify and draft); measured on the qwen4exp graph",
+   "limits": [
+    "NVIDIA CUDA (HIP and MUSA builds keep the stock kernels), one query per list (ncols1 == 1), one mask stream (mask ne[3] == 1), 16-byte aligned mask rows; otherwise the stock kernels",
+    "decode shapes only by its key: rows (query tokens) below the SM count and more than 4,096 (compaction) / 8,192 (mask build) cells; prefill keeps the stock kernels",
+    "the compaction becomes two launches (count, write); its chunk counts take n_lists x ceil(n_kv / 4,096) extra int32 in the pooled index buffer"
    ],
    "rule_exceptions": []
   },
@@ -1273,10 +1337,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-kv-tree",
-   "path": "boltbeam-runs/mods-modules-20261118/tree-modules-kv2",
-   "what": "the tree the module build with kv-stream (build-modules-kv2) was built from",
-   "contains": "exactly the 6 modules on the base, kv-stream in kv and graph-cap in kernels",
+   "id": "modules-kv-sparse-split",
+   "path": "storage-tmp/sparse-chain/tree-b12521",
+   "what": "the tree the module build with sparse-split in kv (ident128-b12521) was built from",
+   "contains": "exactly the 6 modules on the base, kv-stream and sparse-split in kv, graph-cap in kernels",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

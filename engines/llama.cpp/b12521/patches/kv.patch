@@ -1,5 +1,5 @@
 diff --git a/ggml/src/ggml-cuda/fattn-common.cuh b/ggml/src/ggml-cuda/fattn-common.cuh
-index 666542c80..d37b6200c 100644
+index 666542c80..675db98de 100644
 --- a/ggml/src/ggml-cuda/fattn-common.cuh
 +++ b/ggml/src/ggml-cuda/fattn-common.cuh
 @@ -1,6 +1,7 @@
@@ -10,20 +10,22 @@ index 666542c80..d37b6200c 100644
  #include "convert.cuh"
  #include "vecdotq.cuh"
  
-@@ -777,6 +778,12 @@ static __global__ void flash_attn_mask_to_KV_max(
+@@ -776,6 +777,14 @@ static __global__ void flash_attn_mask_to_KV_max(
+ 
  void ggml_cuda_flash_attn_ext_compact_mask(
          const ggml_tensor * mask, int32_t * indices, int32_t * counts, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream);
- 
++// LLAMA_SPARSE_SPLIT: extra int32 words compact_mask needs after the counts (0 when the stock kernel runs)
++size_t ggml_cuda_flash_attn_ext_compact_scratch(const ggml_tensor * mask, int32_t n_queries, int32_t ncols1);
++
 +// LLAMA_SPARSE_DIRECT: the sparse MMA kernel reads q8_0 K/V rows by index, without the whole-cache f16 copy
 +bool ggml_cuda_flash_attn_ext_sparse_direct(const ggml_tensor * dst);
 +
 +// LLAMA_FATTN_VEC_SKIP: the vector kernel does not read the K/V rows that the mask rules out
 +bool ggml_cuda_flash_attn_ext_vec_skip(const ggml_tensor * dst);
-+
+ 
  template<int D, int ncols1, int ncols2> // D == head size
  __launch_bounds__(D, 1)
- static __global__ void flash_attn_stream_k_fixup_uniform(
-@@ -1071,9 +1078,16 @@ void launch_fattn(
+@@ -1071,9 +1080,16 @@ void launch_fattn(
          ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
  
      ggml_cuda_pool_alloc<int>    KV_max(pool);
@@ -40,7 +42,7 @@ index 666542c80..d37b6200c 100644
      const char * K_data = (const char *) K->data;
      size_t nb11 = K->nb[1];
      size_t nb12 = K->nb[2];
-@@ -1084,7 +1098,14 @@ void launch_fattn(
+@@ -1084,7 +1100,14 @@ void launch_fattn(
      size_t nb22 = V->nb[2];
      size_t nb23 = V->nb[3];
  
@@ -56,7 +58,7 @@ index 666542c80..d37b6200c 100644
          const size_t bs = ggml_blck_size(K->type);
          const size_t ts = ggml_type_size(K->type);
  
-@@ -1112,7 +1133,7 @@ void launch_fattn(
+@@ -1112,7 +1135,7 @@ void launch_fattn(
          K_data = (char *) K_f16;
      }
  
@@ -65,9 +67,12 @@ index 666542c80..d37b6200c 100644
          if (V_is_K_view) {
              V_data = K_data;
              nb21   = nb11;
-@@ -1165,6 +1186,20 @@ void launch_fattn(
+@@ -1163,8 +1186,22 @@ void launch_fattn(
  
-         KV_max.alloc(size_t(n_kv_max)*n_lists + n_lists);
+         const size_t n_lists = size_t(ntiles_x) * mask->ne[3];
+ 
+-        KV_max.alloc(size_t(n_kv_max)*n_lists + n_lists);
++        KV_max.alloc(size_t(n_kv_max)*n_lists + n_lists + ggml_cuda_flash_attn_ext_compact_scratch(mask, Q->ne[1], ncols1));
          ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists, Q->ne[1], ncols1, n_kv_max, main_stream);
 +        if (direct) {
 +            const int64_t slot_cells = ggml_cuda_kvs_resolve_cells(K, K->ne[1], n_lists, n_kv_max, Q->ne[1]);
@@ -86,7 +91,7 @@ index 666542c80..d37b6200c 100644
      }
  
      // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
-@@ -1314,17 +1349,19 @@ void launch_fattn(
+@@ -1314,17 +1351,19 @@ void launch_fattn(
          (const char *) Q->data,
          K_data,
          V_data,
@@ -280,7 +285,7 @@ index 09a46187d..5c6e7d99d 100644
      const bool need_f16_V = type_V == GGML_TYPE_F16;
      constexpr size_t nbytes_shared = 0;
 diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
-index fb542d41c..6969b5588 100644
+index fb542d41c..84aea66db 100644
 --- a/ggml/src/ggml-cuda/fattn.cu
 +++ b/ggml/src/ggml-cuda/fattn.cu
 @@ -1,9 +1,12 @@
@@ -296,7 +301,190 @@ index fb542d41c..6969b5588 100644
  
  #if !defined(GGML_USE_MUSA)
  
-@@ -791,6 +794,60 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+@@ -112,8 +115,142 @@ static __global__ void flash_attn_mask_to_sparse_indices(
+     // the dependent grid reads indices, signal once the row is complete
+     ggml_cuda_pdl_lc();
+ }
++
++// LLAMA_SPARSE_SPLIT=1 (local long-context mod, off by default): one-query lists compacted by many blocks. The stock
++// kernel runs one block per list, so a decode verify (4 lists) uses 4 of the GPU's SMs and walks n_kv serially.
++// Pass 1: each block counts the finite cells of its SPLIT_CHUNK-cell chunk. Pass 2: each block sums the counts of the
++// chunks before it and writes its finite cells in ascending order; the last chunk writes the -1 padding and the count.
++// Integer only: the lists and counts are the stock kernel's, word for word.
++#define SPLIT_THREADS 256
++#define SPLIT_CELLS_T 16
++#define SPLIT_CHUNK   (SPLIT_THREADS*SPLIT_CELLS_T)
++
++static __device__ __forceinline__ uint32_t split_finite_bits(const uint16_t * row, const int c0, const int ne30) {
++    uint32_t bits = 0;
++    if (c0 + SPLIT_CELLS_T <= ne30 && ((uintptr_t) (row + c0) & 15) == 0) {
++        const uint4 a = ((const uint4 *) (row + c0))[0];
++        const uint4 b = ((const uint4 *) (row + c0))[1];
++        const uint32_t w[8] = {a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w};
++#pragma unroll
++        for (int j = 0; j < 8; ++j) {
++            bits |= uint32_t(((w[j]      ) & 0x7C00u) != 0x7C00u) << (2*j);
++            bits |= uint32_t(((w[j] >> 16) & 0x7C00u) != 0x7C00u) << (2*j + 1);
++        }
++    } else {
++        for (int j = 0; j < SPLIT_CELLS_T; ++j) {
++            if (c0 + j < ne30 && (row[c0 + j] & 0x7C00u) != 0x7C00u) {
++                bits |= 1u << j;
++            }
++        }
++    }
++    return bits;
++}
++
++static __device__ __forceinline__ int split_block_sum(int v, int * sh) {
++#pragma unroll
++    for (int o = 16; o > 0; o >>= 1) {
++        v += __shfl_xor_sync(0xFFFFFFFFu, v, o);
++    }
++    if (threadIdx.x % 32 == 0) {
++        sh[threadIdx.x / 32] = v;
++    }
++    __syncthreads();
++    int t = 0;
++#pragma unroll
++    for (int w = 0; w < SPLIT_THREADS/32; ++w) {
++        t += sh[w];
++    }
++    return t;
++}
++
++__launch_bounds__(SPLIT_THREADS)
++static __global__ void flash_attn_mask_split_count(const half * mask_ptr, int32_t * chunk_counts, const int ne30, const int64_t s31) {
++    ggml_cuda_pdl_sync();
++    __shared__ int sh[SPLIT_THREADS/32];
++    const uint16_t * row = (const uint16_t *) (mask_ptr + blockIdx.y*s31);
++    const int t = split_block_sum(__popc(split_finite_bits(row, blockIdx.x*SPLIT_CHUNK + threadIdx.x*SPLIT_CELLS_T, ne30)), sh);
++    if (threadIdx.x == 0) {
++        chunk_counts[int64_t(blockIdx.y)*gridDim.x + blockIdx.x] = t;
++    }
++    ggml_cuda_pdl_lc();
++}
++
++__launch_bounds__(SPLIT_THREADS)
++static __global__ void flash_attn_mask_split_write(const half * mask_ptr, const int32_t * chunk_counts, int32_t * indices_ptr,
++        int32_t * counts_ptr, const int ne30, const int n_kv_max, const int64_t s31) {
++    ggml_cuda_pdl_sync();
++    __shared__ int sh[SPLIT_THREADS/32];
++    __shared__ int warp_inc[SPLIT_THREADS/32];
++    const int lane = threadIdx.x % 32;
++    const int warp = threadIdx.x / 32;
++    const int32_t * cc = chunk_counts + int64_t(blockIdx.y)*gridDim.x;
++    int pre = 0;
++    for (int j = threadIdx.x; j < (int) blockIdx.x; j += SPLIT_THREADS) {
++        pre += cc[j];
++    }
++    const int base = split_block_sum(pre, sh);
++
++    const uint16_t * row = (const uint16_t *) (mask_ptr + blockIdx.y*s31);
++    const int c0 = blockIdx.x*SPLIT_CHUNK + threadIdx.x*SPLIT_CELLS_T;
++    uint32_t bits = split_finite_bits(row, c0, ne30);
++    const int n = __popc(bits);
++    int inc = n;
++#pragma unroll
++    for (int o = 1; o < 32; o <<= 1) {
++        const int y = __shfl_up_sync(0xFFFFFFFFu, inc, o);
++        inc += lane >= o ? y : 0;
++    }
++    if (lane == 31) {
++        warp_inc[warp] = inc;
++    }
++    __syncthreads();
++    int dst = base + inc - n;
++    int chunk_total = 0;
++#pragma unroll
++    for (int w = 0; w < SPLIT_THREADS/32; ++w) {
++        dst += w < warp ? warp_inc[w] : 0;
++        chunk_total += warp_inc[w];
++    }
++    int32_t * indices = indices_ptr + int64_t(blockIdx.y)*n_kv_max;
++    for (; bits; bits &= bits - 1, ++dst) {
++        if (dst < n_kv_max) {
++            indices[dst] = c0 + __ffs(bits) - 1;
++        }
++    }
++    if (blockIdx.x == gridDim.x - 1) {
++        const int count = min(base + chunk_total, n_kv_max);
++        for (int i = count + threadIdx.x; i < n_kv_max; i += SPLIT_THREADS) {
++            indices[i] = -1;
++        }
++        if (threadIdx.x == 0) {
++            counts_ptr[blockIdx.y] = count;
++        }
++    }
++    __syncthreads();
++    ggml_cuda_pdl_lc();
++}
++
++static bool sparse_split_on(const ggml_tensor * mask, int32_t n_queries, int32_t ncols1) {
++#if defined(GGML_USE_HIP)
++    const bool on = false; // the kernels assume 32-lane warps
++#else
++    static const bool on = getenv("LLAMA_SPARSE_SPLIT") && atoi(getenv("LLAMA_SPARSE_SPLIT")) != 0;
++#endif // defined(GGML_USE_HIP)
++    // only when the stock grid (one block per list) leaves most SMs idle
++    return on && ncols1 == 1 && mask->ne[3] == 1 && n_queries < ggml_cuda_info().devices[ggml_cuda_get_device()].nsm &&
++        mask->ne[0] > SPLIT_CHUNK && mask->nb[1] % 16 == 0 && (uintptr_t) mask->data % 16 == 0;
++}
+ #endif // !defined(GGML_USE_MUSA)
+ 
++size_t ggml_cuda_flash_attn_ext_compact_scratch(const ggml_tensor * mask, int32_t n_queries, int32_t ncols1) {
++#ifdef GGML_USE_MUSA
++    GGML_UNUSED_VARS(mask, n_queries, ncols1);
++    return 0;
++#else
++    return sparse_split_on(mask, n_queries, ncols1) ? size_t(n_queries)*((mask->ne[0] + SPLIT_CHUNK - 1)/SPLIT_CHUNK) : 0;
++#endif // GGML_USE_MUSA
++}
++
+ void ggml_cuda_flash_attn_ext_compact_mask(
+         const ggml_tensor * mask, int32_t * indices, int32_t * counts, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream) {
+ #ifdef GGML_USE_MUSA
+@@ -122,6 +259,39 @@ void ggml_cuda_flash_attn_ext_compact_mask(
+ #else
+     const int64_t s31 = mask->nb[1] / sizeof(half);
+     const int64_t s33 = mask->nb[3] / sizeof(half);
++    if (sparse_split_on(mask, n_queries, ncols1)) {
++        // the caller sized the buffer with ggml_cuda_flash_attn_ext_compact_scratch: chunk counts follow the counts
++        const int n_chunks = int((mask->ne[0] + SPLIT_CHUNK - 1)/SPLIT_CHUNK);
++        int32_t * chunk_counts = counts + n_queries;
++        const ggml_cuda_kernel_launch_params lp(dim3(n_chunks, n_queries, 1), dim3(SPLIT_THREADS, 1, 1), 0, stream);
++        ggml_cuda_kernel_launch(flash_attn_mask_split_count, lp, (const half *) mask->data, chunk_counts, int(mask->ne[0]), s31);
++        ggml_cuda_kernel_launch(flash_attn_mask_split_write, lp, (const half *) mask->data, (const int32_t *) chunk_counts,
++            indices, counts, int(mask->ne[0]), n_kv_max, s31);
++        // LLAMA_SPARSE_SPLIT_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1): the stock kernel beside it, abort on any word
++        static const bool check = getenv("LLAMA_SPARSE_SPLIT_CHECK") && atoi(getenv("LLAMA_SPARSE_SPLIT_CHECK")) != 0;
++        if (check) {
++            const size_t n_words = size_t(n_kv_max)*n_queries + n_queries;
++            int32_t * ref = nullptr;
++            CUDA_CHECK(cudaMalloc(&ref, n_words*sizeof(int32_t)));
++            flash_attn_mask_to_sparse_indices<1, false><<<dim3(n_queries, 1, 1), 256, 0, stream>>>(
++                (const half *) mask->data, ref, ref + size_t(n_kv_max)*n_queries, int(mask->ne[0]), n_queries, n_kv_max, s31, s33);
++            std::vector<int32_t> a(n_words), b(n_words);
++            CUDA_CHECK(cudaMemcpyAsync(a.data(), ref, n_words*sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
++            CUDA_CHECK(cudaMemcpyAsync(b.data(), indices, size_t(n_kv_max)*n_queries*sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
++            CUDA_CHECK(cudaMemcpyAsync(b.data() + size_t(n_kv_max)*n_queries, counts, n_queries*sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
++            CUDA_CHECK(cudaStreamSynchronize(stream));
++            CUDA_CHECK(cudaFree(ref));
++            static size_t n_calls = 0;
++            ++n_calls;
++            if (a != b) {
++                GGML_ABORT("LLAMA_SPARSE_SPLIT_CHECK: compaction differs from stock (call %zu, n_kv %lld)", n_calls, (long long) mask->ne[0]);
++            }
++            if (n_calls % 1000 == 0) {
++                GGML_LOG_WARN("LLAMA_SPARSE_SPLIT_CHECK: %zu compactions identical\n", n_calls);
++            }
++        }
++        return;
++    }
+     const dim3 blocks_num((n_queries + ncols1 - 1)/ncols1, mask->ne[3], 1);
+     const dim3 block_dim(256, 1, 1);
+     const ggml_cuda_kernel_launch_params launch_params(blocks_num, block_dim, 0, stream);
+@@ -791,6 +961,60 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
      return BEST_FATTN_KERNEL_TILE;
  }
  
@@ -357,7 +545,7 @@ index fb542d41c..6969b5588 100644
  size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
      GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
  
-@@ -821,6 +878,12 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
+@@ -821,6 +1045,12 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
              break;
      }
  
@@ -370,7 +558,7 @@ index fb542d41c..6969b5588 100644
      const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
          ggml_cuda_flash_attn_ext_get_f16_extra_data(dst, need_f16_K, need_f16_V);
  
-@@ -829,6 +892,95 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
+@@ -829,6 +1059,95 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
  
  void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
      ggml_cuda_set_device(ctx.device);
@@ -1289,6 +1477,92 @@ index 000000000..4fe3c44a6
 +                                    void * stage_v, int64_t n_cells, int64_t n_slot_cells,
 +                                    size_t row_k, size_t row_v, int il);
 +}
+diff --git a/ggml/src/ggml-cuda/top-k-mask.cu b/ggml/src/ggml-cuda/top-k-mask.cu
+index 9ff995240..94df4261d 100644
+--- a/ggml/src/ggml-cuda/top-k-mask.cu
++++ b/ggml/src/ggml-cuda/top-k-mask.cu
+@@ -16,10 +16,13 @@ static __global__ void top_k_mask_kernel(
+         const int64_t ss0, const int64_t ss1, const int64_t ss2, const int64_t ss3,
+         const int64_t sb0, const int64_t sb1,
+         const int64_t se0, const int64_t se1, const int64_t se2, const int64_t se3,
+-        const bool vec) {
++        const bool vec, const int64_t cells) {
+     ggml_cuda_pdl_lc();
+ 
+     const int64_t ir = blockIdx.x;
++    // LLAMA_SPARSE_SPLIT: block y owns cells [c0, c1) of the row (stock: one block, the whole row)
++    const int64_t c0 = blockIdx.y*cells;
++    const int64_t c1 = min(c0 + cells, n_kv);
+     const int64_t i1 = ir % ne1;
+     const int64_t i2 = (ir / ne1) % ne2;
+     const int64_t i3 = ir / (ne1*ne2);
+@@ -39,11 +42,11 @@ static __global__ void top_k_mask_kernel(
+             fill[j] = ninf;
+         }
+         const int4 fill4 = *(const int4 *) fill;
+-        for (int64_t i = threadIdx.x; i < n_kv/nv; i += blockDim.x) {
++        for (int64_t i = c0/nv + threadIdx.x; i < c1/nv; i += blockDim.x) {
+             ((int4 *) dst_row)[i] = fill4;
+         }
+     } else {
+-        for (int64_t i = threadIdx.x; i < n_kv; i += blockDim.x) {
++        for (int64_t i = c0 + threadIdx.x; i < c1; i += blockDim.x) {
+             dst_row[i] = ninf;
+         }
+     }
+@@ -54,7 +57,7 @@ static __global__ void top_k_mask_kernel(
+     for (int64_t i = threadIdx.x; i < n_top + n_extra; i += blockDim.x) {
+         if (i >= n_top) {
+             const int32_t c = extra[(i - n_top)*se0 + i1*se1 + i2*se2 + i3*se3];
+-            if (c >= 0 && c < n_kv) {
++            if (c >= c0 && c < c1) {
+                 dst_row[c] = mask_row[c];
+             }
+             continue;
+@@ -68,14 +71,14 @@ static __global__ void top_k_mask_kernel(
+             continue;
+         }
+         if (!blocks) {
+-            if (p < n_kv) {
++            if (p >= c0 && p < c1) {
+                 dst_row[p] = mask_row[p];
+             }
+             continue;
+         }
+         for (int64_t k = 0; k < n_blk; ++k) {
+             const int32_t c = blocks[k*sb0 + p*sb1];
+-            if (c >= 0 && c < n_kv) {
++            if (c >= c0 && c < c1) {
+                 dst_row[c] = mask_row[c];
+             }
+         }
+@@ -106,7 +109,16 @@ static void top_k_mask_cuda(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
+     const size_t sf = sizeof(float);
+ 
+     const dim3 block_dims(CUDA_TOP_K_MASK_BLOCK_SIZE, 1, 1);
+-    const dim3 grid_dims(ggml_nrows(dst), 1, 1);
++    // LLAMA_SPARSE_SPLIT=1 (local long-context mod, off by default): with fewer rows than SMs (decode), split each row's
++    // cells over blocks of 8,192; every block applies only the picks in its range, so each cell gets the stock value
++#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
++    const bool split_on = false;
++#else
++    static const bool split_on = getenv("LLAMA_SPARSE_SPLIT") && atoi(getenv("LLAMA_SPARSE_SPLIT")) != 0;
++#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
++    const bool split = split_on && vec && ggml_nrows(dst) < ggml_cuda_info().devices[ctx.device].nsm && n_kv > 8192;
++    const int64_t cells = split ? 8192 : std::max<int64_t>(n_kv, 1);
++    const dim3 grid_dims(ggml_nrows(dst), (n_kv + cells - 1)/cells, 1);
+     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
+ 
+     ggml_cuda_kernel_launch(top_k_mask_kernel<T>, launch_params,
+@@ -124,7 +136,7 @@ static void top_k_mask_cuda(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
+             score  ? score->nb[0]/sf  : 0, score ? score->nb[1]/sf : 0, score ? score->nb[2]/sf : 0, score ? score->nb[3]/sf : 0,
+             blocks ? blocks->nb[0]/si : 0, blocks ? blocks->nb[1]/si : 0,
+             extra  ? extra->nb[0]/si  : 0, extra ? extra->nb[1]/si : 0, extra ? extra->nb[2]/si : 0, extra ? extra->nb[3]/si : 0,
+-            vec);
++            vec, cells);
+ }
+ 
+ void ggml_cuda_op_top_k_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index 426c48741..cbe1d9c79 100644
 --- a/src/CMakeLists.txt

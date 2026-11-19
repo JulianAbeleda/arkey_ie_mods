@@ -17,7 +17,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone); ship-prefill: exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order); ship-residency: exactly the series 01-18 on the base (git archive b1b770d9 + git apply 01..18 in order, patch-shas.txt); region-fusion: 01-13 + 19 on the base (the 0.3.26 source tree ncmoe-few-20261116 + this patch); graph-cap: exactly the series 01-20 on the base",
+    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone); ship-prefill: exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order); ship-residency: exactly the series 01-18 on the base (git archive b1b770d9 + git apply 01..18 in order, patch-shas.txt); region-fusion: 01-13 + 19 on the base (the 0.3.26 source tree ncmoe-few-20261116 + this patch); graph-cap: exactly the series 01-20 on the base; sparse-split: the series 01-22 on the base (kv100 = 01-21, plus 22)",
     "entries": [
      {
       "id": "mods-series-verify",
@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-kv-tree: exactly the 6 modules on the base, kv-stream in kv and graph-cap in kernels",
+    "why": "modules-kv-sparse-split: exactly the 6 modules on the base, kv-stream and sparse-split in kv, graph-cap in kernels",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -1326,13 +1326,13 @@
    "module": null
   },
   {
-   "id": "llama.cpp/1.0.0/fattn-compact-par",
+   "id": "llama.cpp/1.0.0/sparse-split",
    "engine": "llama.cpp",
    "version": "1.0.0",
-   "name": "fattn-compact-par",
-   "title": null,
-   "state": "parked",
-   "order": null,
+   "name": "sparse-split",
+   "title": "sparse mask build and index compaction split over blocks (rows < SMs)",
+   "state": "series",
+   "order": 22,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -1342,31 +1342,33 @@
    },
    "switch": {
     "kind": "env",
-    "name": "LLAMA_FATTN_COMPACT_PAR",
+    "name": "LLAMA_SPARSE_SPLIT",
     "on": "1"
    },
    "switch_null_why": null,
-   "check": "LLAMA_FATTN_COMPACT_PAR_CHECK",
+   "check": "LLAMA_SPARSE_SPLIT_CHECK",
    "check_needs": [
     "GGML_CUDA_DISABLE_GRAPHS"
    ],
-   "marker": "LLAMA_FATTN_COMPACT_PAR",
+   "marker": "LLAMA_SPARSE_SPLIT",
    "knobs": [
-    "LLAMA_FATTN_COMPACT_PAR"
+    "LLAMA_SPARSE_SPLIT"
    ],
    "output": "identical",
-   "patch": "engines/llama.cpp/1.0.0/parked/fattn-compact-par.patch",
-   "sha256": "b311ee7cfedc3385daf1c90d00ececa8d98ae4dd4e40a473f1fe48514ac5953d",
+   "patch": "engines/llama.cpp/1.0.0/patches/22-sparse-split.patch",
+   "sha256": "6a367716fae1ee8f9c37058406a77e20a4d84c5d52d3aae6bd35ac01bab22ec9",
    "lines": {
-    "added": 119,
-    "removed": 0
+    "added": 190,
+    "removed": 9
    },
    "budget": {
-    "added": 130,
-    "removed": 0
+    "added": 200,
+    "removed": 9
    },
    "files": [
-    "ggml/src/ggml-cuda/fattn.cu"
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn.cu",
+    "ggml/src/ggml-cuda/top-k-mask.cu"
    ],
    "depends_on": {
     "apply": [],
@@ -1753,14 +1755,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "26a7f840cfa29c5bf1a0dd0a7cff13cc7fba1d0029c0b705854065764f929365",
+   "sha256": "31326b4b2446d52783b429a1ce35958809f0ca3677d80734f5120aa062852811",
    "lines": {
-    "added": 1122,
-    "removed": 17
+    "added": 1312,
+    "removed": 26
    },
    "budget": {
-    "added": 1180,
-    "removed": 17
+    "added": 1380,
+    "removed": 26
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1770,6 +1772,7 @@
     "ggml/src/ggml-cuda/ggml-cuda.cu",
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
+    "ggml/src/ggml-cuda/top-k-mask.cu",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -1812,14 +1815,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "26a7f840cfa29c5bf1a0dd0a7cff13cc7fba1d0029c0b705854065764f929365",
+   "sha256": "31326b4b2446d52783b429a1ce35958809f0ca3677d80734f5120aa062852811",
    "lines": {
-    "added": 1122,
-    "removed": 17
+    "added": 1312,
+    "removed": 26
    },
    "budget": {
-    "added": 1180,
-    "removed": 17
+    "added": 1380,
+    "removed": 26
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1829,6 +1832,7 @@
     "ggml/src/ggml-cuda/ggml-cuda.cu",
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
+    "ggml/src/ggml-cuda/top-k-mask.cu",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -1871,14 +1875,14 @@
    ],
    "output": "quality-gated",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "26a7f840cfa29c5bf1a0dd0a7cff13cc7fba1d0029c0b705854065764f929365",
+   "sha256": "31326b4b2446d52783b429a1ce35958809f0ca3677d80734f5120aa062852811",
    "lines": {
-    "added": 1122,
-    "removed": 17
+    "added": 1312,
+    "removed": 26
    },
    "budget": {
-    "added": 1180,
-    "removed": 17
+    "added": 1380,
+    "removed": 26
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1888,6 +1892,7 @@
     "ggml/src/ggml-cuda/ggml-cuda.cu",
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
+    "ggml/src/ggml-cuda/top-k-mask.cu",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -1903,13 +1908,73 @@
    "module": "kv"
   },
   {
+   "id": "llama.cpp/b12521/sparse-split",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "sparse-split",
+   "title": "sparse mask build and index compaction split over blocks (rows < SMs)",
+   "state": "series",
+   "order": 4,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_SPARSE_SPLIT",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "LLAMA_SPARSE_SPLIT_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
+   "marker": "LLAMA_SPARSE_SPLIT",
+   "knobs": [
+    "LLAMA_SPARSE_SPLIT"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/kv.patch",
+   "sha256": "31326b4b2446d52783b429a1ce35958809f0ca3677d80734f5120aa062852811",
+   "lines": {
+    "added": 1312,
+    "removed": 26
+   },
+   "budget": {
+    "added": 1380,
+    "removed": 26
+   },
+   "files": [
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn-mma-f16.cuh",
+    "ggml/src/ggml-cuda/fattn-vec.cuh",
+    "ggml/src/ggml-cuda/fattn.cu",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/kv-stream.cu",
+    "ggml/src/ggml-cuda/kv-stream.cuh",
+    "ggml/src/ggml-cuda/top-k-mask.cu",
+    "src/CMakeLists.txt",
+    "src/llama-kv-cache.cpp",
+    "src/llama-kv-stream.cpp",
+    "src/llama-kv-stream.h"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [],
+   "module": "kv"
+  },
+  {
    "id": "llama.cpp/b12521/idx-pooled",
    "engine": "llama.cpp",
    "version": "b12521",
    "name": "idx-pooled",
    "title": "indexer cache keeps pooled keys only",
    "state": "series",
-   "order": 4,
+   "order": 5,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -1961,7 +2026,7 @@
    "name": "kpool-input-device",
    "title": "k-pool inputs live on the device",
    "state": "series",
-   "order": 5,
+   "order": 6,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2013,7 +2078,7 @@
    "name": "idx-inplace",
    "title": "indexer scores pooled q8_0 keys in place",
    "state": "series",
-   "order": 6,
+   "order": 7,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2069,7 +2134,7 @@
    "name": "topk-fused",
    "title": "radix top-k of a few rows in one launch",
    "state": "series",
-   "order": 7,
+   "order": 8,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2124,7 +2189,7 @@
    "name": "ext-kernels",
    "title": "external kernel hook",
    "state": "series",
-   "order": 8,
+   "order": 9,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2176,7 +2241,7 @@
    "name": "ext-kernels-window",
    "title": "kernel hook takes a window of nodes: one generated kernel for a region",
    "state": "series",
-   "order": 9,
+   "order": 10,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2227,7 +2292,7 @@
    "name": "graph-cap",
    "title": "a context keeps CUDA graph executables for at most K graphs",
    "state": "series",
-   "order": 10,
+   "order": 11,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2279,7 +2344,7 @@
    "name": "moe-inplace",
    "title": "prefill reads cached experts in place",
    "state": "series",
-   "order": 11,
+   "order": 12,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2336,7 +2401,7 @@
    "name": "cublas-shared",
    "title": "one cuBLAS handle and workspace per device for every context",
    "state": "series",
-   "order": 12,
+   "order": 13,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2393,7 +2458,7 @@
    "name": "draft-route-count",
    "title": "diagnostic: count the experts the draft's router picks",
    "state": "series",
-   "order": 13,
+   "order": 14,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2450,7 +2515,7 @@
    "name": "mtp-share-head",
    "title": "draft head reads the target's output projection",
    "state": "series",
-   "order": 14,
+   "order": 15,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2509,7 +2574,7 @@
    "name": "graph-slots",
    "title": "draft context keeps a graph per small ubatch size",
    "state": "series",
-   "order": 15,
+   "order": 16,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2569,7 +2634,7 @@
    "name": "rs-one-copy",
    "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
    "state": "series",
-   "order": 16,
+   "order": 17,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2629,7 +2694,7 @@
    "name": "ckpt-pinned",
    "title": "context checkpoints in a pinned pool",
    "state": "series",
-   "order": 17,
+   "order": 18,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2687,7 +2752,7 @@
    "name": "tokenize-incr",
    "title": "server tokenizes only the prompt's new part",
    "state": "series",
-   "order": 18,
+   "order": 19,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2747,7 +2812,7 @@
    "name": "ple-prefetch",
    "title": "per-layer embedding rows read ahead on a thread",
    "state": "series",
-   "order": 19,
+   "order": 20,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2807,7 +2872,7 @@
    "name": "sched-async-inputs",
    "title": "scheduler uploads host inputs on the split's stream, no host sync",
    "state": "series",
-   "order": 20,
+   "order": 21,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3085,6 +3150,21 @@
    "lines": {
     "added": 13,
     "removed": 1
+   }
+  },
+  {
+   "id": "llama.cpp/1.0.0/fattn-compact-par",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "fattn-compact-par",
+   "kind": "superseded",
+   "switch": "LLAMA_FATTN_COMPACT_PAR",
+   "date": "2026-11-19",
+   "patch": "engines/llama.cpp/1.0.0/archive/fattn-compact-par.patch",
+   "sha256": "b311ee7cfedc3385daf1c90d00ececa8d98ae4dd4e40a473f1fe48514ac5953d",
+   "lines": {
+    "added": 119,
+    "removed": 0
    }
   },
   {

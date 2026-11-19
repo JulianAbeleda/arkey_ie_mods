@@ -40,3 +40,12 @@ Written on: 1.0.0 + 01-11 + 13 (also applies alone on the base); the graph-slots
 A warm CUDA graph whose node count is unchanged but whose node properties changed (KV / pool widths crossing a padding bucket) is captured and updated at once instead of one eager run plus a capture on the next call. Identical output, but no gain: the eager step goes, the crossing step takes the capture plus the re-instantiates (cudaGraphExecUpdate fails on 24 of 28 chunks), and both switches together gained 0.159 ms/step against 0.193 for graph-slots alone. Its code is in the graph-slots tested tree (switch unset in the shipped measurements): tested_trees apply this archived copy, pinned by sha256, only to reach byte equality.
 
 Evidence: boltbeam-runs/graph-reuse-20261116 (README.md sections 4-5)
+
+## fattn-compact-par (superseded, 2026-11-19)
+
+`archive/fattn-compact-par.patch`, +119 -0, sha256 `b311ee7cfedc3385`, `LLAMA_FATTN_COMPACT_PAR`.
+Written on: 1.0.0 + the whole series (parked, applied after it); the mask-indexer, prefill-expert-inplace and prefill-ckpt tested trees hold it.
+
+Superseded by sparse-split (22): the same word-identical mask -> index compaction, but with one block per list it took 32 -> 24 us a launch at ~102k (-0.10 ms/step); sparse-split splits the cells over blocks (71.5 -> 3.0 us at 240k) and rewrites the same function, so this patch no longer applies after the series. Tested trees apply this archived copy, pinned by sha256, only to reach byte equality.
+
+Evidence: boltbeam-runs/mask-indexer-20261115; boltbeam-runs/sparse-chain-20261119

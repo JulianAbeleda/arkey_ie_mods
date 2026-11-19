@@ -1486,38 +1486,39 @@
     "hunks_removing_stock_lines": 6,
     "note": "6 hunks rewrite stock lines: launch_fattn's mask pointer and strides (a paged call passes its rewritten mask), the CUDA buffer free (a host-mapped buffer is freed with cudaFreeHost), the SET_ROWS dispatch (a streamed layer's write goes through VRAM scratch and write-through), the KV cache's K/V tensor creation and per-stream views (a streamed layer's K/V go to the host buffer type); with the switch unset each takes the stock value or path"
    }
-  }
- ],
- "parked": [
+  },
   {
-   "name": "fattn-compact-par",
-   "patch": "parked/fattn-compact-par.patch",
+   "name": "sparse-split",
+   "title": "sparse mask build and index compaction split over blocks (rows < SMs)",
+   "patch": "patches/22-sparse-split.patch",
    "engine": "llama.cpp",
    "base": "1.0.0",
    "switch": {
     "kind": "env",
-    "name": "LLAMA_FATTN_COMPACT_PAR",
+    "name": "LLAMA_SPARSE_SPLIT",
     "on": "1"
    },
    "check": {
     "kind": "env",
-    "name": "LLAMA_FATTN_COMPACT_PAR_CHECK",
+    "name": "LLAMA_SPARSE_SPLIT_CHECK",
     "needs": [
      "GGML_CUDA_DISABLE_GRAPHS"
     ]
    },
    "reads": [],
-   "marker": "LLAMA_FATTN_COMPACT_PAR",
+   "marker": "LLAMA_SPARSE_SPLIT",
    "files": [
-    "ggml/src/ggml-cuda/fattn.cu"
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn.cu",
+    "ggml/src/ggml-cuda/top-k-mask.cu"
    ],
    "lines": {
-    "added": 119,
-    "removed": 0
+    "added": 190,
+    "removed": 9
    },
    "budget": {
-    "added": 130,
-    "removed": 0
+    "added": 200,
+    "removed": 9
    },
    "depends_on": {
     "apply": [],
@@ -1526,35 +1527,37 @@
    "output": {
     "label": "identical",
     "evidence": {
-     "run": "boltbeam-runs/mask-indexer-20261115",
-     "numbers": "check session: 84k compactions, 0 list words differ; 59/59 turns identical",
+     "run": "boltbeam-runs/sparse-chain-20261119 (bench.out, check/, screen/, confirm/)",
+     "numbers": "microbench at n_kv 102,656 and 240,384, 3 runs: 0 mask bytes, 0 list words, 0 counts differ vs the stock kernels, stock vs a CPU reference 0; check session (switch + check on, graphs off, turns 40-116 of a 256k session, ~100k-256k context): 158,000 compactions compared word for word with the stock kernel, no abort, reply sha256 77/77 vs switch off; screen pair turns 80-116: 37/37; confirm turns 60-116, 3 pairs: 57/57 in all 6 runs",
      "match": {
-      "what": "text per turn, check session",
-      "equal": 59,
-      "of": 59
+      "what": "reply sha256 per turn, switch on (check on) vs off, same build",
+      "equal": 77,
+      "of": 77
      }
     }
    },
    "gain": {
-    "value": "about 0.10",
-    "unit": "ms/step at about 102k",
-    "vs": "same build, switch off (kernel rows from traces)",
-    "conditions": "RTX 5090, one request at a time, 59-turn session to 128k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048), q8_0 KV, MTP draft head k=3; 40.4 -> 32.5 us a launch against a derived 0.31 ms",
-    "run": "boltbeam-runs/mask-indexer-20261115"
+    "value": "+11.8",
+    "unit": "tok/s warm decode [+5.1, +18.5], turns 60-116 of a 256k session (193.7 -> 205.5, clean turns); session wall of those 57 turns 209.0 -> 199.1 s (-9.9 [-18.8, -0.9]); by band +10.2 (<=163k), +11.0 (<=195k), +12.1 (<=227k), +13.0 (<=262k)",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 116-turn session to 256k context (-c 262144, recorded history), MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, top-k 2048, 4-token verify), q8_0 KV, MTP draft head k=3, series 01-21 switches as the shipped 256k plan (LLAMA_KV_STREAM=52848, GGML_CUDA_GRAPH_MAX_KEYS=2); 3 alternating pairs, 95% t-interval over pairs, GPU <= 58 C before each arm; microbench: mask build + compaction 88.8 -> 7.8 us a verify layer at 240k, 42.5 -> 6.9 at 102k",
+    "run": "boltbeam-runs/sparse-chain-20261119/confirm"
    },
-   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "exercised_by": "sparse flash attention with a mask (one query per index list) and the fused top_k_mask op, with fewer query rows than the GPU's SMs (decode verify and draft); measured on the qwen4exp graph",
    "limits": [
-    "one-query-per-list compaction on NVIDIA only"
+    "NVIDIA CUDA (HIP and MUSA builds keep the stock kernels), one query per list (ncols1 == 1), one mask stream (mask ne[3] == 1), 16-byte aligned mask rows; otherwise the stock kernels",
+    "decode shapes only by its key: rows (query tokens) below the SM count and more than 4,096 (compaction) / 8,192 (mask build) cells; prefill keeps the stock kernels",
+    "the compaction becomes two launches (count, write); its chunk counts take n_lists x ceil(n_kv / 4,096) extra int32 in the pooled index buffer",
+    "supersedes parked fattn-compact-par (one block per list, -0.10 ms/step at ~102k): this splits the cells over blocks"
    ],
    "rule_exceptions": [],
    "static": {
-    "hunks_removing_stock_lines": 0,
-    "note": "purely additive (0 lines removed)."
-   },
-   "parked_why": "0.10 ms/step for 119 lines: a third of the derived gain. Correct, weak. Not in the default series; applies after it.",
-   "applies_after": "the whole series"
+    "hunks_removing_stock_lines": 9,
+    "note": "9 hunks rewrite stock lines (top-k-mask.cu: the kernel gains a cell range, c0 = 0 and c1 = n_kv with the switch off, so every stock bound test is unchanged; fattn-common.cuh: the index buffer adds the scratch size, 0 with the switch off). The compaction kernels and the check are additive."
+   }
   }
  ],
+ "parked": [],
  "archived": [
   {
    "name": "kv-host-old",
@@ -1631,6 +1634,24 @@
    "sha256": "342cb4d7e3df984807510de5b8907d74f73238923a813ba4f3dadcdc926965d7",
    "files": [
     "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ]
+  },
+  {
+   "name": "fattn-compact-par",
+   "kind": "superseded",
+   "date": "2026-11-19",
+   "patch": "archive/fattn-compact-par.patch",
+   "switch": "LLAMA_FATTN_COMPACT_PAR",
+   "written_on": "1.0.0 + the whole series (parked, applied after it); the mask-indexer, prefill-expert-inplace and prefill-ckpt tested trees hold it",
+   "why": "Superseded by sparse-split (22): the same word-identical mask -> index compaction, but with one block per list it took 32 -> 24 us a launch at ~102k (-0.10 ms/step); sparse-split splits the cells over blocks (71.5 -> 3.0 us at 240k) and rewrites the same function, so this patch no longer applies after the series. Tested trees apply this archived copy, pinned by sha256, only to reach byte equality.",
+   "evidence": "boltbeam-runs/mask-indexer-20261115; boltbeam-runs/sparse-chain-20261119",
+   "lines": {
+    "added": 119,
+    "removed": 0
+   },
+   "sha256": "b311ee7cfedc3385daf1c90d00ececa8d98ae4dd4e40a473f1fe48514ac5953d",
+   "files": [
+    "ggml/src/ggml-cuda/fattn.cu"
    ]
   }
  ],
@@ -1757,7 +1778,7 @@
     "patches/06-seq-rm-indexed.patch",
     "patches/07-fattn-vec-skip.patch",
     "patches/08-idx-inplace.patch",
-    "parked/fattn-compact-par.patch",
+    "archive/fattn-compact-par.patch",
     "archive/kv-host-old.patch"
    ]
   },
@@ -1791,7 +1812,7 @@
     "patches/06-seq-rm-indexed.patch",
     "patches/07-fattn-vec-skip.patch",
     "patches/08-idx-inplace.patch",
-    "parked/fattn-compact-par.patch",
+    "archive/fattn-compact-par.patch",
     "archive/kv-host-old.patch",
     "patches/10-moe-inplace.patch"
    ]
@@ -1810,7 +1831,7 @@
     "patches/06-seq-rm-indexed.patch",
     "patches/07-fattn-vec-skip.patch",
     "patches/08-idx-inplace.patch",
-    "parked/fattn-compact-par.patch",
+    "archive/fattn-compact-par.patch",
     "archive/kv-host-old.patch",
     "patches/11-ckpt-pinned.patch"
    ]
@@ -1953,6 +1974,36 @@
     "patches/18-draft-route-count.patch",
     "patches/19-ext-kernels-window.patch",
     "patches/20-graph-cap.patch"
+   ]
+  },
+  {
+   "id": "sparse-split",
+   "path": "storage-tmp/sparse-chain/tree",
+   "what": "the tree sparse-split (22) was built and measured on (bench in-model check, screen, 3-pair confirm)",
+   "contains": "the series 01-22 on the base (kv100 = 01-21, plus 22)",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/07-fattn-vec-skip.patch",
+    "patches/08-idx-inplace.patch",
+    "patches/09-ext-kernels.patch",
+    "patches/10-moe-inplace.patch",
+    "patches/11-ckpt-pinned.patch",
+    "patches/12-topk-fused.patch",
+    "patches/13-graph-slots.patch",
+    "patches/14-tokenize-incr.patch",
+    "patches/15-ple-prefetch.patch",
+    "patches/16-rs-one-copy.patch",
+    "patches/17-cublas-shared.patch",
+    "patches/18-draft-route-count.patch",
+    "patches/19-ext-kernels-window.patch",
+    "patches/20-graph-cap.patch",
+    "patches/21-kv-stream.patch",
+    "patches/22-sparse-split.patch"
    ]
   }
  ],

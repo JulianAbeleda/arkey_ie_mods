@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}",
  "caps": {
   "total_lines": {
-   "cap": 4536,
+   "cap": 4735,
    "set": {
     "measured": 3513,
     "mods": 19,
@@ -16,6 +16,14 @@
      "to": 4536,
      "measured": 4536,
      "why": "kv-stream extension point, measured 256k win",
+     "date": "2026-11-19",
+     "approved": "Owner-approved 2026-11-19"
+    },
+    {
+     "from": 4536,
+     "to": 4735,
+     "measured": 4735,
+     "why": "kv/sparse-split, measured +11.8 tok/s at 256k (3-pair confirm, warm decode [+5.1, +18.5]); owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-19",
      "approved": "Owner-approved 2026-11-19"
     }

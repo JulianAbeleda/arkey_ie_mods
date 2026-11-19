@@ -44,6 +44,12 @@
    "sha256": "342cb4d7e3df984807510de5b8907d74f73238923a813ba4f3dadcdc926965d7",
    "switch": "GGML_CUDA_GRAPH_RECAPTURE",
    "date": "2026-11-16"
+  },
+  {
+   "id": "llama.cpp/1.0.0/fattn-compact-par",
+   "sha256": "b311ee7cfedc3385daf1c90d00ececa8d98ae4dd4e40a473f1fe48514ac5953d",
+   "switch": "LLAMA_FATTN_COMPACT_PAR",
+   "date": "2026-11-19"
   }
  ]
 }

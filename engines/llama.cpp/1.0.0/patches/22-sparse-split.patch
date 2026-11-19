@@ -1,0 +1,249 @@
+diff --git a/ggml/src/ggml-cuda/fattn-common.cuh b/ggml/src/ggml-cuda/fattn-common.cuh
+--- a/ggml/src/ggml-cuda/fattn-common.cuh
++++ b/ggml/src/ggml-cuda/fattn-common.cuh
+@@ -779,2 +779,4 @@
+         const ggml_tensor * mask, int32_t * indices, int32_t * counts, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream);
++// LLAMA_SPARSE_SPLIT: extra int32 words compact_mask needs after the counts (0 when the stock kernel runs)
++size_t ggml_cuda_flash_attn_ext_compact_scratch(const ggml_tensor * mask, int32_t n_queries, int32_t ncols1);
+ 
+@@ -1186,3 +1188,3 @@
+ 
+-        KV_max.alloc(size_t(n_kv_max)*n_lists + n_lists);
++        KV_max.alloc(size_t(n_kv_max)*n_lists + n_lists + ggml_cuda_flash_attn_ext_compact_scratch(mask, Q->ne[1], ncols1));
+         ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists, Q->ne[1], ncols1, n_kv_max, main_stream);
+diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
+--- a/ggml/src/ggml-cuda/fattn.cu
++++ b/ggml/src/ggml-cuda/fattn.cu
+@@ -117,4 +117,138 @@
+ }
++
++// LLAMA_SPARSE_SPLIT=1 (local long-context mod, off by default): one-query lists compacted by many blocks. The stock
++// kernel runs one block per list, so a decode verify (4 lists) uses 4 of the GPU's SMs and walks n_kv serially.
++// Pass 1: each block counts the finite cells of its SPLIT_CHUNK-cell chunk. Pass 2: each block sums the counts of the
++// chunks before it and writes its finite cells in ascending order; the last chunk writes the -1 padding and the count.
++// Integer only: the lists and counts are the stock kernel's, word for word.
++#define SPLIT_THREADS 256
++#define SPLIT_CELLS_T 16
++#define SPLIT_CHUNK   (SPLIT_THREADS*SPLIT_CELLS_T)
++
++static __device__ __forceinline__ uint32_t split_finite_bits(const uint16_t * row, const int c0, const int ne30) {
++    uint32_t bits = 0;
++    if (c0 + SPLIT_CELLS_T <= ne30 && ((uintptr_t) (row + c0) & 15) == 0) {
++        const uint4 a = ((const uint4 *) (row + c0))[0];
++        const uint4 b = ((const uint4 *) (row + c0))[1];
++        const uint32_t w[8] = {a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w};
++#pragma unroll
++        for (int j = 0; j < 8; ++j) {
++            bits |= uint32_t(((w[j]      ) & 0x7C00u) != 0x7C00u) << (2*j);
++            bits |= uint32_t(((w[j] >> 16) & 0x7C00u) != 0x7C00u) << (2*j + 1);
++        }
++    } else {
++        for (int j = 0; j < SPLIT_CELLS_T; ++j) {
++            if (c0 + j < ne30 && (row[c0 + j] & 0x7C00u) != 0x7C00u) {
++                bits |= 1u << j;
++            }
++        }
++    }
++    return bits;
++}
++
++static __device__ __forceinline__ int split_block_sum(int v, int * sh) {
++#pragma unroll
++    for (int o = 16; o > 0; o >>= 1) {
++        v += __shfl_xor_sync(0xFFFFFFFFu, v, o);
++    }
++    if (threadIdx.x % 32 == 0) {
++        sh[threadIdx.x / 32] = v;
++    }
++    __syncthreads();
++    int t = 0;
++#pragma unroll
++    for (int w = 0; w < SPLIT_THREADS/32; ++w) {
++        t += sh[w];
++    }
++    return t;
++}
++
++__launch_bounds__(SPLIT_THREADS)
++static __global__ void flash_attn_mask_split_count(const half * mask_ptr, int32_t * chunk_counts, const int ne30, const int64_t s31) {
++    ggml_cuda_pdl_sync();
++    __shared__ int sh[SPLIT_THREADS/32];
++    const uint16_t * row = (const uint16_t *) (mask_ptr + blockIdx.y*s31);
++    const int t = split_block_sum(__popc(split_finite_bits(row, blockIdx.x*SPLIT_CHUNK + threadIdx.x*SPLIT_CELLS_T, ne30)), sh);
++    if (threadIdx.x == 0) {
++        chunk_counts[int64_t(blockIdx.y)*gridDim.x + blockIdx.x] = t;
++    }
++    ggml_cuda_pdl_lc();
++}
++
++__launch_bounds__(SPLIT_THREADS)
++static __global__ void flash_attn_mask_split_write(const half * mask_ptr, const int32_t * chunk_counts, int32_t * indices_ptr,
++        int32_t * counts_ptr, const int ne30, const int n_kv_max, const int64_t s31) {
++    ggml_cuda_pdl_sync();
++    __shared__ int sh[SPLIT_THREADS/32];
++    __shared__ int warp_inc[SPLIT_THREADS/32];
++    const int lane = threadIdx.x % 32;
++    const int warp = threadIdx.x / 32;
++    const int32_t * cc = chunk_counts + int64_t(blockIdx.y)*gridDim.x;
++    int pre = 0;
++    for (int j = threadIdx.x; j < (int) blockIdx.x; j += SPLIT_THREADS) {
++        pre += cc[j];
++    }
++    const int base = split_block_sum(pre, sh);
++
++    const uint16_t * row = (const uint16_t *) (mask_ptr + blockIdx.y*s31);
++    const int c0 = blockIdx.x*SPLIT_CHUNK + threadIdx.x*SPLIT_CELLS_T;
++    uint32_t bits = split_finite_bits(row, c0, ne30);
++    const int n = __popc(bits);
++    int inc = n;
++#pragma unroll
++    for (int o = 1; o < 32; o <<= 1) {
++        const int y = __shfl_up_sync(0xFFFFFFFFu, inc, o);
++        inc += lane >= o ? y : 0;
++    }
++    if (lane == 31) {
++        warp_inc[warp] = inc;
++    }
++    __syncthreads();
++    int dst = base + inc - n;
++    int chunk_total = 0;
++#pragma unroll
++    for (int w = 0; w < SPLIT_THREADS/32; ++w) {
++        dst += w < warp ? warp_inc[w] : 0;
++        chunk_total += warp_inc[w];
++    }
++    int32_t * indices = indices_ptr + int64_t(blockIdx.y)*n_kv_max;
++    for (; bits; bits &= bits - 1, ++dst) {
++        if (dst < n_kv_max) {
++            indices[dst] = c0 + __ffs(bits) - 1;
++        }
++    }
++    if (blockIdx.x == gridDim.x - 1) {
++        const int count = min(base + chunk_total, n_kv_max);
++        for (int i = count + threadIdx.x; i < n_kv_max; i += SPLIT_THREADS) {
++            indices[i] = -1;
++        }
++        if (threadIdx.x == 0) {
++            counts_ptr[blockIdx.y] = count;
++        }
++    }
++    __syncthreads();
++    ggml_cuda_pdl_lc();
++}
++
++static bool sparse_split_on(const ggml_tensor * mask, int32_t n_queries, int32_t ncols1) {
++#if defined(GGML_USE_HIP)
++    const bool on = false; // the kernels assume 32-lane warps
++#else
++    static const bool on = getenv("LLAMA_SPARSE_SPLIT") && atoi(getenv("LLAMA_SPARSE_SPLIT")) != 0;
++#endif // defined(GGML_USE_HIP)
++    // only when the stock grid (one block per list) leaves most SMs idle
++    return on && ncols1 == 1 && mask->ne[3] == 1 && n_queries < ggml_cuda_info().devices[ggml_cuda_get_device()].nsm &&
++        mask->ne[0] > SPLIT_CHUNK && mask->nb[1] % 16 == 0 && (uintptr_t) mask->data % 16 == 0;
++}
+ #endif // !defined(GGML_USE_MUSA)
+ 
++size_t ggml_cuda_flash_attn_ext_compact_scratch(const ggml_tensor * mask, int32_t n_queries, int32_t ncols1) {
++#ifdef GGML_USE_MUSA
++    GGML_UNUSED_VARS(mask, n_queries, ncols1);
++    return 0;
++#else
++    return sparse_split_on(mask, n_queries, ncols1) ? size_t(n_queries)*((mask->ne[0] + SPLIT_CHUNK - 1)/SPLIT_CHUNK) : 0;
++#endif // GGML_USE_MUSA
++}
++
+ void ggml_cuda_flash_attn_ext_compact_mask(
+@@ -127,2 +261,35 @@
+     const int64_t s33 = mask->nb[3] / sizeof(half);
++    if (sparse_split_on(mask, n_queries, ncols1)) {
++        // the caller sized the buffer with ggml_cuda_flash_attn_ext_compact_scratch: chunk counts follow the counts
++        const int n_chunks = int((mask->ne[0] + SPLIT_CHUNK - 1)/SPLIT_CHUNK);
++        int32_t * chunk_counts = counts + n_queries;
++        const ggml_cuda_kernel_launch_params lp(dim3(n_chunks, n_queries, 1), dim3(SPLIT_THREADS, 1, 1), 0, stream);
++        ggml_cuda_kernel_launch(flash_attn_mask_split_count, lp, (const half *) mask->data, chunk_counts, int(mask->ne[0]), s31);
++        ggml_cuda_kernel_launch(flash_attn_mask_split_write, lp, (const half *) mask->data, (const int32_t *) chunk_counts,
++            indices, counts, int(mask->ne[0]), n_kv_max, s31);
++        // LLAMA_SPARSE_SPLIT_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1): the stock kernel beside it, abort on any word
++        static const bool check = getenv("LLAMA_SPARSE_SPLIT_CHECK") && atoi(getenv("LLAMA_SPARSE_SPLIT_CHECK")) != 0;
++        if (check) {
++            const size_t n_words = size_t(n_kv_max)*n_queries + n_queries;
++            int32_t * ref = nullptr;
++            CUDA_CHECK(cudaMalloc(&ref, n_words*sizeof(int32_t)));
++            flash_attn_mask_to_sparse_indices<1, false><<<dim3(n_queries, 1, 1), 256, 0, stream>>>(
++                (const half *) mask->data, ref, ref + size_t(n_kv_max)*n_queries, int(mask->ne[0]), n_queries, n_kv_max, s31, s33);
++            std::vector<int32_t> a(n_words), b(n_words);
++            CUDA_CHECK(cudaMemcpyAsync(a.data(), ref, n_words*sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
++            CUDA_CHECK(cudaMemcpyAsync(b.data(), indices, size_t(n_kv_max)*n_queries*sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
++            CUDA_CHECK(cudaMemcpyAsync(b.data() + size_t(n_kv_max)*n_queries, counts, n_queries*sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
++            CUDA_CHECK(cudaStreamSynchronize(stream));
++            CUDA_CHECK(cudaFree(ref));
++            static size_t n_calls = 0;
++            ++n_calls;
++            if (a != b) {
++                GGML_ABORT("LLAMA_SPARSE_SPLIT_CHECK: compaction differs from stock (call %zu, n_kv %lld)", n_calls, (long long) mask->ne[0]);
++            }
++            if (n_calls % 1000 == 0) {
++                GGML_LOG_WARN("LLAMA_SPARSE_SPLIT_CHECK: %zu compactions identical\n", n_calls);
++            }
++        }
++        return;
++    }
+     const dim3 blocks_num((n_queries + ncols1 - 1)/ncols1, mask->ne[3], 1);
+diff --git a/ggml/src/ggml-cuda/top-k-mask.cu b/ggml/src/ggml-cuda/top-k-mask.cu
+--- a/ggml/src/ggml-cuda/top-k-mask.cu
++++ b/ggml/src/ggml-cuda/top-k-mask.cu
+@@ -18,3 +18,3 @@
+         const int64_t se0, const int64_t se1, const int64_t se2, const int64_t se3,
+-        const bool vec) {
++        const bool vec, const int64_t cells) {
+     ggml_cuda_pdl_lc();
+@@ -22,2 +22,5 @@
+     const int64_t ir = blockIdx.x;
++    // LLAMA_SPARSE_SPLIT: block y owns cells [c0, c1) of the row (stock: one block, the whole row)
++    const int64_t c0 = blockIdx.y*cells;
++    const int64_t c1 = min(c0 + cells, n_kv);
+     const int64_t i1 = ir % ne1;
+@@ -41,3 +44,3 @@
+         const int4 fill4 = *(const int4 *) fill;
+-        for (int64_t i = threadIdx.x; i < n_kv/nv; i += blockDim.x) {
++        for (int64_t i = c0/nv + threadIdx.x; i < c1/nv; i += blockDim.x) {
+             ((int4 *) dst_row)[i] = fill4;
+@@ -45,3 +48,3 @@
+     } else {
+-        for (int64_t i = threadIdx.x; i < n_kv; i += blockDim.x) {
++        for (int64_t i = c0 + threadIdx.x; i < c1; i += blockDim.x) {
+             dst_row[i] = ninf;
+@@ -56,3 +59,3 @@
+             const int32_t c = extra[(i - n_top)*se0 + i1*se1 + i2*se2 + i3*se3];
+-            if (c >= 0 && c < n_kv) {
++            if (c >= c0 && c < c1) {
+                 dst_row[c] = mask_row[c];
+@@ -70,3 +73,3 @@
+         if (!blocks) {
+-            if (p < n_kv) {
++            if (p >= c0 && p < c1) {
+                 dst_row[p] = mask_row[p];
+@@ -77,3 +80,3 @@
+             const int32_t c = blocks[k*sb0 + p*sb1];
+-            if (c >= 0 && c < n_kv) {
++            if (c >= c0 && c < c1) {
+                 dst_row[c] = mask_row[c];
+@@ -108,3 +111,12 @@
+     const dim3 block_dims(CUDA_TOP_K_MASK_BLOCK_SIZE, 1, 1);
+-    const dim3 grid_dims(ggml_nrows(dst), 1, 1);
++    // LLAMA_SPARSE_SPLIT=1 (local long-context mod, off by default): with fewer rows than SMs (decode), split each row's
++    // cells over blocks of 8,192; every block applies only the picks in its range, so each cell gets the stock value
++#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
++    const bool split_on = false;
++#else
++    static const bool split_on = getenv("LLAMA_SPARSE_SPLIT") && atoi(getenv("LLAMA_SPARSE_SPLIT")) != 0;
++#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
++    const bool split = split_on && vec && ggml_nrows(dst) < ggml_cuda_info().devices[ctx.device].nsm && n_kv > 8192;
++    const int64_t cells = split ? 8192 : std::max<int64_t>(n_kv, 1);
++    const dim3 grid_dims(ggml_nrows(dst), (n_kv + cells - 1)/cells, 1);
+     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
+@@ -126,3 +138,3 @@
+             extra  ? extra->nb[0]/si  : 0, extra ? extra->nb[1]/si : 0, extra ? extra->nb[2]/si : 0, extra ? extra->nb[3]/si : 0,
+-            vec);
++            vec, cells);
+ }
