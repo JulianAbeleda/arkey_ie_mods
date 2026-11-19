@@ -3105,6 +3105,60 @@
    "module": "host"
   },
   {
+   "id": "llama.cpp/b12521/ple-prefetch-prompt",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "ple-prefetch-prompt",
+   "title": "a prompt's per-layer embedding rows read ahead from tokenization",
+   "state": "parked",
+   "order": null,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_PLE_PREFETCH_TURN",
+    "on": "2"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "ple-prefetch-prompt",
+   "knobs": [
+    "LLAMA_PLE_PREFETCH_TURN"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/parked/ple-prefetch-prompt.patch",
+   "sha256": "529c91d5045caa89e03e9548af76400388a4c0700bca4d63910150708743de35",
+   "lines": {
+    "added": 61,
+    "removed": 5
+   },
+   "budget": {
+    "added": 70,
+    "removed": 5
+   },
+   "files": [
+    "src/models/qwen4exp-prefetch.cpp",
+    "tools/server/server-context.cpp"
+   ],
+   "depends_on": {
+    "apply": [
+     "ple-prefetch-step"
+    ],
+    "run": [
+     "ple-prefetch"
+    ]
+   },
+   "rule_exceptions": [
+    "check"
+   ],
+   "module": null
+  },
+  {
    "id": "vllm/0.31.0/split-kv-verify",
    "engine": "vllm",
    "version": "0.31.0",

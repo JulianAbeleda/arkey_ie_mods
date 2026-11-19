@@ -1389,7 +1389,83 @@
    "rule_exceptions": []
   }
  ],
- "parked": [],
+ "parked": [
+  {
+   "name": "ple-prefetch-prompt",
+   "title": "a prompt's per-layer embedding rows read ahead from tokenization",
+   "patch": "parked/ple-prefetch-prompt.patch",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_PLE_PREFETCH_TURN",
+    "on": "2"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "ple-prefetch-prompt",
+   "files": [
+    "src/models/qwen4exp-prefetch.cpp",
+    "tools/server/server-context.cpp"
+   ],
+   "lines": {
+    "added": 61,
+    "removed": 5
+   },
+   "budget": {
+    "added": 70,
+    "removed": 5
+   },
+   "depends_on": {
+    "apply": [
+     "ple-prefetch-step"
+    ],
+    "run": [
+     "ple-prefetch"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/prefill-256k-20261119 (gate-ident, gate-screen, gate-confirm; README.md 'Test #1')",
+     "numbers": "LLAMA_PLE_PREFETCH_TURN=1 (P1) vs =2 (P2) on the module build (b12521 + the 6 modules at this commit), 256k plan with kv-stream N 52,848, graph-cap K 2, sparse-split, ple-prefetch-step, 256k Go session, recorded history: reply sha256 30/30 (gate-ident, turns 1-30), 57/57 (gate-screen, turns 60-116), 57/57 in all 6 runs of gate-confirm (3 pairs, turns 60-116)",
+     "match": {
+      "what": "reply sha256 per turn, mode 2 vs mode 1 (gate-confirm, turns 60-116, 3 pairs)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "gain": {
+    "value": "-4 [-5, -4]",
+    "unit": "prefill ms a turn, turns 60-116 (131k-262k), warm turns (817 -> 812); TTFT -3 [-6, -0] ms; decode +0.1 [-0.6, +0.8] tok/s; session wall -0.2 [-0.7, +0.3] s",
+    "vs": "same build, LLAMA_PLE_PREFETCH_TURN=1",
+    "conditions": "RTX 5090 at 450 W, Ryzen 7 5800X, 31 GB RAM, one request at a time, 256k context, MoE model on the engine's qwen4exp graph with a 28.8 GB lazily mapped per-layer embedding table (IQ4_NL), MTP draft k=3 with ple-prefetch-step, kv-stream N 52,848, -lm none, -ub 1024; both GGUF files dropped from the page cache before every server start (posix_fadvise DONTNEED, cachestat 0.00 GB after, 6/6)",
+    "run": "boltbeam-runs/prefill-256k-20261119 (gate-confirm)"
+   },
+   "exercised_by": "llama-server text prompts on a model whose per-layer token-embedding table is lazily mapped and not in the page cache; the rows of a prompt's new tokens (after the longest common prefix with the previous prompt)",
+   "limits": [
+    "mode 2 of LLAMA_PLE_PREFETCH_TURN: the HTTP thread hints right after tokenization (measured lead 15-20 ms before the first pass, bpftrace job4); the first pass's own synchronous hint in the graph input stays",
+    "small in a recorded-history session: the replies' rows are read during decode, so a prompt's cold rows are mostly the user message's; the prefill-only probe (1-token replies) moved main-thread madvise 60 -> 26 ms a turn, the paired confirm moved prefill -4 ms",
+    "new = after the LCP with the previous hinted prompt, kept per process (-np 1): concurrent requests (a title or autocomplete call during a turn) overwrite it and the slot re-hints the tail (duplicate reads, no output change)",
+    "the hint computes the rows under a mutex on the HTTP thread; a slot start that needs the same mutex waits for it",
+    "512-token jobs in token order on host/ple-prefetch's one background queue: also changes how mode 1's and ple-prefetch-step's hints are queued (same rows, more jobs)",
+    "prompts rejected later (over n_ctx) are still hinted; multimodal prompts are not hinted early",
+    "no check mode: no byte the model reads changes"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the mod only issues an OS read-ahead hint (madvise) on a background thread; no computed value or read byte changes, so there is nothing to compare. Identity rests on the full-session text match."
+    }
+   ],
+   "static": {
+    "hunks_removing_stock_lines": 2,
+    "note": "both hunks rewrite lines the host module added (the turn hint block, the prefetch_inputs loop head), none of the base's"
+   },
+   "parked_why": "lean rule (seconds saved per line): -4 [-5, -4] ms a turn prefill at 256k (~-0.5 s a session, at the detection line) does not earn +56 lines; kept so it can come back (e.g. with own history, or a workload whose prompt rows are cold: prefill-only probe moved main-thread madvise 60 -> 26 ms a turn). Built and gated as a host-module row (prefill-256k clone, not kept in the series). Applies on the host module (depends_on ple-prefetch-step: the host patch)."
+  }
+ ],
  "retired": [
   {
    "name": "seq-rm-indexed",

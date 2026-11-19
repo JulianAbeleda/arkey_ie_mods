@@ -1,0 +1,112 @@
+diff --git a/src/models/qwen4exp-prefetch.cpp b/src/models/qwen4exp-prefetch.cpp
+index 6c84810..59bffbc 100644
+--- a/src/models/qwen4exp-prefetch.cpp
++++ b/src/models/qwen4exp-prefetch.cpp
+@@ -24,10 +24,18 @@ void llama_model_qwen4exp::prefetch_inputs(const llama_token * tokens, int32_t n
+     i_first = std::max(i_first, 0);
+     const size_t row_bytes = ggml_row_size(ple->type, ple->ne[0]);
+     const auto * base = (const char *) ple->data;
++    // LOCAL (ple-prefetch-prompt): one queue job per 512 tokens, in token order, so a long prompt's first pass is read first
++    // (one job is sorted by address, which spreads every pass's rows over the whole job)
++    constexpr int64_t chunk = 512;
+     llama_memory_ranges mr;
+-    mr.reserve((size_t) (n_tokens - i_first) * n_heads);
++    mr.reserve((size_t) std::min<int64_t>(n_tokens - i_first, chunk) * n_heads);
+     std::vector<int64_t> ctx(n_gram);
+     for (int64_t i = i_first; i < n_tokens; ++i) {
++        if (i > i_first && (i - i_first) % chunk == 0) {
++            llama_prefetch_async(std::move(mr));
++            mr = llama_memory_ranges();
++            mr.reserve((size_t) std::min<int64_t>(n_tokens - i, chunk) * n_heads);
++        }
+         ctx[0] = tokens[i];
+         bool cut = false;
+         for (int64_t q = 1; q < n_gram; ++q) {
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 2678bbf..009a243 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -28,6 +28,7 @@
+ #include <cstddef>
+ #include <cinttypes>
+ #include <deque>
++#include <mutex>
+ #include <exception>
+ #include <memory>
+ #include <filesystem>
+@@ -1021,6 +1022,50 @@ static bool add_mtmd_chunk(const server_slot & slot, const mtmd_input_chunk * ch
+ // server_context_impl (private implementation)
+ //
+ 
++// LOCAL (ple-prefetch-prompt): LLAMA_PLE_PREFETCH_TURN=2 - the turn hint of host/ple-prefetch issued earlier: the HTTP thread hints
++// the input rows of the prompt's new tokens on the same background queue as soon as it has tokenized them, before the task reaches
++// the slot, so the first prompt pass finds them on the way instead of reading them behind its own synchronous hint. New = after the
++// longest common prefix with the previous hinted prompt (the conversation the cache holds). At the slot (n_past final) mode 2 hints
++// only what the early hint left out ([n_past, start) when the cache kept less, or the whole tail for a prompt not hinted early).
++// Mode 1 = the slot-start hint alone (host/ple-prefetch-turn). A hint changes no byte that is read later. Unset = stock.
++static int ple_turn_mode() {
++    static const int m = getenv("LLAMA_PLE_PREFETCH_TURN") != nullptr ? atoi(getenv("LLAMA_PLE_PREFETCH_TURN")) : 0;
++    return m;
++}
++static std::mutex   ple_hint_mtx;
++static llama_tokens ple_hint_last;      // the last prompt hinted early (one conversation: -np 1)
++static size_t       ple_hint_start = 0; // its first hinted token
++static void ple_hint_early(const llama_model * model, const llama_tokens & toks) {
++    std::lock_guard<std::mutex> lock(ple_hint_mtx);
++    const size_t n = std::min(toks.size(), ple_hint_last.size());
++    size_t lcp = 0;
++    while (lcp < n && toks[lcp] == ple_hint_last[lcp]) {
++        lcp++;
++    }
++    if (lcp < toks.size()) {
++        llama_model_prefetch_inputs(model, toks.data(), (int32_t) toks.size(), (int32_t) lcp);
++    }
++    ple_hint_last  = toks;
++    ple_hint_start = lcp;
++}
++static void ple_hint_slot(const llama_model * model, const llama_tokens & toks, int32_t n_past) {
++    if (ple_turn_mode() != 2) {
++        llama_model_prefetch_inputs(model, toks.data(), (int32_t) toks.size(), n_past);
++        return;
++    }
++    std::lock_guard<std::mutex> lock(ple_hint_mtx);
++    if (toks != ple_hint_last) {
++        llama_model_prefetch_inputs(model, toks.data(), (int32_t) toks.size(), n_past);
++        ple_hint_last  = toks;
++        ple_hint_start = (size_t) std::max(n_past, 0);
++        return;
++    }
++    if ((size_t) n_past < ple_hint_start) {
++        llama_model_prefetch_inputs(model, toks.data(), (int32_t) ple_hint_start, n_past); // the n-grams look back only: a cut list is exact
++        ple_hint_start = (size_t) n_past;
++    }
++}
++
+ struct server_context_impl {
+     friend struct server_context;
+ 
+@@ -4329,10 +4374,8 @@ private:
+                         // hint the reads of the input rows every token from n_past on will gather, on a background thread, so the
+                         // passes after the first find them cached. Model-level hook (no-op for models without such rows). Unset = stock.
+                         {
+-                            static const bool ple_turn = getenv("LLAMA_PLE_PREFETCH_TURN") != nullptr && atoi(getenv("LLAMA_PLE_PREFETCH_TURN")) > 0;
+-                            if (ple_turn && !slot.task->tokens.has_mtmd) {
+-                                const auto & toks = slot.task->tokens.get_tokens();
+-                                llama_model_prefetch_inputs(model_tgt, toks.data(), (int32_t) toks.size(), n_past);
++                            if (ple_turn_mode() > 0 && !slot.task->tokens.has_mtmd) {
++                                ple_hint_slot(model_tgt, slot.task->tokens.get_tokens(), n_past); // LOCAL (ple-prefetch-prompt): mode 2 skips what the early hint covered
+                             }
+                         }
+ 
+@@ -5377,6 +5420,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
+             inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
+         }
+ 
++        // LOCAL (ple-prefetch-prompt): the turn hint as soon as the tokens exist (one text prompt only)
++        if (ple_turn_mode() == 2 && inputs.size() == 1 && !inputs[0].has_mtmd) {
++            ple_hint_early(ctx_server.model_tgt, inputs[0].get_tokens());
++        }
++
+         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
+ 
+         for (size_t i = 0; i < inputs.size(); i++) {
