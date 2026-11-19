@@ -212,7 +212,7 @@ so a module is one patch on one engine extension point: the engine files that up
   patch, sha256, files and lines: a consumer applies each patch once.
 - Code that needs no engine internals goes in the module's own new file: a new file cannot conflict on a base move.
 
-llama.cpp b12521 modules: `kv` (sparse-direct, fattn-vec-skip), `indexer` (idx-pooled, kpool-input-device,
+llama.cpp b12521 modules: `kv` (sparse-direct, fattn-vec-skip, kv-stream), `indexer` (idx-pooled, kpool-input-device,
 idx-inplace, topk-fused), `kernels` (ext-kernels, ext-kernels-window, graph-cap), `experts` (moe-inplace, cublas-shared,
 draft-route-count), `state` (mtp-share-head, graph-slots, rs-one-copy), `host` (ckpt-pinned, tokenize-incr,
 ple-prefetch, sched-async-inputs). The switches, check modes and limits are those of the same mods on 1.0.0, above.

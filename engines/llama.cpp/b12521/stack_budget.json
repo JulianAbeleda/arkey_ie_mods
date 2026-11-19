@@ -4,13 +4,22 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 3425,
+   "cap": 4267,
    "set": {
     "measured": 3244,
     "mods": 18,
     "date": "2026-11-18"
    },
-   "raised": []
+   "raised": [
+    {
+     "from": 3425,
+     "to": 4267,
+     "measured": 4267,
+     "why": "kv-stream extension point, measured 256k win",
+     "date": "2026-11-19",
+     "approved": "Owner-approved 2026-11-19"
+    }
+   ]
   },
   "mods_per_file": {
    "cap": 3,

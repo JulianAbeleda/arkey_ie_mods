@@ -8,31 +8,52 @@
   "release": null,
   "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c"
  },
- "about": "The 1.0.0 mods rebased onto llama.cpp b12521 (6f311d7a, no release name), kept as 6 modules. A module is one patch on one engine extension point (modules[].point) and applies alone on the base; a mod row is a feature of its module: one switch, its check mode, label and evidence, with the same name, switch and marker it had as patch 02-20. Series order = modules order. The module tree is the 02-20 series tree without seq-rm-indexed (retired: upstream #32380 does it), with two declarations of rs-one-copy on their own lines and the ple-prefetch function in its own file (src/models/qwen4exp-prefetch.cpp); nothing else differs. 01 kpool-incremental is not in this series: upstream llama.cpp #32137 (commit 08a9b358939e, 2026-11-17) does the incremental k-pool update, always on; kpool-input-device is ported onto that loop. No gain is claimed on this version yet: the rows' gains were measured on 1.0.0 (engines/llama.cpp/1.0.0/mods.json). Identity on this base: ab-ident2 and ab-xcheck in the rows (measured on the 02-19 series, the same feature code); the base-move gate passed (gate-timed-stdlib/go, gate-q-stdlib/go: session wall not worse on both workloads, stage-1 pass on both); the module build against the series build: verified, modules-b12521.",
+ "about": "The 1.0.0 mods rebased onto llama.cpp b12521 (6f311d7a, no release name), kept as 6 modules. A module is one patch on one engine extension point (modules[].point) and applies alone on the base; a mod row is a feature of its module: one switch, its check mode, label and evidence, with the same name, switch and marker it had as patch 02-20. Series order = modules order. The module tree is the 02-20 series tree without seq-rm-indexed (retired: upstream #32380 does it), with two declarations of rs-one-copy on their own lines and the ple-prefetch function in its own file (src/models/qwen4exp-prefetch.cpp); nothing else differs. 01 kpool-incremental is not in this series: upstream llama.cpp #32137 (commit 08a9b358939e, 2026-11-17) does the incremental k-pool update, always on; kpool-input-device is ported onto that loop. No gain is claimed on this version yet: the rows' gains were measured on 1.0.0 (engines/llama.cpp/1.0.0/mods.json). Identity on this base: ab-ident2 and ab-xcheck in the rows (measured on the 02-19 series, the same feature code); the base-move gate passed (gate-timed-stdlib/go, gate-q-stdlib/go: session wall not worse on both workloads, stage-1 pass on both); the module build against the series build: verified, modules-b12521; kv-stream in the kv module: verified, modules-kv-b12521.",
  "budget_rule": "ceil_105_10",
  "modules": [
   {
    "name": "kv",
-   "title": "K/V store and its attention read path",
-   "point": "the K/V cache and the flash-attention kernels that read it (fattn*, llama-kv-cache)",
+   "title": "K/V store, its attention read path and K/V paging",
+   "point": "the K/V cache, the flash-attention kernels that read it and the K/V paging between VRAM and host RAM (fattn*, llama-kv-cache, kv-stream)",
    "patch": "patches/kv.patch",
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
     "ggml/src/ggml-cuda/fattn-mma-f16.cuh",
     "ggml/src/ggml-cuda/fattn-vec.cuh",
-    "ggml/src/ggml-cuda/fattn.cu"
+    "ggml/src/ggml-cuda/fattn.cu",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/kv-stream.cu",
+    "ggml/src/ggml-cuda/kv-stream.cuh",
+    "src/CMakeLists.txt",
+    "src/llama-kv-cache.cpp",
+    "src/llama-kv-stream.cpp",
+    "src/llama-kv-stream.h"
    ],
    "lines": {
-    "added": 200,
-    "removed": 9
+    "added": 1122,
+    "removed": 17
    },
    "budget": {
-    "added": 210,
-    "removed": 9
+    "added": 1180,
+    "removed": 17
    },
    "static": {
-    "hunks_removing_stock_lines": 7
-   }
+    "hunks_removing_stock_lines": 11
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 210,
+      "removed": 9
+     },
+     "to": {
+      "added": 1180,
+      "removed": 17
+     },
+     "why": "kv-stream joins the module (its extension point: the K/V store and its attention read)",
+     "date": "2026-11-19"
+    }
+   ]
   },
   {
    "name": "indexer",
@@ -270,6 +291,65 @@
     "one-query calls only (the vector kernel, q8_0 K/V, with a sparse mask): the draft passes",
     "apply order needs patch 02 (shares its env helper and check block); the two switches are independent at run time",
     "an accumulator that is exactly -0 would stay -0 where stock gives +0 (equal as values; never observed)"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "kv-stream",
+   "title": "KV streaming: attention K/V in pinned host RAM, N cells a layer paged in VRAM",
+   "module": "kv",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KV_STREAM",
+    "on": "N: cells per layer kept in VRAM (a multiple of 4, >= 4096, below the context)"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_KV_STREAM_CHECK",
+    "needs": [
+     "LLAMA_KV_STREAM"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_KV_STREAM",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "sparse-direct"
+    ]
+   },
+   "output": {
+    "label": "quality-gated",
+    "evidence": {
+     "run": "boltbeam-runs/mods-modules-20261118 (ab-kv2); boltbeam-runs/kv-stream-20261118/b12521 (ident, zero128); boltbeam-runs/rental-20261118/out (kvs11, kvs13, kvs14, kvs20: measured on 1.0.0, the same patch text); boltbeam-runs/graph-cap-20261119",
+     "numbers": "on b12521, the module build with kv-stream in kv against the 02-20 series + kv-stream build (ab-kv2: 128k context, 30 turns of a 256k session, recorded history, full stack, every expert on the GPU): reply sha256 30/30 equal in all five arms: series build off, module build off, series build on (N 32,768), module build on, module build in check mode (graphs off; byte checks to 106,000 and attention-output checks to 52,000, no abort). The port's own runs on b12521 + 02-20: ident, N 32,768 on vs off and check mode, replies and drafts 30/30; zero128, switch off vs the series build without the mod, 59-turn 128k session, 3 pairs: decode -0.1 [-1.7, +1.6] tok/s, prefill +0 [-5, +6] ms, replies 59/59 in all 6 runs. Gate class because it ships with the placement it pays for (every expert on the GPU), which changes rounding against the setup it replaces; the stage-1 gate and the 256k speed were measured on 1.0.0 with the same patch text (engines/llama.cpp/1.0.0/mods.json, kv-stream)",
+     "match": {
+      "what": "reply sha256 per turn, switch on vs off and module build vs series build, same placement (ab-kv2)",
+      "equal": 30,
+      "of": 30
+     },
+     "gate": {
+      "name": "session-gate stage 1 (top-1 agreement over the session's positions vs the declared floor -b 5 -ub 5)",
+      "run": "boltbeam-runs/rental-20261118/out/kvs13/k32, out/kvs14/k63, out/kvs20/k53 (reference A and floor FN from out/kvs12/gate256); boltbeam-runs/graph-cap-20261119 (the home 256k gate with graph-cap on)",
+      "verdict": "pass at N 53,240 twice (kvs20), N 63,616 twice (kvs14), N 32,768 and N 16,384 (kvs13): agreement 0.9910 vs floor 0.9915, excess +0.0005 of 0.0030 allowed, every turn holds; on the home 32 GB card with graph-cap on (GGML_CUDA_GRAPH_MAX_KEYS=2), 1.0.0 + 01-20 + this mod, N 53,632, 116 turns to 256k, no crash: pass, excess +0.0015 of 0.0034 allowed (d_copy 0.0090, d_floor 0.0075, 116 documents; boltbeam-runs/graph-cap-20261119/gate256); untimed there (CPU shared), against the setup without it: session 533.4 -> 368.8 s, warm decode 162.2 -> 219.2 tok/s, TTFT 1,423 -> 835 ms; at N 65,536 (kvs12) the server ran out of GPU memory on the gate's scored requests after the session (CUDA graph executables of new graph keys), so N is derived with the runtime headroom and graph-cap is on (limits)"
+     }
+    }
+   },
+   "exercised_by": "the sparse-attention (indexer) layers of the qwen4exp graph with q8_0 K/V, one sequence on one CUDA GPU, a context larger than N; the speed comes from spending the freed VRAM on expert residency",
+   "limits": [
+    "N is not a constant of the mod: boltbeam tune derives it per machine from the free memory at load and the runtime growth boltbeam load-probe --stress measures. On a 32 GB card at 256k, N 65,536 loaded with 181 MiB free and ran out of GPU memory after its session; N 63,616 and N 53,240 passed the gate",
+    "needs graph-cap on (GGML_CUDA_GRAPH_MAX_KEYS): without it the CUDA graph executables of dead graph keys grow with the request rate, and a server loaded this close to full VRAM runs out of memory (N 53,240 did under the full stress, kvs21)",
+    "target attention layers only: the MTP draft layer is not paged (drafter paging collapsed decode once its context passed its page budget; parked)",
+    "pays only where the context cannot hold all K/V and every expert on the GPU: at 128k, where it fits, it costs -8.6 tok/s warm decode [-17.8, +0.6] and +25 ms prefill a turn (measured on 1.0.0, ab128-cost); with the switch unset it costs nothing (zero128)",
+    "prompt ubatches past N stage the cells they read host -> VRAM: deep-band TTFT pays that copy (the freed VRAM still wins it back at 256k)",
+    "one CUDA GPU (pages register on the current device); one user stream of the staging pool (asserted at init)",
+    "debug (non-NDEBUG) builds assert on the pinned host buffer type",
+    "context shift writes the host copy without write-through: run with -c at the session size",
+    "a SET_ROWS ext kernel (09) on a streamed layer would skip write-through",
+    "check mode needs GGML_CUDA_DISABLE_GRAPHS=1 and is for correctness, not timing",
+    "N: a multiple of 4, >= 4096 and below the context, else ignored with a warning (stock path)"
    ],
    "rule_exceptions": []
   },
@@ -1193,10 +1273,10 @@
  ],
  "tested_trees": [
   {
-   "id": "graph-cap-tree",
-   "path": "boltbeam-runs/graph-cap-20261119/src-b12521",
-   "what": "the tree the graph-cap build (capk128-a/b, abk128) was built from; replaces modules-tree, whose kernels module predates graph-cap",
-   "contains": "exactly the 6 modules on the base, kernels with graph-cap",
+   "id": "modules-kv-tree",
+   "path": "boltbeam-runs/mods-modules-20261118/tree-modules-kv2",
+   "what": "the tree the module build with kv-stream (build-modules-kv2) was built from",
+   "contains": "exactly the 6 modules on the base, kv-stream in kv and graph-cap in kernels",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",
@@ -1275,6 +1355,26 @@
      "compare": "ab-speed, ab-speed-rev: the 02-20 series build (O) vs the module build (N), one pair in each order",
      "setup": "59-turn 128k session with matched lengths, full stack (every switch of the 0.3.29 set plus sched-async-inputs, -ncmoe 0, -b 1024, hot-set draft, region manifest), 450 W",
      "numbers": "session wall 143.7 -> 144.1 s (+0.4, O first) and 143.7 -> 143.7 s (+0.1, N first); decode 241.1 -> 240.3 and 241.1 -> 240.7 tok/s; replies 59/59 equal in all 4 runs. Noise bound for a difference of two single runs: 1.2 s (4 runs of the series binary on this session: 143.1, 143.8, 144.0, 143.7 s, SD 0.36 s; one-sided 95%, 3 degrees of freedom). No gain or loss is claimed"
+    }
+   ]
+  },
+  {
+   "id": "modules-kv-b12521",
+   "date": "2026-11-19",
+   "tree": "boltbeam-runs/mods-modules-20261118/tree-modules-kv2",
+   "contains": "exactly the 6 modules on b12521, kv-stream in kv and graph-cap in kernels",
+   "build": "boltbeam-runs/mods-modules-20261118/build-modules-kv2 (CUDA, Release); the build it is compared with: boltbeam-runs/mods-modules-20261118/bin-series-kv (the 02-20 series + kv-stream, the port's build)",
+   "runs": "boltbeam-runs/mods-modules-20261118 (ab-kv, ab-kv2; README.md)",
+   "results": [
+    {
+     "compare": "tree: the module tree with kv-stream against the 02-20 series + kv-stream tree",
+     "setup": "git diff of the two trees",
+     "numbers": "differs only by what the module series differs from the 02-20 series (seq-rm-indexed gone, two rs-one-copy declarations moved, ple-prefetch in its own file) and by graph-cap's lines in ggml-cuda.cu"
+    },
+    {
+     "compare": "ab-kv2: series + kv-stream build paging off (K0) and on (K1) vs the module build off (F0), on (F1) and in check mode (FC)",
+     "setup": "128k context, 30 turns of a 256k session, recorded history, full stack, N 32,768",
+     "numbers": "reply sha256 30/30 equal in all five arms; check mode to 106,000 byte checks and 52,000 attention-output checks, no abort. ab-kv: the same on the tree before graph-cap, 30/30 in all five arms"
     }
    ]
   }
