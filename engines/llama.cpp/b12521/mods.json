@@ -190,11 +190,12 @@
   {
    "name": "host",
    "title": "host work around a step: server, checkpoints, scheduler inputs",
-   "point": "host-side work around a decode step: the server's tokenize and checkpoints, mapped-input read-ahead and the scheduler's input uploads (tools/server, common, llama-mmap, ggml-backend)",
+   "point": "host-side work around a decode step: the server's tokenize and checkpoints, mapped-input read-ahead (from the server and the drafter) and the scheduler's input uploads (tools/server, common, llama-mmap, ggml-backend)",
    "patch": "patches/host.patch",
    "files": [
     "common/common.cpp",
     "common/common.h",
+    "common/speculative.cpp",
     "ggml/src/ggml-backend.cpp",
     "include/llama.h",
     "src/llama-mmap.cpp",
@@ -207,16 +208,30 @@
     "tools/server/server-context.cpp"
    ],
    "lines": {
-    "added": 495,
+    "added": 518,
     "removed": 1
    },
    "budget": {
-    "added": 520,
+    "added": 550,
     "removed": 1
    },
    "static": {
     "hunks_removing_stock_lines": 1
-   }
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 520,
+      "removed": 1
+     },
+     "to": {
+      "added": 550,
+      "removed": 1
+     },
+     "why": "ple-prefetch-step joins the module (its extension point: mapped-input read-ahead, hinted from the drafter as each token is known)",
+     "date": "2026-11-19"
+    }
+   ]
   }
  ],
  "mods": [
@@ -1151,6 +1166,59 @@
    ]
   },
   {
+   "name": "ple-prefetch-step",
+   "title": "per-layer embedding rows read ahead as each draft token is known",
+   "module": "host",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_PLE_PREFETCH_STEP",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_PLE_PREFETCH_STEP",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/ple-cache-20261119 (step-ident, step-screen, step-evscreen, step-evconfirm; README.md section 7)",
+     "numbers": "switch off vs on on the module build (b12521 + modules a795bbb + this hunk), 256k plan with kv-stream N 52,848, 256k Go session, recorded history: reply sha256 30/30 (step-ident, turns 1-30), 57/57 (step-screen, turns 60-116), 57/57 in all 6 runs of step-evconfirm (3 pairs, turns 60-116)",
+     "match": {
+      "what": "reply sha256 per turn, switch on vs off (step-evconfirm, turns 60-116, 3 pairs)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "gain": {
+    "value": "+4.8 [+1.2, +8.4]",
+    "unit": "decode tok/s, turns 60-116 (131k-262k), warm turns (193.7 -> 198.5; clean turns +4.6 [+2.0, +7.1]); <=262k +4.7 [+3.7, +5.6]; session wall -4.6 [-10.0, +0.9] s",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, Ryzen 7 5800X, 31 GB RAM, one request at a time, 256k context, MoE model on the engine's qwen4exp graph with a 28.8 GB lazily mapped per-layer embedding table (IQ4_NL), MTP draft k=3, kv-stream N 52,848, -lm none, ext-kernels manifest kernels-6f311d7a; both GGUF files dropped from the page cache before every server start (posix_fadvise DONTNEED, cachestat 0.00 GB at every start); 3 alternating pairs",
+    "run": "boltbeam-runs/ple-cache-20261119 (step-evconfirm)"
+   },
+   "exercised_by": "draft-mtp speculative decoding on a model whose per-layer token-embedding table is lazily mapped and not in the page cache (first touches of a row since the server loaded: the load itself evicts the table when it reads the weights through the page cache)",
+   "limits": [
+    "only the draft-mtp drafter calls the hint; other draft types get nothing",
+    "the last draft token's rows are hinted just before the verify (almost no lead time); the verify's own synchronous hint in the graph input stays",
+    "a hint (madvise MADV_WILLNEED) on host/ple-prefetch's background thread: gains depend on the page cache and storage; with the rows already cached it does nothing",
+    "the hint takes the last 16 prompt tokens as n-gram predecessors (the loader caps the n-gram at 8); a multimodal prompt's text tokens skip the image positions the graph cuts at, so within n-gram reach of an image the hinted rows can differ from the read ones (wasted hints, no output change; not run with images)",
+    "one hint job per drafted token on an unbounded queue: under a saturated disk, stale hints add reads (not seen: the 256k confirm's io waits fell)",
+    "no check mode: no byte the model reads changes"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the mod only issues an OS read-ahead hint (madvise) on a background thread; no computed value or read byte changes, so there is nothing to compare. Identity rests on the full-session text match."
+    }
+   ]
+  },
+  {
    "name": "sched-async-inputs",
    "title": "scheduler uploads host inputs on the split's stream, no host sync",
    "module": "host",
@@ -1337,10 +1405,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-kv-sparse-split",
-   "path": "storage-tmp/sparse-chain/tree-b12521",
-   "what": "the tree the module build with sparse-split in kv (ident128-b12521) was built from",
-   "contains": "exactly the 6 modules on the base, kv-stream and sparse-split in kv, graph-cap in kernels",
+   "id": "modules-ple-step",
+   "path": "storage-tmp/ple-step/tree-check",
+   "what": "base + the 6 module patches at this commit (kv with sparse-split, host with ple-prefetch-step); ple-prefetch-step's runs used storage-tmp/ple-step/tree, the same modules at a795bbb + the same host hunk, which differs from this tree only by kv/sparse-split's lines (fattn-common.cuh, fattn.cu, top-k-mask.cu)",
+   "contains": "exactly the 6 modules on the base, kv-stream and sparse-split in kv, graph-cap in kernels, ple-prefetch-step in host",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 4466,
+   "cap": 4489,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -24,6 +24,14 @@
      "to": 4466,
      "measured": 4466,
      "why": "kv/sparse-split, measured +11.8 tok/s at 256k (3-pair confirm, warm decode [+5.1, +18.5]); owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-19",
+     "approved": "Owner-approved 2026-11-19"
+    },
+    {
+     "from": 4466,
+     "to": 4489,
+     "measured": 4489,
+     "why": "host/ple-prefetch-step, measured +4.8 tok/s at 256k (3-pair confirm, warm decode [+1.2, +8.4], page cache dropped before every arm; +23 lines: the drafter hints each verify token's per-layer embedding rows on the read-ahead thread); owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-19",
      "approved": "Owner-approved 2026-11-19"
     }

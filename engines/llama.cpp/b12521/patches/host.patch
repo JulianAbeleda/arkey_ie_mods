@@ -164,6 +164,54 @@ index 9b9e892d8..96565aa33 100644
      size_t size() const;
  
      bool empty() const;
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index b40eb5535..f1d1926e6 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -1790,6 +1790,27 @@ public:
+     }
+ };
+ 
++// LOCAL (ple-prefetch-step): LLAMA_PLE_PREFETCH_STEP=1 - hint the target's lazily mapped input rows of each token the next
++// verify will read as soon as the token is known (id_last when drafting starts, each draft token when it is sampled), on
++// host/ple-prefetch's background thread, so the verify's gather finds them cached instead of waiting on the disk. A hint
++// changes no byte that is read. Unset = stock.
++static void spec_ple_prefetch(llama_context * ctx_tgt, const llama_tokens * prompt, llama_token id_last, const llama_tokens * drafted) {
++    static const bool on = [] { const char * e = getenv("LLAMA_PLE_PREFETCH_STEP"); return e != nullptr && atoi(e) > 0; }();
++    if (!on || ctx_tgt == nullptr) {
++        return;
++    }
++    const size_t n_pred = 16; // predecessors kept: more than any n-gram an input row is keyed on
++    llama_tokens toks;
++    if (prompt != nullptr) {
++        toks.assign(prompt->begin() + (prompt->size() > n_pred ? prompt->size() - n_pred : 0), prompt->end());
++    }
++    toks.push_back(id_last);
++    if (drafted != nullptr) {
++        toks.insert(toks.end(), drafted->begin(), drafted->end());
++    }
++    llama_model_prefetch_inputs(llama_get_model(ctx_tgt), toks.data(), (int32_t) toks.size(), (int32_t) toks.size() - 1);
++}
++
+ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
+ 
+@@ -2147,6 +2168,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+             batch.set_embd_state(idx, { pending_h[seq_id].data(), 1, (size_t) n_embd });
+ 
+             i_last[seq_id] = idx;
++            spec_ple_prefetch(params.ctx_tgt, dp.prompt, dp.id_last, nullptr); // LOCAL (ple-prefetch-step)
+ 
+             if (chain_heads) {
+                 chain_h[seq_id].assign(pending_h[seq_id].begin(), pending_h[seq_id].end());
+@@ -2218,6 +2240,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                 auto & result = *dp.result;
+ 
+                 result.push_back(id);
++                spec_ple_prefetch(params.ctx_tgt, dp.prompt, dp.id_last, &result); // LOCAL (ple-prefetch-step)
+ 
+                 if (dp.result_q) {
+                     dp.result_q->emplace_back(cur_p->data, cur_p->data + cur_p->size);
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
 index 2e2f9c036..df0865045 100644
 --- a/ggml/src/ggml-backend.cpp
