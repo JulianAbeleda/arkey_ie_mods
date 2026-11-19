@@ -82,16 +82,30 @@
     "src/models/qwen4exp.cpp"
    ],
    "lines": {
-    "added": 1025,
+    "added": 1275,
     "removed": 59
    },
    "budget": {
-    "added": 1080,
+    "added": 1340,
     "removed": 59
    },
    "static": {
     "hunks_removing_stock_lines": 17
-   }
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 1080,
+      "removed": 59
+     },
+     "to": {
+      "added": 1340,
+      "removed": 59
+     },
+     "why": "idx-keys and topk-rowhist join the indexer module (its extension point: the indexer's scorer and top-k kernels, lightning-indexer.cu and top-k.cu)",
+     "date": "2026-11-19"
+    }
+   ]
   },
   {
    "name": "kernels",
@@ -610,6 +624,116 @@
     "keeps 8 x 128 bytes of zeroed device state per stream for the life of the process",
     "the check mode needs GGML_CUDA_DISABLE_GRAPHS=1 (it syncs the stream) and does not enforce it",
     "measured gain is 70% of the derived 0.46 ms/step at ~100k"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "idx-keys",
+   "title": "indexer scores one key a thread for every decode token",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_IDX_KEYS",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_IDX_KEYS_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [
+    "GGML_CUDA_PDL"
+   ],
+   "marker": "LLAMA_IDX_KEYS",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "idx-inplace"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/indexer-topk-20261119 (bench4.out, ident128/, screen/, confirm/)",
+     "numbers": "on b12521 (ident128: 128k context, 30 turns of a 256k session, recorded history, full stack, LLAMA_KV_STREAM=32768): reply sha256 30/30 equal in all four arms: module build with both features, switches off; the module build before the features (sparse-chain tree-b12521); both switches on; both on in check mode (graphs off: 70,000+ indexer calls, 2.39e9 scores bit-identical; 98,000+ top-k calls, 0 differences against the stock fused kernel and a host reference, incl. the sampler's 1 x 248,320 row; no abort). 256k: screen 37/37, confirm 57/57 in 6 runs. Microbench: 0 differing score words, top-k 0 differences on plain and heavy-tie rows",
+     "match": {
+      "what": "reply sha256 per turn, switches on and check mode vs off, and vs the module build without the features (ident128)",
+      "equal": 30,
+      "of": 30
+     }
+    }
+   },
+   "gain": {
+    "value": "+5.4",
+    "unit": "tok/s warm decode [+4.9, +5.8] for idx-keys and topk-rowhist together, turns 60-116 of a 256k session; session wall of those 57 turns -3.4 s [-3.7, -3.0]",
+    "vs": "same build, both switches off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 116-turn session to 256k context, MoE model on the engine's qwen4exp graph (hybrid indexer, 4 heads x 128, k-pool 4, top-k 2048, 4-token verify), q8_0 KV, MTP draft head k=3, the shipped 256k plan (LLAMA_KV_STREAM=52848, GGML_CUDA_GRAPH_MAX_KEYS=2, LLAMA_SPARSE_SPLIT=1); both GGUF files evicted from the page cache before every arm; 3 alternating pairs",
+    "run": "boltbeam-runs/indexer-topk-20261119/confirm"
+   },
+   "exercised_by": "the lightning indexer below the tile kernel's batch (decode verify, catch-up, draft) with 128-dim, 4-head queries over q8_0 keys read in place; measured on the qwen4exp graph",
+   "limits": [
+    "NVIDIA CUDA (HIP and MUSA builds keep the vec kernel); 128-dim, 4-head indexer, 1-7 query tokens, q8_0 keys, one stream, 16-byte aligned queries and 4-byte aligned key rows; otherwise the vec kernel",
+    "the bit-exact claim rests on the vec kernel's reduction tree under the ggml-cuda build flags (-use_fast_math: contracted fma, flush to zero); verified on the SASS and by the check mode",
+    "the 3-blocks-an-SM build (168 registers, a few spills) is chosen when the 2-block grid needs a second wave (from the occupancy query); measured faster at 240k, slower at 102k where it is not chosen"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "topk-rowhist",
+   "title": "fused radix top-k sums each pass's row histogram with atomics",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_TOPK_ROWHIST",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_TOPK_ROWHIST_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [
+    "GGML_CUDA_PDL"
+   ],
+   "marker": "LLAMA_TOPK_ROWHIST",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "topk-fused"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/indexer-topk-20261119 (bench4.out, ident128/, screen/, confirm/)",
+     "numbers": "on b12521 (ident128: 128k context, 30 turns of a 256k session, recorded history, full stack, LLAMA_KV_STREAM=32768): reply sha256 30/30 equal in all four arms: module build with both features, switches off; the module build before the features (sparse-chain tree-b12521); both switches on; both on in check mode (graphs off: 70,000+ indexer calls, 2.39e9 scores bit-identical; 98,000+ top-k calls, 0 differences against the stock fused kernel and a host reference, incl. the sampler's 1 x 248,320 row; no abort). 256k: screen 37/37, confirm 57/57 in 6 runs. Microbench: 0 differing score words, top-k 0 differences on plain and heavy-tie rows",
+     "match": {
+      "what": "reply sha256 per turn, switches on and check mode vs off, and vs the module build without the features (ident128)",
+      "equal": 30,
+      "of": 30
+     }
+    }
+   },
+   "gain": {
+    "value": "+5.4",
+    "unit": "tok/s warm decode [+4.9, +5.8] for idx-keys and topk-rowhist together, turns 60-116 of a 256k session; session wall of those 57 turns -3.4 s [-3.7, -3.0]",
+    "vs": "same build, both switches off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 116-turn session to 256k context, MoE model on the engine's qwen4exp graph (hybrid indexer, 4 heads x 128, k-pool 4, top-k 2048, 4-token verify), q8_0 KV, MTP draft head k=3, the shipped 256k plan (LLAMA_KV_STREAM=52848, GGML_CUDA_GRAPH_MAX_KEYS=2, LLAMA_SPARSE_SPLIT=1); both GGUF files evicted from the page cache before every arm; 3 alternating pairs",
+    "run": "boltbeam-runs/indexer-topk-20261119/confirm"
+   },
+   "exercised_by": "ggml_top_k calls on the LLAMA_TOPK_FUSED path (<= 8 rows, grid <= SMs): the indexer's per-layer top-k at decode and draft, and the backend sampler's top-k over the vocabulary",
+   "limits": [
+    "only with LLAMA_TOPK_FUSED=1 (or its check mode); alone it is ignored",
+    "CUDA only, as topk-fused; its row histograms take 32 KB after the persistent row states per stream",
+    "same picks as the stock fused kernel; the greater picks keep the stock's unordered slots, the tie slots stay in ascending column order"
    ],
    "rule_exceptions": []
   },
@@ -1405,10 +1529,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-ple-step",
-   "path": "storage-tmp/ple-step/tree-check",
-   "what": "base + the 6 module patches at this commit (kv with sparse-split, host with ple-prefetch-step); ple-prefetch-step's runs used storage-tmp/ple-step/tree, the same modules at a795bbb + the same host hunk, which differs from this tree only by kv/sparse-split's lines (fattn-common.cuh, fattn.cu, top-k-mask.cu)",
-   "contains": "exactly the 6 modules on the base, kv-stream and sparse-split in kv, graph-cap in kernels, ple-prefetch-step in host",
+   "id": "modules-idx-keys",
+   "path": "storage-tmp/indexer-topk/btree",
+   "what": "base + the 6 module patches at this commit (indexer with idx-keys and topk-rowhist); the ident128, screen and confirm runs of boltbeam-runs/indexer-topk-20261119 used this tree's build (ident128 before the review's two low fixes, which only add a dispatch alignment condition and a static_assert)",
+   "contains": "exactly the 6 modules on the base, kv-stream and sparse-split in kv, idx-keys and topk-rowhist in indexer, graph-cap in kernels, ple-prefetch-step in host",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",
