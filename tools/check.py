@@ -32,7 +32,11 @@ Per folder
               hunks in one file, the longest depends_on.apply chain, hunks stacked on another mod's added lines; a
               crossing names the files, functions and mods and the extension point to introduce; a cap is derived
               (measured + ceil(measured / series mods)) or an Owner-approved raise to the measured value; a stack
-              health summary prints on every run
+              health summary prints on every run; a cap whose metric dropped (a mod retired or shrunk) fails until it
+              is lowered to measured + ceil(measured / series mods) (the ratchet: freed room is not silently reused)
+Retired (engines.json retired_versions, or a version's mods.json retired list): linted for format (checks 4, 5, 5b,
+  7, 8) and kept in the repo; never applied, never in the stack measurement, never in index.json's current lists
+  (index.json retired names them)
 
 What this does NOT prove: that a hunk which removes or rewrites stock lines keeps the stock behaviour with the switch
 off. That is a run-time fact. Its evidence is each row's output.evidence and check 6. Nothing here compiles or runs
@@ -49,15 +53,16 @@ LOCAL, GIT = {}, None
 LABELS = {"identical", "quality-gated", "untested"}
 ROW_KEYS = {"name", "title", "patch", "engine", "base", "switch", "switch_null_why", "check", "reads", "marker", "files", "lines", "budget",
             "budget_raised", "depends_on", "output", "gain", "exercised_by", "limits", "rule_exceptions", "static", "scrubbed_from",
-            "parked_why", "applies_after"}
+            "parked_why", "applies_after", "retired"}
 ARCH_KEYS = {"name", "kind", "date", "patch", "switch", "written_on", "why", "evidence", "files", "lines", "sha256", "scrubbed_from"}
-SPEC_KEYS = {"schema", "engine", "version", "base", "about", "budget_rule", "mods", "parked", "archived", "tools", "kernels", "engine_flags",
+SPEC_KEYS = {"schema", "engine", "version", "base", "about", "budget_rule", "mods", "parked", "archived", "retired", "tools", "kernels", "engine_flags",
              "tested_trees", "tested_trees_none", "verified", "also_applies_to"}
 GAIN_KEYS = {"value", "unit", "vs", "conditions", "run", "basis"}
 EVID_KEYS = {"run", "numbers", "match", "gate"}
 TOP_FILES = {".git", ".githooks", ".gitignore", "DETAILS.md", "LICENSE", "LICENSES", "README.md", "engines", "engines.json", "index.json",
              "tools", "local.json", "local.example.json", "archive-ledger.json", "__pycache__", "benchmarks"}
-VERSION_ENTRIES = {"mods.json", "stack_budget.json", "patches", "parked", "archive", "tools", "kernels"}
+VERSION_ENTRIES = {"mods.json", "stack_budget.json", "patches", "parked", "archive", "retired", "tools", "kernels"}
+RETIRED_KEYS = {"date", "why"}  # a retired mod's row "retired", and an engines.json retired_versions entry
 KERNEL_KEYS = {"name", "dir", "hook", "files", "source", "lines", "budget", "output", "gain", "exercised_by", "limits"}
 INDEX_MOD_KEYS = {"id", "engine", "version", "name", "title", "state", "order", "applier", "base", "switch", "switch_null_why", "check", "check_needs",
                   "marker", "knobs", "output", "patch", "sha256", "lines", "budget", "files", "depends_on", "rule_exceptions"}
@@ -350,6 +355,17 @@ def check_row(m, spec, engine_row, lint, rel):
     return bad
 
 
+def retired_version(engine_row, version):
+    """the engines.json retired_versions entry {date, why} of a version, or None (an active version)."""
+    return (engine_row.get("retired_versions") or {}).get(version)
+
+
+def retired_bad(r):
+    if not isinstance(r, dict) or set(r) != RETIRED_KEYS or not DATE_RE.match(str(r.get("date", ""))) or not str(r.get("why") or "").strip():
+        return ["needs exactly {date: YYYY-MM-DD, why}"]
+    return []
+
+
 def present(engine_row, kind, name, text):
     tmpl = (engine_row.get("switch_presence") or {}).get(kind)
     if not tmpl:
@@ -364,8 +380,10 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
     if set(spec) - SPEC_KEYS:
         say("FAIL", f"spec    unknown keys {sorted(set(spec) - SPEC_KEYS)}")
     rows = spec.get("mods", []) + spec.get("parked", [])
+    retired = spec.get("retired", [])
+    retired_v = retired_version(engine_row, spec["version"])
     names = [m["name"] for m in rows]
-    allnames = names + [z["name"] for z in spec.get("archived", [])]
+    allnames = names + [m["name"] for m in retired] + [z["name"] for z in spec.get("archived", [])]
     if len(set(allnames)) != len(allnames):
         say("FAIL", f"names   not unique in {rel}: {sorted({n for n in allnames if allnames.count(n) > 1})}")
     if spec.get("engine") != os.path.basename(os.path.dirname(folder)) or spec.get("version") != os.path.basename(folder):
@@ -374,7 +392,7 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
     check_archive(folder, spec, lint)
     ledger_sha = {e["sha256"]: e["id"] for e in ledger}
     ledger_sw = {e["switch"]: e["id"] for e in ledger if e.get("switch")}
-    if not rows:
+    if not rows and not retired:
         say("ok", "archive only: no series, nothing to apply")
         return
     kind = engine_row.get("applier")
@@ -385,11 +403,11 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
     if kind not in APPLIERS or not reg["appliers"].get(kind, {}).get("implemented") or bkind not in BASES:
         say("FAIL", f"engine  no applier or base check for this engine (applier {kind}, base {bkind})")
         return
-    info = {m["name"]: parse(os.path.join(folder, m["patch"])) for m in rows}
+    info = {m["name"]: parse(os.path.join(folder, m["patch"])) for m in rows + retired}
     path = lambda m: os.path.join(folder, m["patch"])
-    by_name = {m["name"]: m for m in rows}
+    by_name = {m["name"]: m for m in rows + retired}
     old = head_json(f"{rel}/mods.json")
-    old_rows = {m["name"]: m for m in (old or {}).get("mods", []) + (old or {}).get("parked", [])} if old else {}
+    old_rows = {m["name"]: m for k in ("mods", "parked", "retired") for m in (old or {}).get(k, [])} if old else {}
     if GIT is None:
         say("SKIP", "history no git history here: budget changes against HEAD unchecked")
 
@@ -406,7 +424,8 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
         say("FAIL", f"budget  budget_rule {spec.get('budget_rule')!r} not in {sorted(BUDGET_RULES)}")
     regexes = [re.compile(engine_row[k]) for k in ("switch_literal_regex", "env_read_regex") if engine_row.get(k)]
     tot_a = tot_r = 0
-    for m in rows:
+    retired_names = {m["name"] for m in retired}
+    for m in rows + retired:
         files, a, r, mod, text, _ = info[m["name"]]
         hdr = header(path(m))
         series = m in spec["mods"]
@@ -431,6 +450,13 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
         say("FAIL" if bad else "ok", f"lines   {m['name']:22} +{a:<4} -{r:<3} budget +{b['added']:<4} -{b['removed']:<3} files {len(files)}" + ("  " + "; ".join(bad) if bad else ""))
         sw, ck = sw_name(m), (m.get("check") or {}).get("name")
         bad = check_row(m, spec, engine_row, lint, rel) + ["a series mod needs a title"] * (m in spec.get("mods", []) and not m.get("title"))
+        if m in retired:
+            bad += [f"retired: {x}" for x in retired_bad(m.get("retired"))]
+            bad += [f"a retired patch lives in retired/, not {m['patch']}"] * (not m["patch"].startswith("retired/"))
+        else:
+            bad += ["only a row in the retired list has a retired entry"] * ("retired" in m)
+            bad += [f"depends on retired {sorted(set(m['depends_on']['apply'] + m['depends_on']['run']) & retired_names)}: "
+                    f"un-retire it or drop the dependency"] * bool(set(m["depends_on"]["apply"] + m["depends_on"]["run"]) & retired_names)
         for nm, k in ((sw, (m.get("switch") or {}).get("kind")), (ck, (m.get("check") or {}).get("kind"))):
             if nm:
                 p = present(engine_row, k, nm, text)
@@ -460,8 +486,21 @@ def check_folder(folder, engine_row, reg, lint, ledger, strict):
         guard = "additive only" if mod == 0 else f"{mod} hunks rewrite stock lines"
         exc = f"; exceptions: {', '.join(e['rule'] for e in m.get('rule_exceptions', []))}" if m.get("rule_exceptions") else ""
         say("FAIL" if bad else "ok", f"switch  {m['name']:22} {swtxt}; {note}; {guard}; output {m['output']['label']}{exc}" + ("  " + "; ".join(bad) if bad else ""))
-    print(f"  total   series: {len(spec['mods'])} patches, +{tot_a} -{tot_r} lines; parked: {len(spec.get('parked', []))}; archived: {len(spec.get('archived', []))}")
+    print(f"  total   series: {len(spec['mods'])} patches, +{tot_a} -{tot_r} lines; parked: {len(spec.get('parked', []))}; "
+          f"retired: {len(retired)}; archived: {len(spec.get('archived', []))}")
+    if retired_v:
+        say("ok", f"retired version ({retired_v.get('date') if isinstance(retired_v, dict) else '?'}): linted only; not applied, not in the stack measurement, not in "
+                  f"index.json's current lists")
+        if os.path.exists(os.path.join(folder, "stack_budget.json")):
+            say("FAIL", "stack   a retired version keeps no stack_budget.json (git history has it; un-retiring derives caps again)")
+        return
+    if not rows:
+        return
 
+    for t in spec.get("tested_trees", []):
+        gone = [p for p in t.get("apply", []) if not os.path.isfile(os.path.join(folder, p))]
+        if gone:
+            say("FAIL", f"tree    {t.get('id')}: apply lists {gone}, not files of this folder (a retired or archived patch moved: update the path)")
     if not spec.get("tested_trees") and not (spec.get("tested_trees_none") or {}).get("why"):
         say("FAIL", "tree    a folder with mods needs tested_trees or tested_trees_none {why}")
 
@@ -577,7 +616,7 @@ STACK_METRICS = {  # name: (what, the refactor a crossing suggests)
 }
 STACK_KEYS = {"schema", "about", "margin_rule", "caps"}
 CAP_KEYS = {"cap", "set", "raised"}
-SET_KEYS = {"measured", "mods", "date"}
+SET_KEYS = {"measured", "mods", "date", "after_raises"}  # after_raises: the raised entries before a re-derived (lowered) set
 RAISE_KEYS = {"from", "to", "measured", "why", "date", "approved"}
 APPROVED_RE = re.compile(r"Owner-approved \d{4}-\d{2}-\d{2}$")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}$")
@@ -708,13 +747,18 @@ def stack_values(spec, folder, base=None):
 
 
 def stack_authorized(name, e):
-    """the cap an entry may hold, or the reasons it holds none: the last Owner-approved raise, else the derived set."""
+    """the cap an entry may hold and the measurement it rests on, or the reasons it holds none: the last Owner-approved
+    raise after the set, else the derived set. A set re-derived lower (the ratchet) records after_raises, the count of
+    raised entries before it: those stay (append-only) as history and no longer chain."""
     bad = [f"{name}: unknown keys {sorted(set(e) - CAP_KEYS)}"] if set(e) - CAP_KEYS else []
-    s = e.get("set") or {}
-    if set(s) - SET_KEYS or not isinstance(s.get("measured"), int) or not isinstance(s.get("mods"), int) or not DATE_RE.match(str(s.get("date", ""))):
-        return None, bad + [f"{name}: set needs {{measured, mods, date}} (the measurement the derived cap comes from)"]
-    cap = stack_margin(s["measured"], s["mods"])
-    for r in e.get("raised") or []:
+    s, raised = e.get("set") or {}, e.get("raised") or []
+    k = s.get("after_raises", 0)
+    if set(s) - SET_KEYS or not isinstance(s.get("measured"), int) or not isinstance(s.get("mods"), int) or not DATE_RE.match(str(s.get("date", ""))) \
+            or not isinstance(k, int) or not 0 <= k <= len(raised):
+        return None, None, bad + [f"{name}: set needs {{measured, mods, date}} (the measurement the derived cap comes from), "
+                                  f"after_raises 0..{len(raised)} when given"]
+    cap, basis = stack_margin(s["measured"], s["mods"]), s["measured"]
+    for r in raised[k:]:
         miss = [k for k in ("from", "to", "measured", "why", "date", "approved") if r.get(k) in (None, "")]
         if set(r) - RAISE_KEYS or miss:
             bad.append(f"{name}: a raise needs {{from, to, measured, why, date, approved}}" + (f" (missing {miss})" if miss else ""))
@@ -725,8 +769,16 @@ def stack_authorized(name, e):
             bad.append(f"{name}: raise from {r['from']}, the cap before it is {cap}")
         if r["to"] != r["measured"]:
             bad.append(f"{name}: raise to {r['to']} is not its measured value {r['measured']} (a cap rises only to what was measured after review cuts)")
-        cap = r["to"]
-    return cap, bad
+        cap, basis = r["to"], r["measured"]
+    return cap, basis, bad
+
+
+def stack_lower_hint(rel, lows, n, raised):
+    """the exact values that lower drifted caps: set re-derived from today's measurement, cap its margin."""
+    today = __import__("datetime").date.today().isoformat()
+    return "; ".join(f"{rel}/stack_budget.json caps.{name}: \"cap\": {stack_margin(val, n)}, \"set\": "
+                     + json.dumps({"measured": val, "mods": n, "date": today, **({"after_raises": len(raised[name])} if raised[name] else {})})
+                     + f" (was cap {cap}, measured {basis})" for name, val, cap, basis in lows)
 
 
 def stack_raise_hint(rel, name, val, cap):
@@ -762,10 +814,13 @@ def check_stack(folder, spec, base=None, head=None):
     bad = [f"unknown keys {sorted(set(sb) - STACK_KEYS)}"] * bool(set(sb) - STACK_KEYS)
     bad += [f"caps must be exactly {sorted(STACK_METRICS)}"] * (set(caps) != set(STACK_METRICS))
     head_caps = (head or {}).get("caps") or {}
+    lows = []
     for name in sorted(set(caps) & set(STACK_METRICS)):
         e = caps[name]
-        auth, b = stack_authorized(name, e)
+        auth, basis, b = stack_authorized(name, e)
         bad += b
+        if auth is not None and e.get("cap") == auth and vals[name] < basis and stack_margin(vals[name], len(mods)) < auth:
+            lows.append((name, vals[name], auth, basis))
         h = head_caps.get(name)
         s = e.get("set") or {}
         if s != (h or {}).get("set") and (s.get("measured"), s.get("mods")) != (vals[name], len(mods)):
@@ -787,6 +842,15 @@ def check_stack(folder, spec, base=None, head=None):
         say("FAIL", f"stack   {rel}/stack_budget.json {b}")
     if bad:
         return
+    PLACED = ("overlap_hunks_per_file", "stacked_hunks")  # hunk placement: exact only with the base checkout
+    if base is None and any(n in PLACED for n, *_ in lows):
+        say("SKIP", f"stack   ratchet: {', '.join(n for n, *_ in lows if n in PLACED)} dropped, but without the base checkout hunk "
+                    f"placement is approximate; run with the checkout to lower: " + stack_lower_hint(rel, [x for x in lows if x[0] in PLACED], len(mods), {n: caps[n].get("raised") or [] for n in caps}))
+        lows = [x for x in lows if x[0] not in PLACED]
+    if lows:
+        say("FAIL", f"stack   ratchet: {', '.join(n for n, *_ in lows)} dropped below the measurement the cap rests on (a mod "
+                    f"retired or shrunk); freed room is not kept as headroom. Lower to measured + ceil(measured / {len(mods)} mods): "
+                    + stack_lower_hint(rel, lows, len(mods), {n: caps[n].get("raised") or [] for n in caps}))
     hot, top = why["hot"], why["hot"][0] if why["hot"] else (None, {"mods": []})
 
     def funcs(f):
@@ -849,13 +913,13 @@ def check_archive(folder, spec, lint):
 
 
 def check_files(folder, spec):
-    rows = spec.get("mods", []) + spec.get("parked", []) + spec.get("archived", [])
+    rows = spec.get("mods", []) + spec.get("parked", []) + spec.get("retired", []) + spec.get("archived", [])
     known = {m["patch"] for m in rows} | {t["path"] for t in spec.get("tools", [])} | {"archive/README.md"} | \
         {os.path.join(k["dir"], f) for k in spec.get("kernels", []) for f in k["files"]}
     for e in sorted(os.listdir(folder)):
         if e not in VERSION_ENTRIES:
             say("FAIL", f"files   {e} is not part of a version folder ({sorted(VERSION_ENTRIES)})")
-    for sub in ("patches", "parked", "archive", "tools", "kernels"):
+    for sub in ("patches", "parked", "archive", "retired", "tools", "kernels"):
         d = os.path.join(folder, sub)
         for dd, dirs, fs in os.walk(d):
             dirs[:] = [x for x in dirs if x != "__pycache__"]
@@ -948,7 +1012,7 @@ def check_docs(reg, lint):
                 n += 1
     for f in folders_all():
         spec = json.load(open(os.path.join(f, "mods.json")))
-        rest = {k: v for k, v in spec.items() if k not in ("mods", "parked", "archived")}
+        rest = {k: v for k, v in spec.items() if k not in ("mods", "parked", "archived", "retired")}
         for s_ in strings(rest):
             for x in lint.text(spec["engine"], s_):
                 say("FAIL", f"docs    {os.path.relpath(f, ROOT)}/mods.json (folder fields): {x}")
@@ -983,6 +1047,9 @@ def check_layout(reg):
                 bad.append(f"engines/{e}/{v} has no mods.json")
         if sorted(reg["engines"][e].get("versions", [])) != vs:
             bad.append(f"engines.json {e} versions {sorted(reg['engines'][e].get('versions', []))} != folders {vs}")
+        for v, r in (reg["engines"][e].get("retired_versions") or {}).items():
+            bad += [f"engines.json {e} retired_versions {v} is not one of its versions"] * (v not in vs)
+            bad += [f"engines.json {e} retired_versions {v}: {x}" for x in retired_bad(r)]
     for e, row in reg["engines"].items():
         if row.get("versions") and not os.path.isdir(os.path.join(top, e)):
             bad.append(f"engines.json {e} lists versions but engines/{e} does not exist")
@@ -1028,13 +1095,31 @@ def build_index(reg):
                     "schema it reads and whose requires it meets) and records that commit; do not copy rows out of it. Gains, "
                     "limits, conditions and evidence live in each mods.json at the same commit. id = engine/version/name.",
            "requires": {k: v for k, v in (reg.get("requires") or {}).items() if k != "why"},
-           "versions": [], "mods": [], "kernels": [], "archived": [], "tools": []}
+           "versions": [], "mods": [], "kernels": [], "archived": [], "tools": [], "retired": {"versions": [], "mods": []}}
     for f in folders_all():
         spec = json.load(open(os.path.join(f, "mods.json")))
         e, v = spec["engine"], spec["version"]
         row = reg["engines"].get(e, {})
         rel = os.path.relpath(f, ROOT)
         base = {k: spec["base"][k] for k in ("kind", "commit", "tag", "release", "package", "version", "record_sha256") if spec["base"].get(k)}
+        rv = retired_version(row, v)
+        # retired: named so a consumer can say why, never offered (not in versions, mods, kernels or tools)
+        for state, rows in (("series", spec.get("mods", [])), ("parked", spec.get("parked", [])), ("retired", spec.get("retired", []))):
+            for m in rows if rv or state == "retired" else []:
+                r = rv or m.get("retired")
+                if retired_bad(r):  # check_folder and check_layout fail it; never listed as current
+                    continue
+                out["retired"]["mods"].append({"id": f"{e}/{v}/{m['name']}", "engine": e, "version": v, "name": m["name"], "title": m.get("title"),
+                                               "was": state, "by": "version" if rv else "mod", "date": r["date"], "why": r["why"],
+                                               "patch": os.path.join(rel, m["patch"]), "sha256": sha256(os.path.join(f, m["patch"])), "lines": m["lines"]})
+        if rv and not retired_bad(rv):
+            out["retired"]["versions"].append({"engine": e, "version": v, "base": base, "date": rv["date"], "why": rv["why"]})
+        if rv:
+            for z in spec.get("archived", []):
+                out["archived"].append({"id": f"{e}/{v}/{z['name']}", "engine": e, "version": v, "name": z["name"], "kind": z["kind"],
+                                        "switch": z.get("switch"), "date": z["date"], "patch": os.path.join(rel, z["patch"]),
+                                        "sha256": z["sha256"], "lines": z["lines"]})
+            continue
         trees = spec.get("tested_trees") or []
         out["versions"].append({"engine": e, "version": v, "base": base, "applier": row.get("applier"),
                                 "verified": {"state": "tree" if trees else "none",
@@ -1062,7 +1147,7 @@ def build_index(reg):
         for t in spec.get("tools", []):
             out["tools"].append({"id": f"{e}/{v}/{os.path.basename(t['path'])}", "engine": e, "version": v, "path": os.path.join(rel, t["path"]),
                                  "sha256": t["sha256"], "needs": t.get("needs", []), "what": t["what"]})
-    ids = [x["id"] for k in ("mods", "kernels", "archived", "tools") for x in out[k]]
+    ids = [x["id"] for k in ("mods", "kernels", "archived", "tools") for x in out[k]] + [x["id"] for x in out["retired"]["mods"]]
     if len(set(ids)) != len(ids):
         say("FAIL", f"index   ids not unique: {sorted({i for i in ids if ids.count(i) > 1})}")
     for x in out["mods"]:

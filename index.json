@@ -2703,5 +2703,9 @@
    ],
    "what": "SRC DST: a copy of a single-file Quark W4A16 checkpoint with lm_head quantized like its linear layers (int4 symmetric, groups of 128, scale amax / 7.5, AWQ nibble order). Needs torch and safetensors. Not a patch."
   }
- ]
+ ],
+ "retired": {
+  "versions": [],
+  "mods": []
+ }
 }

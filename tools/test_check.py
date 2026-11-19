@@ -277,5 +277,134 @@ class PerMod(Fixture):
         self.assertTrue(any("OVER BUDGET" in f and " b " in f for f in fails))
 
 
+RETIRED = {"date": "2026-11-18", "why": "fixture: decommissioned"}
+
+
+class Ratchet(Fixture):
+    """A metric that drops (a mod retired or shrunk) fails until its cap is lowered to the new margin."""
+
+    def test_stale_headroom_fails_and_prints_the_new_caps(self):
+        full = budget_for(self.mods, self.folder)
+        self.write_budget(full)
+        _, fails = self.stack(self.mods[:2], head=full)  # c retired: total 3 -> 2, cap 4 kept = stale headroom
+        f = next(f for f in fails if "ratchet" in f)
+        self.assertIn('caps.total_lines: "cap": 3, "set": {"measured": 2, "mods": 2', f)
+        self.assertIn("(was cap 4, measured 3)", f)
+
+    def test_lowered_to_the_new_margin_passes(self):
+        full = budget_for(self.mods, self.folder)
+        self.write_budget(budget_for(self.mods[:2], self.folder))
+        _, fails = self.stack(self.mods[:2], head=full)
+        self.assertEqual(fails, [])
+
+    def test_freed_room_needs_a_raise_to_be_reused(self):
+        lowered = budget_for(self.mods[:2], self.folder)
+        self.write_budget(budget_for(self.mods, self.folder))  # c back, caps re-derived instead of raised
+        _, fails = self.stack(self.mods, head=lowered)
+        self.assertTrue(any("total_lines: cap 3 -> 4 against HEAD without a new Owner-approved raise" in f for f in fails))
+
+    def test_raise_without_a_reason_still_refused(self):
+        sb = budget_for(self.mods[:2], self.folder)
+        sb["caps"]["total_lines"]["raised"].append({"from": 3, "to": 3, "measured": 3, "date": "2026-11-18",
+                                                    "approved": "Owner-approved 2026-11-18"})
+        self.write_budget(sb)
+        _, fails = self.stack(self.mods, head=budget_for(self.mods[:2], self.folder))
+        self.assertTrue(any("missing ['why']" in f for f in fails))
+
+    def test_lowering_a_raised_cap_keeps_the_raise_as_history(self):
+        sb = budget_for(self.mods[:1], self.folder)
+        sb["caps"]["total_lines"].update({"cap": 3, "raised": [{"from": 2, "to": 3, "measured": 3, "why": "02 and 03", "date": "2026-11-18",
+                                                                "approved": "Owner-approved 2026-11-18"}]})
+        self.write_budget(sb)
+        _, fails = self.stack(self.mods[:1], head=sb)  # b and c retired: total 1 under a cap raised for 3
+        f = next(f for f in fails if "ratchet" in f)
+        self.assertIn('"cap": 2, "set": {"measured": 1, "mods": 1', f)
+        self.assertIn('"after_raises": 1', f)
+        low = json.loads(json.dumps(sb))
+        low["caps"]["total_lines"].update({"cap": 2, "set": {"measured": 1, "mods": 1, "date": "2026-11-18", "after_raises": 1}})
+        self.write_budget(low)
+        c.fails.clear()
+        _, fails = self.stack(self.mods[:1], head=sb)
+        self.assertEqual(fails, [])
+
+
+class Retired(Fixture):
+    """A retired mod or version: linted, never applied, never in the stack measurement or index.json's current lists."""
+
+    def run_folder(self, mods, retired=(), version_retired=None):
+        spec = {"schema": "x", "engine": "eng", "version": "1.0", "base": {"kind": "git_commit", "commit": "0" * 40},
+                "about": "fixture", "budget_rule": "measured", "mods": mods, "parked": [], "retired": list(retired), "archived": [],
+                "tested_trees_none": {"why": "fixture"}}
+        write(os.path.join(self.folder, "mods.json"), json.dumps(spec))
+        self.erow = {"applier": "git_apply", "base_identity": {"kind": "git_commit"}, "switch_kinds": {},
+                     "switch_literal_regex": "\"(ZZZ_[A-Z]+)\"", "env_read_regex": "getenv\\(\"([^\"]+)\"\\)", "switch_presence": {},
+                     **({"retired_versions": {"1.0": version_retired}} if version_retired else {})}
+        self.reg = {"engines": {"eng": self.erow}, "appliers": {"git_apply": {"implemented": True}},
+                    "lint": {"model_name_regex": "zzzmodel", "private_regex": "zzzprivate"}}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            c.check_folder(self.folder, self.erow, self.reg, c.Lint(self.reg), [], False)
+        return out.getvalue(), list(c.fails)
+
+    def retire(self, name):
+        m = next(m for m in self.mods if m["name"] == name)
+        os.makedirs(os.path.join(self.folder, "retired"), exist_ok=True)
+        new = m["patch"].replace("patches/", "retired/")
+        os.rename(os.path.join(self.folder, m["patch"]), os.path.join(self.folder, new))
+        return dict(m, patch=new, retired=RETIRED)
+
+    def index(self):
+        root, c.ROOT = c.ROOT, self.tmp
+        try:
+            return json.loads(c.build_index(self.reg))
+        finally:
+            c.ROOT = root
+
+    def test_retired_mod_is_linted_but_not_counted(self):
+        gone = self.retire("c")
+        self.write_budget(budget_for(self.mods[:2], self.folder))
+        out, fails = self.run_folder(self.mods[:2], [gone])
+        self.assertEqual(fails, [], out)
+        self.assertIn("lines   c ", out)  # still linted
+        self.assertIn("retired: 1", out)
+        self.assertIn("stack health (2 series mods", out)
+        self.assertRegex(out, r"total_lines +2 / cap 3")
+        idx = self.index()
+        self.assertEqual([m["id"] for m in idx["mods"]], ["eng/1.0/a", "eng/1.0/b"])
+        self.assertEqual([(m["id"], m["was"], m["by"]) for m in idx["retired"]["mods"]], [("eng/1.0/c", "retired", "mod")])
+
+    def test_retired_mod_needs_date_why_and_retired_folder(self):
+        gone = self.retire("c")
+        gone["retired"] = {"date": "soon"}
+        self.write_budget(budget_for(self.mods[:2], self.folder))
+        _, fails = self.run_folder(self.mods[:2], [gone])
+        self.assertTrue(any("retired: needs exactly {date: YYYY-MM-DD, why}" in f for f in fails))
+        idx = self.index()  # a malformed entry is neither current nor listed, and the export does not crash
+        self.assertEqual(([m["id"] for m in idx["mods"]], idx["retired"]["mods"]), (["eng/1.0/a", "eng/1.0/b"], []))
+
+    def test_series_mod_on_a_retired_mod_fails(self):
+        gone = self.retire("b")
+        self.write_budget(budget_for([self.mods[0], self.mods[2]], self.folder))
+        _, fails = self.run_folder([self.mods[0], self.mods[2]], [gone])
+        self.assertTrue(any("depends on retired ['b']" in f for f in fails))
+
+    def test_retired_version_is_linted_but_not_counted(self):
+        out, fails = self.run_folder(self.mods, version_retired=RETIRED)
+        self.assertEqual(fails, [], out)
+        self.assertIn("lines   c ", out)
+        self.assertIn("retired version (2026-11-18)", out)
+        self.assertNotIn("stack health", out)
+        idx = self.index()
+        self.assertEqual((idx["versions"], idx["mods"]), ([], []))
+        self.assertEqual([v["version"] for v in idx["retired"]["versions"]], ["1.0"])
+        self.assertEqual([(m["id"], m["was"], m["by"]) for m in idx["retired"]["mods"]],
+                         [("eng/1.0/a", "series", "version"), ("eng/1.0/b", "series", "version"), ("eng/1.0/c", "series", "version")])
+
+    def test_retired_version_keeps_no_stack_budget(self):
+        self.write_budget(budget_for(self.mods, self.folder))
+        _, fails = self.run_folder(self.mods, version_retired=RETIRED)
+        self.assertTrue(any("a retired version keeps no stack_budget.json" in f for f in fails))
+
+
 if __name__ == "__main__":
     unittest.main()
