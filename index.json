@@ -2436,6 +2436,54 @@
    ]
   },
   {
+   "id": "llama.cpp/b12521/sched-async-inputs",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "sched-async-inputs",
+   "title": "scheduler uploads host inputs on the split's stream, no host sync",
+   "state": "series",
+   "order": 19,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "GGML_SCHED_ASYNC_INPUTS",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "GGML_SCHED_ASYNC_INPUTS_CHECK",
+   "check_needs": [
+    "GGML_SCHED_ASYNC_INPUTS"
+   ],
+   "marker": "GGML_SCHED_ASYNC_INPUTS",
+   "knobs": [
+    "GGML_SCHED_ASYNC_INPUTS"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/20-sched-async-inputs.patch",
+   "sha256": "64fc9d3910b8b4b935825291021f64a1f19a2f23b5bc7d0785163c6a5773a86c",
+   "lines": {
+    "added": 82,
+    "removed": 0
+   },
+   "budget": {
+    "added": 90,
+    "removed": 0
+   },
+   "files": [
+    "ggml/src/ggml-backend.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": []
+  },
+  {
    "id": "vllm/0.31.0/split-kv-verify",
    "engine": "vllm",
    "version": "0.31.0",

@@ -1148,6 +1148,67 @@
     "hunks_removing_stock_lines": 11,
     "note": "rewrites lines of 09's ext-kernels.cpp (the loader and the match/launch function) and its one call site in ggml-cuda.cu (the returned node count is now used: i += n - 1); no engine line outside 09's is changed"
    }
+  },
+  {
+   "name": "sched-async-inputs",
+   "title": "scheduler uploads host inputs on the split's stream, no host sync",
+   "patch": "patches/20-sched-async-inputs.patch",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_SCHED_ASYNC_INPUTS",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "GGML_SCHED_ASYNC_INPUTS_CHECK",
+    "needs": [
+     "GGML_SCHED_ASYNC_INPUTS"
+    ]
+   },
+   "reads": [],
+   "marker": "GGML_SCHED_ASYNC_INPUTS",
+   "files": [
+    "ggml/src/ggml-backend.cpp"
+   ],
+   "lines": {
+    "added": 82,
+    "removed": 0
+   },
+   "budget": {
+    "added": 90,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/host-idle-b-20261118 (ab-chk20, ab-confirm20); boltbeam-runs/host-idle-a-20261118 (ab-ident, 1.0.0)",
+     "numbers": "on b12521 + 02-19 (build20, the 0.3.29 switch set, -ncmoe 0, region manifest for 6f311d7a): check mode (every staged copy synced, read back and compared) at least 20,000 copies (the check logs every 20,000), 0 differ, replies 8/8 equal to the switch-off arm (ab-chk20, turns 1-8). Confirm, 6 alternating pairs, 59-turn 128k session: decode 237.7 -> 240.9 tok/s, +3.2 [+1.3, +5.2] (+1.35%; clean turns +3.5 [+1.2, +5.9]); by depth +4.2 / +3.7 / +3.7 / +1.8 tok/s (<=31k / 66k / 97k / 129k); session wall 145.8 -> 143.8 s, -2.0 [-5.0, +1.0]; prefill -7 ms/turn [-39, +25]; replies 59/59 in all 12 runs. On 1.0.0 (host-idle-a): >= 260,000 staged copies, 0 differ; 2 x 3-pair confirms within noise (+0.4%, +1.3%).",
+     "match": {
+      "what": "reply sha256 per turn on b12521, switch on vs off (ab-confirm20, 6 pairs, 59 turns; ab-chk20 with check mode, turns 1-8)",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "exercised_by": "every graph compute whose split inputs come from host buffers of a CPU backend into device buffers, one backend copy (n_copies 1) with set_tensor_async: measured on llama's per-ubatch inputs (tokens, positions, masks, out ids, index lists, draft inputs) at -ncmoe 0; CPU-split results (experts in RAM) were exercised on 1.0.0 only",
+   "limits": [
+    "only host-buffer sources from a CPU backend into device buffers with set_tensor_async and n_copies == 1; others keep the stock sync and copy",
+    "staging uses the first device backend it meets; on several GPUs the others keep the stock path",
+    "a pinned 4 x 1 MiB staging ring per scheduler (each graph slot's scheduler has its own); a chunk is reused after an event behind its last copy completes",
+    "GGML_SCHED_ASYNC_INPUTS_CHECK turns check mode on when set to any value, 0 included",
+    "decode gain ~1.35% on the 128k chat (smaller at the deepest band); prefill and session wall within noise"
+   ],
+   "rule_exceptions": [],
+   "static": {
+    "hunks_removing_stock_lines": 0,
+    "note": "additive: with the switch unset stage_mode is 0 and ggml_backend_sched_copy_input runs the stock path"
+   }
   }
  ],
  "parked": [],
