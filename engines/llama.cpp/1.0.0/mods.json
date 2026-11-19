@@ -1333,6 +1333,66 @@
     "hunks_removing_stock_lines": 11,
     "note": "rewrites lines of 09's ext-kernels.cpp (the loader and the match/launch function) and its one call site in ggml-cuda.cu (the returned node count is now used: i += n - 1); no engine line outside 09's is changed"
    }
+  },
+  {
+   "name": "graph-cap",
+   "title": "a context keeps CUDA graph executables for at most K graphs",
+   "patch": "patches/20-graph-cap.patch",
+   "engine": "llama.cpp",
+   "base": "1.0.0",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_GRAPH_MAX_KEYS",
+    "on": "2"
+   },
+   "check": null,
+   "reads": [
+    "GGML_CUDA_GRAPH_STATS"
+   ],
+   "marker": "GGML_CUDA_GRAPH_MAX_KEYS",
+   "files": [
+    "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ],
+   "lines": {
+    "added": 93,
+    "removed": 0
+   },
+   "budget": {
+    "added": 100,
+    "removed": 0
+   },
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "static": {
+    "hunks_removing_stock_lines": 0
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/graph-cap-20261119",
+     "numbers": "home RTX 5090, shipped 128k plan (-c 131072 -ncmoe 0 -b 1024, hot-set draft, full 0.3.29 switch set), 1.0.0 + 01-20: session-ab ab100k GGML_CUDA_GRAPH_MAX_KEYS 0 (G0) vs 2 (G1), 59 turns, recorded history: reply sha256 59/59 equal; warm decode 238.7 -> 238.8 tok/s (+0.1), prefill 656 -> 656 ms (+0), session wall 146.0 -> 145.9 s (-0.1), 1 pair. load-probe --stress (scored + sampler-variant requests at 23 lengths after the session): keys 2: no crash, growth 6.0 MiB twice (v100k-a with GGML_CUDA_GRAPH_STATS: 0 evictions in the session phase; v100k-b without), plateau; the same stress with the switch unset (stats128-a, and stress128-shipped on the c4 build): OOM at cudaGraphInstantiate, 173 live executables in 12 keys at 0.66 MiB each",
+     "match": {
+      "what": "reply sha256 per turn, switch 2 vs 0, same build (ab100k)",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "exercised_by": "a server whose sampler settings change between requests (backend sampling, -bs): each change reallocates the graph's tensor memory, so the CUDA graph cache sees a new key and the old one is dead; measured with scored (logprobs) and sampler-variant requests",
+   "limits": [
+    "bounds executables per backend context at K x chunks per graph x ~0.66 MiB (measured 0.66, stock 0.68 MiB for ~220-node chunks); chunks = ceil(nodes in the context's largest CUDA split graph / GGML_CUDA_GRAPH_CHUNK_SIZE, default 512): 15 target and 1 draft on the measured plan",
+    "K below a context's steady keys makes it recapture every step: measured steady keys are 1 (target) and 2 (MTP draft with graph-slots); a plan with more CUDA splits per step (e.g. -ncmoe > 0) needs K measured with GGML_CUDA_GRAPH_STATS first",
+    "a dead key stays until the next new key arrives (growth 10 MiB at K 2, not 0)",
+    "GGML_CUDA_GRAPH_STATS synchronizes the stream around each executable it logs: diagnostics only, not for timed runs"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the switch only destroys cached CUDA graph executables earlier than the 10 s idle sweep would; a destroyed graph is captured again on its next use, so what is computed does not change. Identity rests on the 59/59 reply pair"
+    }
+   ]
   }
  ],
  "parked": [
@@ -1772,6 +1832,34 @@
     "patches/12-topk-fused.patch",
     "patches/13-graph-slots.patch",
     "patches/19-ext-kernels-window.patch"
+   ]
+  },
+  {
+   "id": "graph-cap",
+   "path": "boltbeam-runs/graph-cap-20261119/src-100",
+   "what": "the tree the 1.0.0 graph-cap build (v100k-a/b, ab100k) was built from",
+   "contains": "exactly the series 01-20 on the base",
+   "apply": [
+    "patches/01-kpool-incremental.patch",
+    "patches/02-sparse-direct.patch",
+    "patches/03-idx-pooled.patch",
+    "patches/04-mtp-share-head.patch",
+    "patches/05-kpool-input-device.patch",
+    "patches/06-seq-rm-indexed.patch",
+    "patches/07-fattn-vec-skip.patch",
+    "patches/08-idx-inplace.patch",
+    "patches/09-ext-kernels.patch",
+    "patches/10-moe-inplace.patch",
+    "patches/11-ckpt-pinned.patch",
+    "patches/12-topk-fused.patch",
+    "patches/13-graph-slots.patch",
+    "patches/14-tokenize-incr.patch",
+    "patches/15-ple-prefetch.patch",
+    "patches/16-rs-one-copy.patch",
+    "patches/17-cublas-shared.patch",
+    "patches/18-draft-route-count.patch",
+    "patches/19-ext-kernels-window.patch",
+    "patches/20-graph-cap.patch"
    ]
   }
  ],

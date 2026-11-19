@@ -17,7 +17,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone); ship-prefill: exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order); ship-residency: exactly the series 01-18 on the base (git archive b1b770d9 + git apply 01..18 in order, patch-shas.txt); region-fusion: 01-13 + 19 on the base (the 0.3.26 source tree ncmoe-few-20261116 + this patch)",
+    "why": "mask-indexer: 01-08 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); ext-kernel-hook: 01-06 + 09 + the archived kv-host-old code (cut before 07 and 08); prefill-expert-inplace: 01-08 + 10 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); prefill-ckpt: 01-08 + 11 + parked fattn-compact-par + the archived kv-host-old code (its switch unset in every kept measurement); decode-topk-fused: exactly the series 01-11 + 12 on the base (copy of mods-series-verify-0111-20261115/src with 12's top-k.cu laid over it); graph-slots: the series 01-11 + 13 on the base + the archived graph-recapture code (its switch unset in the arms that measured 13 alone); ship-prefill: exactly the series 01-15 on the base (git archive b1b770d9 + git apply 01..15 in order); ship-residency: exactly the series 01-18 on the base (git archive b1b770d9 + git apply 01..18 in order, patch-shas.txt); region-fusion: 01-13 + 19 on the base (the 0.3.26 source tree ncmoe-few-20261116 + this patch); graph-cap: exactly the series 01-20 on the base",
     "entries": [
      {
       "id": "mods-series-verify",
@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-tree: exactly the 6 modules on the base",
+    "why": "graph-cap-tree: exactly the 6 modules on the base, kernels with graph-cap",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -1191,6 +1191,57 @@
    "module": null
   },
   {
+   "id": "llama.cpp/1.0.0/graph-cap",
+   "engine": "llama.cpp",
+   "version": "1.0.0",
+   "name": "graph-cap",
+   "title": "a context keeps CUDA graph executables for at most K graphs",
+   "state": "series",
+   "order": 20,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "tag": "b12359",
+    "release": "v1.0.0"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_GRAPH_MAX_KEYS",
+    "on": "2"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "GGML_CUDA_GRAPH_MAX_KEYS",
+   "knobs": [
+    "GGML_CUDA_GRAPH_MAX_KEYS",
+    "GGML_CUDA_GRAPH_STATS"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/1.0.0/patches/20-graph-cap.patch",
+   "sha256": "7e57e7ac7e33a0502d60c47bd33bb7173b29020b01c0033eabadb736293de194",
+   "lines": {
+    "added": 93,
+    "removed": 0
+   },
+   "budget": {
+    "added": 100,
+    "removed": 0
+   },
+   "files": [
+    "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "check"
+   ],
+   "module": null
+  },
+  {
    "id": "llama.cpp/1.0.0/fattn-compact-par",
    "engine": "llama.cpp",
    "version": "1.0.0",
@@ -1938,13 +1989,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "adc5c63aec738cde978c584d2fd4265c1cd82ff25a70e325b9a7c51e3de24f37",
+   "sha256": "e1a303160019e262c3d1ba3665984f30521e3074febdbbc510dc697e1fefe717",
    "lines": {
-    "added": 500,
+    "added": 593,
     "removed": 0
    },
    "budget": {
-    "added": 530,
+    "added": 630,
     "removed": 0
    },
    "files": [
@@ -1984,13 +2035,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "adc5c63aec738cde978c584d2fd4265c1cd82ff25a70e325b9a7c51e3de24f37",
+   "sha256": "e1a303160019e262c3d1ba3665984f30521e3074febdbbc510dc697e1fefe717",
    "lines": {
-    "added": 500,
+    "added": 593,
     "removed": 0
    },
    "budget": {
-    "added": 530,
+    "added": 630,
     "removed": 0
    },
    "files": [
@@ -2011,13 +2062,65 @@
    "module": "kernels"
   },
   {
+   "id": "llama.cpp/b12521/graph-cap",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "graph-cap",
+   "title": "a context keeps CUDA graph executables for at most K graphs",
+   "state": "series",
+   "order": 9,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_GRAPH_MAX_KEYS",
+    "on": "2"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "GGML_CUDA_GRAPH_MAX_KEYS",
+   "knobs": [
+    "GGML_CUDA_GRAPH_MAX_KEYS",
+    "GGML_CUDA_GRAPH_STATS"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
+   "sha256": "e1a303160019e262c3d1ba3665984f30521e3074febdbbc510dc697e1fefe717",
+   "lines": {
+    "added": 593,
+    "removed": 0
+   },
+   "budget": {
+    "added": 630,
+    "removed": 0
+   },
+   "files": [
+    "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/ext-kernels.cpp",
+    "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "check"
+   ],
+   "module": "kernels"
+  },
+  {
    "id": "llama.cpp/b12521/moe-inplace",
    "engine": "llama.cpp",
    "version": "b12521",
    "name": "moe-inplace",
    "title": "prefill reads cached experts in place",
    "state": "series",
-   "order": 9,
+   "order": 10,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2074,7 +2177,7 @@
    "name": "cublas-shared",
    "title": "one cuBLAS handle and workspace per device for every context",
    "state": "series",
-   "order": 10,
+   "order": 11,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2131,7 +2234,7 @@
    "name": "draft-route-count",
    "title": "diagnostic: count the experts the draft's router picks",
    "state": "series",
-   "order": 11,
+   "order": 12,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2188,7 +2291,7 @@
    "name": "mtp-share-head",
    "title": "draft head reads the target's output projection",
    "state": "series",
-   "order": 12,
+   "order": 13,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2247,7 +2350,7 @@
    "name": "graph-slots",
    "title": "draft context keeps a graph per small ubatch size",
    "state": "series",
-   "order": 13,
+   "order": 14,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2307,7 +2410,7 @@
    "name": "rs-one-copy",
    "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
    "state": "series",
-   "order": 14,
+   "order": 15,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2367,7 +2470,7 @@
    "name": "ckpt-pinned",
    "title": "context checkpoints in a pinned pool",
    "state": "series",
-   "order": 15,
+   "order": 16,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2425,7 +2528,7 @@
    "name": "tokenize-incr",
    "title": "server tokenizes only the prompt's new part",
    "state": "series",
-   "order": 16,
+   "order": 17,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2485,7 +2588,7 @@
    "name": "ple-prefetch",
    "title": "per-layer embedding rows read ahead on a thread",
    "state": "series",
-   "order": 17,
+   "order": 18,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2545,7 +2648,7 @@
    "name": "sched-async-inputs",
    "title": "scheduler uploads host inputs on the split's stream, no host sync",
    "state": "series",
-   "order": 18,
+   "order": 19,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",

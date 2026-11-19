@@ -506,10 +506,128 @@ index 000000000..db9355881
 +    return 0;
 +}
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 3d8d30d81..9506d5078 100644
+index 3d8d30d81..719de0b6f 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -4371,6 +4371,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
+@@ -805,6 +805,10 @@ ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_
+         next_graph_eviction_time = time_now + 5'000'000;
+         for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
+             if (it->first != first_node_ptr && time_now - it->second->last_used_time >= 10'000'000) {
++                if (getenv("GGML_CUDA_GRAPH_STATS")) {
++                    GGML_LOG_WARN("GGML_CUDA_GRAPH_STATS: ctx %p idle-evict graph %p (%zu instances)\n", (const void *) this,
++                        (const void *) it->second.get(), it->second->instances.size());
++                }
+                 it = cuda_graphs.erase(it);
+             } else {
+                 ++it;
+@@ -3384,17 +3388,106 @@ static int ggml_cuda_graph_chunk_size() {
+     return chunk_size;
+ }
+ 
++// GGML_CUDA_GRAPH_MAX_KEYS=K (local mod, off by default): at most K cached graphs (keys) per context hold CUDA graph
++// executables. A sched reserve (e.g. a sampler change) moves the ggml graph to new addresses, so its key changes and the
++// old key is dead; stock keeps dead keys and their executables for 10 s. Before a new key creates its first executable,
++// whole graphs other than it are destroyed, least recently used first, until fewer than K hold executables. Device
++// memory in executables is then bounded per context by K x chunks per graph x the size of one. Unset or 0 = stock.
++// GGML_CUDA_GRAPH_STATS=1 logs each executable created, updated or re-instantiated: live executables, cached graphs,
++// evictions and free device memory (it synchronizes the stream around each: diagnostics only).
++static size_t ggml_cuda_graph_live(const ggml_backend_cuda_context * cuda_ctx) {
++    size_t n = 0;
++    for (const auto & [key, g] : cuda_ctx->cuda_graphs) {
++        n += g->instances.size();
++    }
++    return n;
++}
++
++static int64_t ggml_cuda_graph_env(const char * name) {
++    const char * e = getenv(name);
++    return e ? atoll(e) : 0;
++}
++
++static size_t ggml_cuda_graph_evicted = 0;
++
++static void ggml_cuda_graph_cap(ggml_backend_cuda_context * cuda_ctx, const ggml_cuda_graph * keep) {
++    static const int64_t max_keys = ggml_cuda_graph_env("GGML_CUDA_GRAPH_MAX_KEYS");
++    if (max_keys <= 0) {
++        return;
++    }
++    for (;;) {
++        int64_t n_keys = 0;
++        auto lru = cuda_ctx->cuda_graphs.end();
++        for (auto it = cuda_ctx->cuda_graphs.begin(); it != cuda_ctx->cuda_graphs.end(); ++it) {
++            if (it->second.get() == keep || it->second->instances.empty()) {
++                continue;
++            }
++            n_keys++;
++            if (lru == cuda_ctx->cuda_graphs.end() || it->second->last_used_time < lru->second->last_used_time) {
++                lru = it;
++            }
++        }
++        if (n_keys < max_keys) {
++            return;
++        }
++        cuda_ctx->cuda_graphs.erase(lru);
++        ggml_cuda_graph_evicted++;
++    }
++}
++
++static bool ggml_cuda_graph_stats_on() {
++    static const bool on = ggml_cuda_graph_env("GGML_CUDA_GRAPH_STATS") != 0;
++    return on;
++}
++
++static double ggml_cuda_graph_free_mib() {
++    size_t free_b = 0, total_b = 0;
++    CUDA_CHECK(cudaMemGetInfo(&free_b, &total_b));
++    return free_b / 1048576.0;
++}
++
++static void ggml_cuda_graph_stats(const ggml_backend_cuda_context * cuda_ctx, const ggml_cuda_graph * graph, size_t idx,
++        const char * path, double free_before, size_t n_cuda_nodes) {
++    if (!ggml_cuda_graph_stats_on()) {
++        return;
++    }
++    const double free_after = ggml_cuda_graph_free_mib();
++    GGML_LOG_WARN("GGML_CUDA_GRAPH_STATS: ctx %p %s graph %p chunk %zu cuda nodes %zu: live instances %zu, cached graphs %zu, evicted %zu, free %.1f MiB (delta %+.1f)\n",
++        (const void *) cuda_ctx, path, (const void *) graph, idx, n_cuda_nodes, ggml_cuda_graph_live(cuda_ctx),
++        cuda_ctx->cuda_graphs.size(), ggml_cuda_graph_evicted, free_after, free_after - free_before);
++}
++
+ // end the capture of chunk `idx`, update or create its executable and launch it
+ static void ggml_cuda_graph_launch_chunk(ggml_backend_cuda_context * cuda_ctx, ggml_cuda_graph * graph, size_t idx) {
+     cudaGraph_t cuda_graph = nullptr;
+     CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_graph));
+ 
++    const bool   stats       = ggml_cuda_graph_stats_on();
++    size_t       n_cuda_nodes = 0;
++    if (stats) {
++        CUDA_CHECK(cudaGraphGetNodes(cuda_graph, nullptr, &n_cuda_nodes));
++    }
+     if (idx < graph->instances.size()) {
++        const double free_before = stats ? ggml_cuda_graph_free_mib() : 0.0;
++        const cudaGraphExec_t prev = graph->instances[idx].handle;
+         ggml_cuda_graph_update_executable(graph->instances[idx], cuda_graph, cuda_ctx->device);
++        if (stats) {
++            CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
++            ggml_cuda_graph_stats(cuda_ctx, graph, idx, prev == graph->instances[idx].handle ? "update" : "reinst",
++                free_before, n_cuda_nodes);
++        }
+     } else {
+         GGML_ASSERT(idx == graph->instances.size());
++        if (idx == 0) {
++            ggml_cuda_graph_cap(cuda_ctx, graph); // GGML_CUDA_GRAPH_MAX_KEYS: a new key evicts the least recently used ones
++        }
++        if (stats) {
++            CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
++        }
++        const double free_before = stats ? ggml_cuda_graph_free_mib() : 0.0;
+         graph->instances.emplace_back();
+         CUDA_CHECK(cudaGraphInstantiate(&graph->instances[idx].handle, cuda_graph, nullptr, nullptr, 0));
++        ggml_cuda_graph_stats(cuda_ctx, graph, idx, "new", free_before, n_cuda_nodes);
+ #ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
+         graph->instances[idx].clusters = ggml_cuda_graph_get_clusters(cuda_graph, cuda_ctx->device);
+ #endif // USE_CUDA_GRAPH_CLUSTER_CHECK
+@@ -4371,6 +4464,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
      return false;
  }
  
@@ -518,7 +636,7 @@ index 3d8d30d81..9506d5078 100644
  // try and fuse nodes and return the number of nodes to skip
  static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
  
-@@ -5372,6 +5374,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+@@ -5372,6 +5467,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                      continue;
                  }
  

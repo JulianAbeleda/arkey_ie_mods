@@ -61,8 +61,8 @@
   },
   {
    "name": "kernels",
-   "title": "external kernel hook",
-   "point": "the backend's node dispatch: one hook that swaps a node or a window of nodes for a kernel a manifest names (ext-kernels)",
+   "title": "external kernel hook and the CUDA graph cache bound",
+   "point": "the CUDA backend's graph execution: one hook that swaps a node or a window of nodes for a kernel a manifest names (ext-kernels), and the cache of captured CUDA graphs it launches (graph-cap)",
    "patch": "patches/kernels.patch",
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -70,16 +70,30 @@
     "ggml/src/ggml-cuda/ggml-cuda.cu"
    ],
    "lines": {
-    "added": 500,
+    "added": 593,
     "removed": 0
    },
    "budget": {
-    "added": 530,
+    "added": 630,
     "removed": 0
    },
    "static": {
     "hunks_removing_stock_lines": 0
-   }
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 530,
+      "removed": 0
+     },
+     "to": {
+      "added": 630,
+      "removed": 0
+     },
+     "why": "graph-cap row (+93 lines in ggml-cuda.cu): the CUDA graph cache is the backend's graph execution, the point this module owns in ggml-cuda.cu; budget_rule ceil_105_10 of the new lines",
+     "date": "2026-11-19"
+    }
+   ]
   },
   {
    "name": "experts",
@@ -532,6 +546,52 @@
     {
      "rule": "check",
      "why": "no check switch of its own: 09's GGML_CUDA_EXT_KERNELS_CHECK now compares every live output of a window"
+    }
+   ]
+  },
+  {
+   "name": "graph-cap",
+   "title": "a context keeps CUDA graph executables for at most K graphs",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_GRAPH_MAX_KEYS",
+    "on": "2"
+   },
+   "check": null,
+   "reads": [
+    "GGML_CUDA_GRAPH_STATS"
+   ],
+   "marker": "GGML_CUDA_GRAPH_MAX_KEYS",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/graph-cap-20261119",
+     "numbers": "home RTX 5090, shipped 128k plan (-c 131072 -ncmoe 0 -b 1024, hot-set draft, full switch set), b12521 6 modules + graph-cap: session-ab abk128 GGML_CUDA_GRAPH_MAX_KEYS unset-equivalent 0 (G0) vs 2 (G1), 59 turns, recorded history: reply sha256 59/59 equal; warm decode 225.2 -> 224.8 tok/s (-0.3), prefill 650 -> 651 ms (+1), session wall 151.2 -> 151.5 s (+0.3), 1 pair, inside the b12521 zero-cost noise (decode [-1.7, +1.6] tok/s, prefill [-5, +6] ms, kv-stream-20261118 zero128). load-probe --stress (scored + sampler-variant requests at 23 lengths after the session): keys 2: no crash, growth 10.0 MiB twice (capk128-a with GGML_CUDA_GRAPH_STATS, capk128-b without), plateau; same stress with the switch unset (1.0.0 + 01-19, stats128-a): OOM at cudaGraphInstantiate, 173 live executables in 12 keys; stock b12521 (stock65-a, -c 65536): same OOM",
+     "match": {
+      "what": "reply sha256 per turn, switch 2 vs 0, same build (abk128)",
+      "equal": 59,
+      "of": 59
+     }
+    }
+   },
+   "exercised_by": "a server whose sampler settings change between requests (backend sampling, -bs): each change reallocates the graph's tensor memory, so the CUDA graph cache sees a new key and the old one is dead; measured with scored (logprobs) and sampler-variant requests",
+   "limits": [
+    "bounds executables per backend context at K x chunks per graph x ~0.66 MiB (measured 0.66, stock 0.68 MiB for ~220-node chunks); chunks = ceil(nodes in the context's largest CUDA split graph / GGML_CUDA_GRAPH_CHUNK_SIZE, default 512): 15 target and 1 draft on the measured plan",
+    "K below a context's steady keys makes it recapture every step: measured steady keys are 1 (target) and 2 (MTP draft with graph-slots); a plan with more CUDA splits per step (e.g. -ncmoe > 0) needs K measured with GGML_CUDA_GRAPH_STATS first",
+    "a dead key stays until the next new key arrives (growth 10 MiB at K 2, not 0)",
+    "GGML_CUDA_GRAPH_STATS synchronizes the stream around each executable it logs: diagnostics only, not for timed runs"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the switch only destroys cached CUDA graph executables earlier than the 10 s idle sweep would; a destroyed graph is captured again on its next use, so what is computed does not change. Identity rests on the 59/59 reply pair"
     }
    ]
   },
@@ -1133,10 +1193,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-tree",
-   "path": "boltbeam-runs/mods-modules-20261118/tree-modules",
-   "what": "the tree the module build (build-modules) was built from",
-   "contains": "exactly the 6 modules on the base",
+   "id": "graph-cap-tree",
+   "path": "boltbeam-runs/graph-cap-20261119/src-b12521",
+   "what": "the tree the graph-cap build (capk128-a/b, abk128) was built from; replaces modules-tree, whose kernels module predates graph-cap",
+   "contains": "exactly the 6 modules on the base, kernels with graph-cap",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",
