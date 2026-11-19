@@ -1,0 +1,40 @@
+diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
+index 04aee60..8d90660 100644
+--- a/ggml/src/ggml-cuda/common.cuh
++++ b/ggml/src/ggml-cuda/common.cuh
+@@ -1437,6 +1437,35 @@ struct ggml_backend_cuda_context {
+     ggml_cuda_stream_context & stream_context() { return *concurrent_stream_context; }
+ 
+     cublasHandle_t cublas_handle() {
++        // LLAMA_CUBLAS_SHARED=1 (off = stock): one cuBLAS handle + workspace per device for every backend context of the
++        // process (the target and the draft context each created their own: ~100 MiB a context). Contexts run one at a
++        // time on one thread; the handle is re-bound to the calling context's stream when it changes. cublasSetStream
++        // resets the workspace, so it is set again after it, as the stock path does at creation.
++        static const bool shared = getenv("LLAMA_CUBLAS_SHARED") != nullptr;
++        if (shared && curr_stream_no == 0) {
++            static cublasHandle_t sh[GGML_CUDA_MAX_DEVICES] = {};
++            static void *         sw[GGML_CUDA_MAX_DEVICES] = {};
++            static cudaStream_t   ss[GGML_CUDA_MAX_DEVICES] = {};
++            static size_t         sz[GGML_CUDA_MAX_DEVICES] = {};
++            if (sh[device] == nullptr) {
++                ggml_cuda_set_device(device);
++                CUBLAS_CHECK(cublasCreate(&sh[device]));
++                CUBLAS_CHECK(cublasSetMathMode(sh[device], CUBLAS_TF32_TENSOR_OP_MATH));
++#if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2)))
++                sz[device] = (ggml_cuda_info().devices[device].cc >= GGML_CUDA_CC_HOPPER) ? 32 * 1024 * 1024 : 4 * 1024 * 1024;
++                CUDA_CHECK(cudaMalloc(&sw[device], sz[device]));
++#endif
++                fprintf(stderr, "cublas_shared: on (device %d)\n", device);
++            }
++            if (ss[device] != stream()) {
++                ss[device] = stream();
++                CUBLAS_CHECK(cublasSetStream(sh[device], ss[device]));
++#if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2)))
++                CUBLAS_CHECK(cublasSetWorkspace(sh[device], sw[device], sz[device]));
++#endif
++            }
++            return sh[device];
++        }
+         if (cublas_handles[device][curr_stream_no] == nullptr) {
+             ggml_cuda_set_device(device);
+             CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));

@@ -1,0 +1,115 @@
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 5dd0e5f..ca67d0f 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -8,6 +8,7 @@
+ #include <algorithm>
+ #include <cassert>
+ #include <cmath>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <map>
+@@ -446,6 +447,14 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+     // TODO: fix incosistent handling of `seq_id < 0` and `seq_id == -1` in the codebase [TAG_LLAMA_SEQ_ID_NEG]
+     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
+ 
++    // opt-in: LLAMA_SEQ_RM_INDEXED=1 finds the cells of one sequence in [p0, p1) through its sorted (pos, cell) set instead
++    // of scanning every cell of the cache. LLAMA_SEQ_RM_CHECK=1 also runs the stock scan read-only and aborts if the cells
++    // or the head differ. Unset: the stock path. seq_id < 0 (any sequence) always takes the stock scan.
++    static const bool indexed = getenv("LLAMA_SEQ_RM_INDEXED") && atoi(getenv("LLAMA_SEQ_RM_INDEXED")) != 0;
++    static const bool check   = indexed && getenv("LLAMA_SEQ_RM_CHECK") && atoi(getenv("LLAMA_SEQ_RM_CHECK")) != 0;
++    const bool p0_neg = p0 < 0;
++    const bool p1_neg = p1 < 0;
++
+     if (p0 < 0) {
+         p0 = 0;
+     }
+@@ -454,7 +463,73 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+         p1 = std::numeric_limits<llama_pos>::max();
+     }
+ 
+-    if (seq_id >= 0) {
++    if (seq_id >= 0 && indexed) {
++        auto & cells = v_cells[seq_to_stream[seq_id]];
++        auto & head  = v_heads[seq_to_stream[seq_id]];
++
++        // check: what the stock scan would touch, in its order, and the head it would end with
++        std::vector<uint32_t> ref;
++        uint32_t ref_head = cells.size();
++        if (check) {
++            for (uint32_t i = 0; i < cells.size(); ++i) {
++                if (!cells.pos_in(i, p0, p1) || !cells.seq_has(i, seq_id)) {
++                    continue;
++                }
++                ref.push_back(i);
++                if (cells.seq_count(i) == 1 && ref_head == cells.size()) {
++                    ref_head = i; // the first cell this removal empties
++                }
++            }
++            if (ref_head == cells.size() || ref_head >= head) {
++                ref_head = head;
++            }
++        }
++
++        // the sequence's cells with a position in [p0, p1), in cell order as the scan visits them
++        const auto & sp = cells.seq_pos_get(seq_id);
++        std::vector<uint32_t> idxs;
++        for (auto it = sp.lower_bound(std::make_pair(p0, (uint32_t) 0)); it != sp.end() && it->first < p1; ++it) {
++            idxs.push_back(it->second);
++        }
++        std::sort(idxs.begin(), idxs.end());
++
++        uint32_t new_head = cells.size();
++        for (uint32_t i : idxs) {
++            if (cells.seq_rm(i, seq_id)) {
++                if (new_head == cells.size()) {
++                    new_head = i;
++                }
++            }
++        }
++
++        // If we freed up a slot, set head to it so searching can start there.
++        if (new_head != cells.size() && new_head < head) {
++            head = new_head;
++        }
++
++        if (check) {
++            static uint64_t n_calls = 0, n_p0 = 0, n_p1 = 0, n_bounded = 0, n_empty = 0, n_multi = 0, n_seq = 0, n_cells = 0;
++            if (idxs != ref || head != ref_head) {
++                GGML_ABORT("LLAMA_SEQ_RM_CHECK: indexed seq_rm differs from the stock scan: seq %d [%d, %d) cells %zu/%zu head %u/%u",
++                        seq_id, p0, p1, idxs.size(), ref.size(), head, ref_head);
++            }
++            ++n_calls;
++            n_p0      += p0_neg;
++            n_p1      += p1_neg;
++            n_bounded += !p0_neg && !p1_neg;
++            n_empty   += idxs.empty();
++            n_multi   += idxs.size() > 1;
++            n_seq     += seq_id != 0;
++            n_cells   += idxs.size();
++            if ((n_calls & (n_calls - 1)) == 0 || n_calls % 10000 == 0) {
++                LLAMA_LOG_WARN("%s: LLAMA_SEQ_RM_CHECK ok: %llu calls verified against the stock scan (cells and head): p0<0 %llu, "
++                        "p1<0 %llu, bounded %llu, empty %llu, multi-cell %llu, seq != 0 %llu, cells removed %llu\n", __func__,
++                        (unsigned long long) n_calls, (unsigned long long) n_p0, (unsigned long long) n_p1,
++                        (unsigned long long) n_bounded, (unsigned long long) n_empty, (unsigned long long) n_multi,
++                        (unsigned long long) n_seq, (unsigned long long) n_cells);
++            }
++        }
++    } else if (seq_id >= 0) {
+         auto & cells = v_cells[seq_to_stream[seq_id]];
+         auto & head  = v_heads[seq_to_stream[seq_id]];
+ 
+@@ -466,6 +541,12 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+         }
+     } else {
+         // match any sequence
++        if (check) {
++            static uint64_t n_any = 0;
++            if (((++n_any) & (n_any - 1)) == 0) {
++                LLAMA_LOG_WARN("%s: LLAMA_SEQ_RM_CHECK: %llu calls with seq_id < 0 took the stock scan\n", __func__, (unsigned long long) n_any);
++            }
++        }
+         for (uint32_t s = 0; s < n_stream; ++s) {
+             auto & cells = v_cells[s];
+             auto & head  = v_heads[s];

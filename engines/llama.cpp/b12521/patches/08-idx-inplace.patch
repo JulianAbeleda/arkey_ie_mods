@@ -1,0 +1,116 @@
+diff --git a/ggml/src/ggml-cuda/lightning-indexer.cu b/ggml/src/ggml-cuda/lightning-indexer.cu
+index b793924..d317278 100644
+--- a/ggml/src/ggml-cuda/lightning-indexer.cu
++++ b/ggml/src/ggml-cuda/lightning-indexer.cu
+@@ -1,3 +1,4 @@
++#include <vector>
+ #include "common.cuh"
+ #include "lightning-indexer.cuh"
+ #include "fattn-common.cuh"
+@@ -550,6 +551,37 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor *
+     const int device = ggml_cuda_get_device();
+     const int cc     = ggml_cuda_info().devices[device].cc;
+ 
++    // LLAMA_IDX_INPLACE_CHECK: src[4] is the stock score (f32 copy of the keys), already computed; this node read q8_0 in place
++    struct idx_inplace_check {
++        ggml_backend_cuda_context & ctx;
++        const ggml_tensor * dst;
++        ~idx_inplace_check() {
++            const ggml_tensor * ref = dst->src[4];
++            if (ref == nullptr) {
++                return;
++            }
++            static uint64_t n_check = 0, n_values = 0;
++            const size_t n = ggml_nbytes(dst);
++            GGML_ASSERT(n == ggml_nbytes(ref) && dst->src[1]->type == GGML_TYPE_Q8_0 && ref->src[1]->type == GGML_TYPE_F32);
++            std::vector<uint32_t> a(n/4), b(n/4);
++            CUDA_CHECK(cudaMemcpyAsync(a.data(), dst->data, n, cudaMemcpyDeviceToHost, ctx.stream()));
++            CUDA_CHECK(cudaMemcpyAsync(b.data(), ref->data, n, cudaMemcpyDeviceToHost, ctx.stream()));
++            CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
++            size_t n_diff = 0;
++            for (size_t i = 0; i < n/4; ++i) {
++                n_diff += a[i] != b[i]; // bit patterns: -inf, zero signs and NaN payloads count
++            }
++            n_values += n/4;
++            if (++n_check <= 3 || n_check % 2000 == 0 || n_diff != 0) {
++                GGML_LOG_WARN("idx_inplace check %llu (%s, q %lld, n_pool %lld): %zu of %zu score bit patterns differ; %llu scores checked\n",
++                    (unsigned long long) n_check, dst->name, (long long) dst->ne[1], (long long) dst->ne[0], n_diff, n/4, (unsigned long long) n_values);
++            }
++            if (n_diff != 0) {
++                GGML_ABORT("LLAMA_IDX_INPLACE_CHECK: in-place and stock indexer scores differ");
++            }
++        }
++    } idx_check{ctx, dst};
++
+     if (n_embd == 128 && n_head == 64) {
+         if ((turing_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) && k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_BF16) {
+             constexpr int K_VECS_PER_BLOCK = 32;
+diff --git a/src/llama-memory-hybrid-idx.cpp b/src/llama-memory-hybrid-idx.cpp
+index 10ad79a..d4a3f85 100644
+--- a/src/llama-memory-hybrid-idx.cpp
++++ b/src/llama-memory-hybrid-idx.cpp
+@@ -903,6 +903,13 @@ ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::gather_pooled(ggml_
+     return ggml_get_rows(ctx, pooled, idxs);
+ }
+ 
++ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::view_pooled(int64_t n_rows) const {
++    if (n_rows > pooled->ne[1]) {
++        return nullptr; // more (padded) pools than store rows: the caller keeps the copy, whose padded entries read row 0
++    }
++    return ggml_view_2d(ctx, pooled, pooled->ne[0], n_rows, pooled->nb[1], 0);
++}
++
+ ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::scatter_raw(ggml_tensor * values, ggml_tensor * idxs) const {
+     return ggml_set_rows(ctx, key_gate, values, idxs);
+ }
+diff --git a/src/llama-memory-hybrid-idx.h b/src/llama-memory-hybrid-idx.h
+index 6eb1698..1e82c3f 100644
+--- a/src/llama-memory-hybrid-idx.h
++++ b/src/llama-memory-hybrid-idx.h
+@@ -195,6 +195,7 @@ public:
+         ggml_tensor * gather_key_gate(ggml_tensor * idxs) const;
+         ggml_tensor * scatter_pooled(ggml_tensor * values, ggml_tensor * idxs) const;
+         ggml_tensor * gather_pooled(ggml_tensor * idxs) const;
++        ggml_tensor * view_pooled(int64_t n_rows) const; // LLAMA_IDX_INPLACE: the first n_rows pooled keys in place
+         ggml_tensor * scatter_raw(ggml_tensor * values, ggml_tensor * idxs) const; // mem-levers C: into the raw ring
+ 
+     private:
+diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
+index 5130d94..9d7b0b4 100644
+--- a/src/models/qwen4exp.cpp
++++ b/src/models/qwen4exp.cpp
+@@ -898,8 +898,23 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
+     // scatter the fresh pooled keys into their rep rows, then gather all n_pool of them by cell:
+     // the older pools come from the rows earlier ubatches wrote
+     ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
++    // LLAMA_IDX_INPLACE=1 (local long-context mod, off by default): with the pooled-only store (LLAMA_IDX_POOLED) pool i
++    // lives in row i, so the indexer reads the q8_0 rows in place instead of a q8_0 -> f32 copy of every pooled key.
++    // Only below the tile kernel's batch (decode: verify, catch-up, draft): there the vector kernel dequantizes to the
++    // same f32 values the copy holds and runs the same dot, so the scores are the stock scores bit for bit.
++    // Padded pools then read their own (never written, finite) row instead of row 0; pool_mask makes both -inf.
++    // LLAMA_IDX_INPLACE_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1) also builds the stock score, compared on every call.
++    static const bool idx_inplace       = getenv("LLAMA_IDX_INPLACE")       && atoi(getenv("LLAMA_IDX_INPLACE"))       != 0;
++    static const bool idx_inplace_check = getenv("LLAMA_IDX_INPLACE_CHECK") && atoi(getenv("LLAMA_IDX_INPLACE_CHECK")) != 0;
++    ggml_tensor * pooled_view = idx_inplace && mctx_hyb->get_idx_pooled() && n_tokens < 8 ? kpool_cache.view_pooled(n_pool) : nullptr;
++    const bool inplace = pooled_view != nullptr && pooled_view->type == GGML_TYPE_Q8_0;
++
+     ggml_tensor * pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
+     pooled = ggml_reshape_3d(ctx0, pooled, idx_dim, 1, n_pool);
++    ggml_tensor * pooled_ref = pooled; // the stock f32 copy: unused (and never computed) unless the check is on
++    if (inplace) {
++        pooled = ggml_reshape_3d(ctx0, pooled_view, idx_dim, 1, n_pool);
++    }
+     cb(pooled, "indexer_k", il);
+ 
+     ggml_tensor * q = build_lora_mm(model.layers[il].index_q_proj, cur);
+@@ -912,6 +927,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
+     // which is the lightning indexer with every head weight set to that scale
+     ggml_tensor * weights = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_idx_h, n_tokens), 1.0f/sqrtf((float) idx_dim));
+     ggml_tensor * score = ggml_lightning_indexer(ctx0, q, pooled, weights, inp_kpool->pool_mask); // [n_pool, n_tokens]
++    if (inplace && idx_inplace_check) {
++        // the backend compares its output with src[4] bit for bit
++        score->src[4] = ggml_lightning_indexer(ctx0, q, pooled_ref, weights, inp_kpool->pool_mask);
++    }
+     res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
+     cb(score, "indexer_score", il);
+ 

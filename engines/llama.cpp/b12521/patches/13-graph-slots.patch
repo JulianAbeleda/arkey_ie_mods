@@ -1,0 +1,180 @@
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index a596bfb..6eeffc9 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -417,6 +417,16 @@ llama_context::llama_context(
+         if (graph_reuse_disable) {
+             LLAMA_LOG_WARN("%s: graph reuse disabled\n", __func__);
+         }
++
++        const char * LLAMA_GRAPH_SLOTS = getenv("LLAMA_GRAPH_SLOTS");
++        // refused with GGML_CUDA_GRAPH_OPT: its concurrent-stream events are per backend, rebuilt only when a graph is built
++        if (LLAMA_GRAPH_SLOTS && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && !graph_reuse_disable && !getenv("GGML_CUDA_GRAPH_OPT")) {
++            gslot_max = std::max(0, std::min(16, atoi(LLAMA_GRAPH_SLOTS)));
++            if (gslot_max > 0) {
++                gslots.resize(gslot_max + 1);
++                LLAMA_LOG_WARN("%s: graph_slots: on, one scheduler per ubatch of 1..%d tokens\n", __func__, gslot_max);
++            }
++        }
+     }
+ 
+     {
+@@ -657,6 +667,10 @@ llama_context::~llama_context() {
+     // wait for any pending asynchronous copies into the output buffers before they are freed
+     synchronize();
+ 
++    if (gslot_max > 0) {
++        gslot_select(0);
++    }
++
+     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
+     if (!model.no_alloc() && !opt_ctx) {
+         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+@@ -808,6 +822,45 @@ void llama_context::sched_new(const sched_params & params) {
+     sched_params_cur = params;
+ }
+ 
++void llama_context::gslot_select(int i) {
++    if (i == gslot_cur) {
++        return;
++    }
++    // park the loaded slot, then load slot i (created on first use, its compute buffers sized by its first graph)
++    auto & cur = gslots[gslot_cur];
++    std::swap(sched, cur.sched);
++    std::swap(gf_res_prev, cur.res);
++    cur.active = gf_res_prev_active;
++    auto & nxt = gslots[i];
++    if (!nxt.sched) {
++        nxt.sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(),
++                sched_params_cur.max_nodes, sched_params_cur.parallel, sched_params_cur.op_offload));
++        ggml_backend_sched_set_copy_callback(nxt.sched.get(), sched_copy_experts, this);
++        ggml_backend_sched_set_realloc_callback(nxt.sched.get(), sched_graph_realloc, this);
++        for (auto & res : nxt.res) {
++            res = std::make_unique<llm_graph_result>(graph_max_nodes());
++        }
++        nxt.active = nullptr;
++    }
++    std::swap(sched, nxt.sched);
++    std::swap(gf_res_prev, nxt.res);
++    gf_res_prev_active = nxt.active;
++    gslot_cur = i;
++}
++
++void llama_context::gslot_invalidate() {
++    for (int i = 0; i < (int) gslots.size(); ++i) {
++        if (i != gslot_cur) {
++            for (auto & res : gslots[i].res) {
++                if (res) {
++                    res->reset();
++                }
++            }
++            gslots[i].active = nullptr;
++        }
++    }
++}
++
+ void llama_context::sched_reserve() {
+     if (!sched_need_reserve) {
+         return;
+@@ -819,6 +872,14 @@ void llama_context::sched_reserve() {
+ 
+     synchronize();
+ 
++    // graph slots: reserve on the main scheduler; the other slots (idle after the sync) are rebuilt on their next use
++    if (gslot_max > 0) {
++        gslot_select(0);
++        for (int i = 1; i < (int) gslots.size(); ++i) {
++            gslots[i] = graph_slot();
++        }
++    }
++
+     const int64_t t_start_us = ggml_time_us();
+ 
+     const uint32_t n_seqs = cparams.n_seq_max;
+@@ -1080,6 +1141,10 @@ bool llama_context::memory_update(bool optimize) {
+ 
+         // reset the previous graph results to make sure that they won't be reused
+         // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
++        if (gslot_max > 0) {
++            gslot_select(0);
++            gslot_invalidate();
++        }
+         for (auto & res : gf_res_prev) {
+             res->reset();
+         }
+@@ -1844,6 +1909,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+         return nullptr;
+     }
+ 
++    if (gslot_max > 0) {
++        gslot_select(ubatch.n_tokens <= (uint32_t) gslot_max ? (int) ubatch.n_tokens : 0);
++    }
++
+     auto * res = get_gf_res_prev();
+     auto * gf  = res->get_gf();
+ 
+@@ -1887,6 +1956,16 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+             return nullptr;
+         }
+ 
++        if (gslot_cur > 0 && !gslots[gslot_cur].logged) {
++            gslots[gslot_cur].logged = true;
++            size_t sz = 0;
++            for (auto * b : backend_ptrs) {
++                sz += ggml_backend_sched_get_buffer_size(sched.get(), b);
++            }
++            LLAMA_LOG_WARN("%s: graph_slots: slot %d first graph, nodes = %d, splits = %d, compute buffers %.2f MiB\n",
++                    __func__, gslot_cur, ggml_graph_n_nodes(gf), ggml_backend_sched_get_n_splits(sched.get()), sz/1024.0/1024.0);
++        }
++
+         gf_res_prev_active = res;
+     }
+ 
+@@ -3046,6 +3125,10 @@ ggml_cgraph * llama_context::graph_reserve(
+         LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
+     }
+ 
++    if (gslot_max > 0) {
++        gslot_select(0);
++    }
++
+     ggml_backend_sched_reset(sched.get());
+ 
+     // when the scheduler is reset, we cannot reuse old graphs, so we reset the previous graph results
+@@ -4367,6 +4450,9 @@ void llama_context::opt_epoch_iter(
+             const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
+ 
+             // the optimizer graph is allocated outside sched, so the next decode must rebuild
++            if (gslot_max > 0) {
++                gslot_invalidate();
++            }
+             gf_res_prev_active = nullptr;
+             res->reset();
+ 
+diff --git a/src/llama-context.h b/src/llama-context.h
+index b1ea494..fd83650 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -457,6 +457,22 @@ private:
+ 
+     llm_graph_result * gf_res_prev_active = nullptr;
+ 
++    // LLAMA_GRAPH_SLOTS=N (MTP contexts only, unset = stock): ubatches of 1..N tokens get a scheduler and graph results
++    // of their own (slot n = n_tokens; slot 0 = the reserved scheduler, all other sizes), so sizes that alternate
++    // every step (draft catch-up of n tokens, then 1-token drafts) each keep a built and allocated graph to reuse.
++    // The loaded slot lives in sched / gf_res_prev / gf_res_prev_active; the others are parked here.
++    struct graph_slot {
++        ggml_backend_sched_ptr              sched;
++        std::array<llm_graph_result_ptr, 2> res;
++        llm_graph_result *                  active = nullptr;
++        bool                                logged = false;
++    };
++    std::vector<graph_slot> gslots;
++    int gslot_cur = 0;
++    int gslot_max = 0;
++    void gslot_select(int i);
++    void gslot_invalidate(); // forget the parked slots' graphs; the loaded one is reset by the caller
++
+     // host buffer for the model output (logits and embeddings)
+     ggml_backend_buffer_ptr buf_output;
+ 

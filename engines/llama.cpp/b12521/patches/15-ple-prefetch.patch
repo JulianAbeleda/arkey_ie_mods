@@ -1,0 +1,210 @@
+diff --git a/include/llama.h b/include/llama.h
+index 7122143..6b65707 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -1259,6 +1259,11 @@ extern "C" {
+ 
+     LLAMA_API enum llama_token_attr llama_vocab_get_attr(const struct llama_vocab * vocab, llama_token token);
+ 
++    // LOCAL (ple-prefetch): ask the model to hint the OS about input rows that tokens[i_first..n_tokens) will read from
++    // lazily mapped tensors (predecessors from tokens[] itself), on a background thread. A hint only: no output changes.
++    // No-op unless the architecture overrides llama_model::prefetch_inputs.
++    LLAMA_API void llama_model_prefetch_inputs(const struct llama_model * model, const llama_token * tokens, int32_t n_tokens, int32_t i_first);
++
+     // Check if the token is supposed to end generation (end-of-generation, eg. EOS, EOT, etc.)
+     LLAMA_API bool llama_vocab_is_eog(const struct llama_vocab * vocab, llama_token token);
+ 
+diff --git a/src/llama-mmap.cpp b/src/llama-mmap.cpp
+index 9688a7e..dcc60b6 100644
+--- a/src/llama-mmap.cpp
++++ b/src/llama-mmap.cpp
+@@ -10,6 +10,10 @@
+ #include <stdexcept>
+ #include <cerrno>
+ #include <algorithm>
++#include <condition_variable> // LLAMA_PLE_PREFETCH_TURN: llama_prefetch_async
++#include <deque>
++#include <mutex>
++#include <thread>
+ 
+ #ifdef __has_include
+     #if __has_include(<unistd.h>)
+@@ -1141,6 +1145,36 @@ void llama_prefetch(llama_memory_ranges mr) {
+ #endif
+ }
+ 
++// LLAMA_PLE_PREFETCH_TURN (caller: llama_model::prefetch_inputs overrides): the same hint as llama_prefetch, on one background
++// thread, so the caller does not wait for the madvise calls. A hint changes no byte that is read later.
++void llama_prefetch_async(llama_memory_ranges mr) {
++    // heap objects that are never destroyed: the detached worker may still wait on them while static destructors run at exit
++    // (function-local statics here hung the process at exit)
++    static std::mutex & mtx = *new std::mutex;
++    static std::condition_variable & cv = *new std::condition_variable;
++    static std::deque<llama_memory_ranges> & q = *new std::deque<llama_memory_ranges>;
++    static std::once_flag once;
++    std::call_once(once, [] {
++        std::thread([] {
++            for (;;) {
++                llama_memory_ranges job;
++                {
++                    std::unique_lock<std::mutex> lock(mtx);
++                    cv.wait(lock, [] { return !q.empty(); });
++                    job = std::move(q.front());
++                    q.pop_front();
++                }
++                llama_prefetch(std::move(job));
++            }
++        }).detach();
++    });
++    {
++        std::lock_guard<std::mutex> lock(mtx);
++        q.push_back(std::move(mr));
++    }
++    cv.notify_one();
++}
++
+ size_t llama_path_max() {
+     return PATH_MAX;
+ }
+diff --git a/src/llama-mmap.h b/src/llama-mmap.h
+index 6c6393d..6af1261 100644
+--- a/src/llama-mmap.h
++++ b/src/llama-mmap.h
+@@ -88,5 +88,6 @@ using llama_memory_ranges = std::vector<llama_memory_range>;
+ 
+ // Prefetch the host pages covering these memory ranges.
+ void llama_prefetch(llama_memory_ranges mr);
++void llama_prefetch_async(llama_memory_ranges mr); // LOCAL (ple-prefetch): background thread
+ 
+ size_t llama_path_max();
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 5bdbc9c..bbfa6ba 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -4259,3 +4259,10 @@ uint32_t llama_model_get_tok_embd_rows(const struct llama_model * model, const l
+ 
+     return n_tokens * (uint32_t) tensor->ne[0];
+ }
++
++// LOCAL (ple-prefetch)
++void llama_model_prefetch_inputs(const llama_model * model, const llama_token * tokens, int32_t n_tokens, int32_t i_first) {
++    if (model != nullptr) {
++        model->prefetch_inputs(tokens, n_tokens, i_first);
++    }
++}
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 8d2f562..c1dc452 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -1045,6 +1045,11 @@ struct llama_model {
+     // same, for the keys of the lightning indexer
+     virtual llama_rope_params get_rope_params_indexer(const llama_cparams & cparams, int il) const;
+ 
++    // LOCAL (ple-prefetch): hint reads of lazily mapped input rows for tokens[i_first..n_tokens); default: nothing to prefetch
++    virtual void prefetch_inputs(const llama_token * tokens, int32_t n_tokens, int32_t i_first) const {
++        GGML_UNUSED(tokens); GGML_UNUSED(n_tokens); GGML_UNUSED(i_first);
++    }
++
+     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
+     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
+ 
+diff --git a/src/models/models.h b/src/models/models.h
+index 8d74c50..8636426 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -2840,6 +2840,8 @@ struct llama_model_clef : public llama_model_qwen35 {
+ struct llama_model_qwen4exp : public llama_model_base {
+     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
+ 
++    void prefetch_inputs(const llama_token * tokens, int32_t n_tokens, int32_t i_first) const override; // LOCAL (ple-prefetch)
++
+     class llm_graph_input_kpool;
+ 
+     void load_arch_hparams(llama_model_loader & ml) override;
+diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
+index 9d7b0b4..8bcacf8 100644
+--- a/src/models/qwen4exp.cpp
++++ b/src/models/qwen4exp.cpp
+@@ -2,6 +2,8 @@
+ #include "llama-impl.h"
+ #include "llama-memory-hybrid-idx.h"
+ #include "llama-memory-recurrent.h"
++#include "llama-mmap.h" // LOCAL (ple-prefetch)
++#include "llama-model.h"
+ 
+ #include <algorithm>
+ #include <cinttypes>
+@@ -1570,3 +1572,51 @@ ggml_tensor * llama_model_qwen4exp::graph::build_ple(
+ 
+     return ggml_add(ctx0, hidden, ggml_add(ctx0, gated, conv_out));
+ }
++
++// LOCAL (ple-prefetch): the row ids of llm_graph_input_qwen4exp_ple::set_input, from a flat token list
++void llama_model_qwen4exp::prefetch_inputs(const llama_token * tokens, int32_t n_tokens, int32_t i_first) const {
++    if (tokens == nullptr || i_first >= n_tokens) {
++        return;
++    }
++    const ggml_tensor * ple = per_layer_tok_embd;
++    // nothing to do unless the table is lazily mapped (the same condition set_input uses for its own prefetch)
++    if (ple == nullptr || !can_prefetch.count(ple) || ple->data == nullptr) {
++        return;
++    }
++    const auto & hp = hparams;
++    const int64_t n_gram = hp.ple_ngram_size, n_heads = hp.ple_n_heads, per_gram = hp.ple_heads_per_ngram, eos = hp.ple_eos_token_id;
++    if (n_gram < 2 || n_heads <= 0) {
++        return;
++    }
++    i_first = std::max(i_first, 0);
++    const size_t row_bytes = ggml_row_size(ple->type, ple->ne[0]);
++    const auto * base = (const char *) ple->data;
++    llama_memory_ranges mr;
++    mr.reserve((size_t) (n_tokens - i_first) * n_heads);
++    std::vector<int64_t> ctx(n_gram);
++    for (int64_t i = i_first; i < n_tokens; ++i) {
++        ctx[0] = tokens[i];
++        bool cut = false;
++        for (int64_t q = 1; q < n_gram; ++q) {
++            const int64_t j = i - q;
++            const llama_token t = (cut || j < 0) ? LLAMA_TOKEN_NULL : tokens[j];
++            cut = cut || t < 0 || t == eos;
++            ctx[q] = cut ? eos : t;
++        }
++        for (int64_t n = 2; n <= n_gram; ++n) {
++            uint64_t mixed = (uint64_t) ctx[0] * hp.ple_layer_multipliers[0];
++            for (int64_t j = 1; j < n; ++j) {
++                mixed ^= (uint64_t) ctx[j] * hp.ple_layer_multipliers[j];
++            }
++            const int64_t b = (n - 2) * per_gram;
++            for (int64_t g = 0; g < per_gram; ++g) {
++                const int64_t h = b + g;
++                const int64_t row = (int64_t) (mixed % hp.ple_head_vocab_sizes[h] + hp.ple_head_offsets[h]);
++                if (row >= 0 && row < ple->ne[1]) {
++                    mr.push_back({ base + (size_t) row * ple->nb[1], row_bytes });
++                }
++            }
++        }
++    }
++    llama_prefetch_async(std::move(mr));
++}
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index f7a1083..2678bbf 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -4325,6 +4325,17 @@ private:
+ 
+                         slot.prompt.tokens.keep_first(n_past);
+ 
++                        // LOCAL (ple-prefetch): LLAMA_PLE_PREFETCH_TURN=1 - n_past is now final (after any checkpoint restore):
++                        // hint the reads of the input rows every token from n_past on will gather, on a background thread, so the
++                        // passes after the first find them cached. Model-level hook (no-op for models without such rows). Unset = stock.
++                        {
++                            static const bool ple_turn = getenv("LLAMA_PLE_PREFETCH_TURN") != nullptr && atoi(getenv("LLAMA_PLE_PREFETCH_TURN")) > 0;
++                            if (ple_turn && !slot.task->tokens.has_mtmd) {
++                                const auto & toks = slot.task->tokens.get_tokens();
++                                llama_model_prefetch_inputs(model_tgt, toks.data(), (int32_t) toks.size(), n_past);
++                            }
++                        }
++
+                         // this is to signal the client that the request has started processing
+                         if (slot.task->params.stream) {
+                             if (slot.task->params.return_progress) {
