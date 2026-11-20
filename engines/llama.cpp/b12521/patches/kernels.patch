@@ -19,10 +19,10 @@ index 211a8dac7..3ab3adef7 100644
      endif()
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
-index 000000000..db9355881
+index 000000000..d99b63586
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -0,0 +1,482 @@
+@@ -0,0 +1,505 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
 +// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N.
@@ -62,6 +62,7 @@ index 000000000..db9355881
 +    std::vector<ggml_type> src_types;
 +    std::vector<ext_ne>    src_ne;
 +    std::vector<int>       src_node;       // per src: the window node it is (0..), or -1 = a tensor from outside
++    std::vector<std::string> src_ext;      // per outside src: its manifest name; one name = one tensor across the window
 +    int                    uses = 0;       // in-window uses (filled at load)
 +    std::vector<float>     params;         // the op's leading op_params as f32, matched bitwise (a scale's factor and bias)
 +};
@@ -177,12 +178,16 @@ index 000000000..db9355881
 +            throw std::runtime_error("needs contiguous: true and one src_ne per src_types");
 +        }
 +        op.src_node.assign(op.src_types.size(), -1);
++        op.src_ext.assign(op.src_types.size(), "");
 +        if (o.contains("src")) {   // v2 wiring: {"node": j} (an earlier window node) or {"ext": n} (from outside)
 +            if (o.at("src").size() != op.src_types.size()) {
 +                throw std::runtime_error("one src wiring per src_types");
 +            }
 +            for (size_t s = 0; s < op.src_types.size(); ++s) {
 +                const json & w = o.at("src")[s];
++                if (w.contains("ext")) {
++                    op.src_ext[s] = w.at("ext").is_string() ? w.at("ext").get<std::string>() : w.at("ext").dump();
++                }
 +                if (w.contains("node")) {
 +                    const int n = w.at("node").get<int>();
 +                    if (n < 0 || n >= (int) k) {
@@ -302,6 +307,13 @@ index 000000000..db9355881
 +    return v;
 +}
 +
++// an interior node may be a view only of an earlier window node at offset 0 (a RESHAPE / VIEW: same bytes, new shape)
++bool ext_window_view(const std::vector<ggml_tensor *> & w, int k) {
++    const ggml_tensor * t = w[k];
++    return t->view_src == nullptr || ((t->op == GGML_OP_RESHAPE || t->op == GGML_OP_VIEW) && t->view_offs == 0 &&
++                                      std::find(w.begin(), w.begin() + k, t->view_src) != w.begin() + k);
++}
++
 +// the window at i for entry e, or empty: ops, types, shapes, wiring; interior nodes dead outside; no partial aliasing
 +std::vector<ggml_tensor *> ext_match(ext_entry & e, ggml_cgraph * cgraph, int i) {
 +    const int n = (int) e.ops.size();
@@ -327,12 +339,23 @@ index 000000000..db9355881
 +        }
 +        w[k] = node;
 +    }
-+    for (int k = 0; k < n; ++k) {   // interior: read only inside the window, not a graph output, not a view
++    for (int k = 0; k < n; ++k) {   // interior: read only inside the window, not a graph output, a view only of a window node
 +        if (std::find(e.outputs.begin(), e.outputs.end(), k) != e.outputs.end()) {
 +            continue;
 +        }
-+        if ((w[k]->flags & GGML_TENSOR_FLAG_OUTPUT) || w[k]->view_src != nullptr || ggml_node_get_use_count(cgraph, i + k) != e.ops[k].uses) {
++        if ((w[k]->flags & GGML_TENSOR_FLAG_OUTPUT) || !ext_window_view(w, k) || ggml_node_get_use_count(cgraph, i + k) != e.ops[k].uses) {
 +            return {};
++        }
++    }
++    for (int k = 0; k < n; ++k) {   // inputs the manifest names alike (two gemvs on one activation) are one tensor
++        for (size_t s = 0; s < e.ops[k].src_ext.size(); ++s) {
++            for (int q = 0; q <= k && !e.ops[k].src_ext[s].empty(); ++q) {
++                for (size_t r = 0; r < e.ops[q].src_ext.size() && (q < k || r < s); ++r) {
++                    if (e.ops[q].src_ext[r] == e.ops[k].src_ext[s] && w[q]->src[r] != w[k]->src[s]) {
++                        return {};
++                    }
++                }
++            }
 +        }
 +    }
 +    for (int o : e.outputs) {       // written ranges against every input from outside: disjoint, or exactly one allowed input

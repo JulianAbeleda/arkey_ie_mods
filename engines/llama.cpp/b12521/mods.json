@@ -132,11 +132,11 @@
     "ggml/src/ggml-cuda/ggml-cuda.cu"
    ],
    "lines": {
-    "added": 593,
+    "added": 616,
     "removed": 0
    },
    "budget": {
-    "added": 630,
+    "added": 650,
     "removed": 0
    },
    "static": {
@@ -153,6 +153,18 @@
       "removed": 0
      },
      "why": "graph-cap row (+93 lines in ggml-cuda.cu): the CUDA graph cache is the backend's graph execution, the point this module owns in ggml-cuda.cu; budget_rule ceil_105_10 of the new lines",
+     "date": "2026-11-19"
+    },
+    {
+     "from": {
+      "added": 630,
+      "removed": 0
+     },
+     "to": {
+      "added": 650,
+      "removed": 0
+     },
+     "why": "kernels/region-gdn-gate (+23 lines in ext-kernels.cpp): a window's interior node may be a RESHAPE / VIEW at offset 0 of an earlier window node, and outside inputs the manifest names alike must be one tensor; budget_rule ceil_105_10 of the new lines",
      "date": "2026-11-19"
     }
    ]
@@ -872,7 +884,7 @@
     "label": "identical",
     "evidence": {
      "run": "boltbeam-runs/guardrails-20261118 (ab-xcheck)",
-     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm)): check mode (09's GGML_CUDA_EXT_KERNELS_CHECK, extended to every live output of a window; graphs off, turns 40-41, tolerance 0): shared gate 6,145 checks, inject region 12,545, down tail 12,801, shipped one-op entries 12,545, 0 differences, worst 0; with kernels/region-chain-k2560-k10240 on vs the shipped one-op manifest: reply sha256 identical 59/59 in all 6 runs of the 3-pair confirm",
+     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm)): check mode (09's GGML_CUDA_EXT_KERNELS_CHECK, extended to every live output of a window; graphs off, turns 40-41, tolerance 0): shared gate 6,145 checks, inject region 12,545, down tail 12,801, shipped one-op entries 12,545, 0 differences, worst 0; with kernels/region-chain-k2560-k10240 on vs the shipped one-op manifest: reply sha256 identical 59/59 in all 6 runs of the 3-pair confirm; region_gdn_gate through the reshape / shared-input rules (boltbeam-runs/gdn-gate-live-20261119): check mode 156,929 checks, 0 differ, worst 0; R1-R3 and the one-op entries checked in the same run, 0 differ; replies 30/30 equal in the shipped-manifest, gate and check arms; the gdn-gate-live build held the modules before host/ple-prefetch-step, indexer/idx-keys, indexer/topk-rowhist and indexer/kpool-mask-range (their switches unset in both arms): region_gdn_gate is not yet run together with those four",
      "match": {
       "what": "reply sha256 per turn, check mode on vs the unchecked arm, same build and manifest (ab-xcheck, turns 1-4)",
       "equal": 4,
@@ -880,9 +892,9 @@
      }
     }
    },
-   "exercised_by": "a kernel_manifest.v2 entry whose match.ops lists N consecutive graph nodes with their wiring; measured with three windows (gemv + sigmoid + mul + add; gemv + scale + sigmoid + scale; scale + silu)",
+   "exercised_by": "a kernel_manifest.v2 entry whose match.ops lists N consecutive graph nodes with their wiring; measured with three windows (gemv + sigmoid + mul + add; gemv + scale + sigmoid + scale; scale + silu) and one nine-node window with three reshapes and one activation read by two gemvs (region_gdn_gate)",
    "limits": [
-    "a window is N consecutive compute nodes (no views between, every tensor contiguous); interior nodes must be read only inside the window; a live output may share memory with an input only exactly and only where the entry allows it (alias_ok), else the engine's own nodes run",
+    "a window is N consecutive compute nodes (every tensor contiguous; an interior node may be a view only as a RESHAPE / VIEW at offset 0 of an earlier window node); interior nodes must be read only inside the window; outside inputs the entry gives one ext name must be one tensor; a live output may share memory with an input only exactly and only where the entry allows it (alias_ok), else the engine's own nodes run",
     "a GGML_OP_SCALE op matches only on its op_params (factor, bias); a SCALE entry without them is refused at load",
     "one launch per entry; region entries must come before one-op entries in the manifest (first match wins)",
     "GGML_CUDA_EXT_KERNELS_DUMP=<file> appends each graph shape the hook sees (JSON lines) for the region finder; off when unset"
@@ -1634,26 +1646,37 @@
    "dir": "kernels/region-chain-k2560-k10240/",
    "hook": "ext-kernels-window",
    "files": {
-    "manifest.json": "7d5fb4c014dd76c5289d1e4afafcc21627ca827485d22484864a86fe2a341074",
+    "manifest.json": "9f09dbc9e9f3d87acd39a4107d2026325ddb92028e5a0e8c8bbc9d119044f08f",
     "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
     "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
     "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
     "region_inject_tail.cubin": "71427bcf12349ae7739f10f51194781aa49dd5cb3d33405668a2402cc46dbef7",
     "region_shexp_gate.cu": "9431445de298fe847daa40aa2782c90d1a98122b318fdf99884c0948fb8cb1e8",
-    "region_shexp_gate.cubin": "04710377a8db741ad3739758e243aeaf242e6e07da2c4de8b3527df49d6d3e56"
+    "region_shexp_gate.cubin": "04710377a8db741ad3739758e243aeaf242e6e07da2c4de8b3527df49d6d3e56",
+    "region_gdn_gate.cu": "0b8f21be17958e7921434653b8c24db6d0045fb9b37659defe30f8a860476c94",
+    "region_gdn_gate.cubin": "5ec83b3b0a89acbc34b649b401ebf803e74e8a2274fb632bc79f071a78e7fb3d"
    },
    "source": [
     "region_shexp_gate.cu",
     "region_inject_tail.cu",
-    "region_down_tail.cu"
+    "region_down_tail.cu",
+    "region_gdn_gate.cu"
    ],
-   "lines": 131,
-   "budget": 140,
+   "lines": 185,
+   "budget": 200,
+   "budget_raised": [
+    {
+     "from": 140,
+     "to": 200,
+     "why": "Owner-approved 2026-11-19: kernels/region-gdn-gate, measured +3.5 tok/s at 256k (3-pair confirm, warm decode [+3.0, +4.0]; +54 source lines: region_gdn_gate.cu, one generated kernel for the GDN gating window, 6 launches to 1); owner standing rule: raise by the measured remainder after review; budget_rule ceil_105_10 of the new lines",
+     "date": "2026-11-19"
+    }
+   ],
    "output": {
     "label": "identical",
     "evidence": {
      "run": "boltbeam-runs/guardrails-20261118 (ab-xcheck)",
-     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm; the kernel files are byte-equal to 1.0.0's, the manifest differs only in engine.builds. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm, bench-*.json)): hook check mode, real session (graphs off, turns 40-41, tolerance 0): shared gate 6,145, inject region 12,545, down tail 12,801 checks, 0 differences, worst 0; graph-replay bench against the engine's own nodes (real weights for the gate, 31,457,280 outputs; inject 24,576; down tail 1,966,080): 0 differ; switch on vs the shipped manifest: reply sha256 59/59 in all 6 confirm runs",
+     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm; the kernel files are byte-equal to 1.0.0's, the manifest differs only in engine.builds. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm, bench-*.json)): hook check mode, real session (graphs off, turns 40-41, tolerance 0): shared gate 6,145, inject region 12,545, down tail 12,801 checks, 0 differences, worst 0; graph-replay bench against the engine's own nodes (real weights for the gate, 31,457,280 outputs; inject 24,576; down tail 1,966,080): 0 differ; switch on vs the shipped manifest: reply sha256 59/59 in all 6 confirm runs; region_gdn_gate on b12521 (boltbeam-runs/gdn-gate-live-20261119): hook check mode (graphs off, tolerance 0, 30 turns of the 256k session at 128k) 156,929 checks, 0 differ, worst 0; replies 30/30 in arms S (R1-R3 manifest), G (+ gdn gate), C (check); 256k 3-pair confirm turns 60-116: replies 57/57 in all 6 runs, decode +3.5 tok/s [+3.0, +4.0], session -2.6 s [-3.3, -2.0]; the gdn-gate-live build held the modules before host/ple-prefetch-step, indexer/idx-keys, indexer/topk-rowhist and indexer/kpool-mask-range (their switches unset in both arms): region_gdn_gate is not yet run together with those four",
      "match": {
       "what": "reply sha256 per turn, check mode on vs the unchecked arm, same build and manifest (ab-xcheck, turns 1-4)",
       "equal": 4,
@@ -1661,20 +1684,23 @@
      }
     }
    },
-   "exercised_by": "verify-step decode graphs (4 activation columns) with these windows: the shared-expert gate (BF16 gemv K 2560 to 1 row, sigmoid, mul, add), the hc inject (BF16 gemv K 10240 to 4 rows, scale 0.25, sigmoid, scale 2) and the hc down tail (scale 0.25, silu on 320 x 4); measured on one MoE model with an MTP draft head",
+   "exercised_by": "verify-step decode graphs (4 activation columns) with these windows: the shared-expert gate (BF16 gemv K 2560 to 1 row, sigmoid, mul, add), the hc inject (BF16 gemv K 10240 to 4 rows, scale 0.25, sigmoid, scale 2) and the hc down tail (scale 0.25, silu on 320 x 4); measured on one MoE model with an MTP draft head; the GDN gating at the verify step (BF16 gemv K 2560 to 48 rows twice on one input, add, softplus, mul, sigmoid, with the engine's reshapes)",
    "limits": [
-    "three windows and two one-op kernels (the latter read from ../bf16-smallm-gemv-k10240/); shapes, op_params and wiring keyed in manifest.json; sm_120 only; one engine build (6f311d7a = b12521)",
+    "four windows and two one-op kernels (the latter read from ../bf16-smallm-gemv-k10240/); shapes, op_params and wiring keyed in manifest.json; sm_120 only; one engine build (6f311d7a = b12521)",
     "author: arkey's scheduler (family region_chain.v1: one kernel per region; the gemv keeps reduction order llama.cpp.mmvf.bf16_f32.b256 as explicit FMAs, compiled -use_fast_math -fmad=false so no fused multiply-add spans two engine nodes); generator tinygrad-arkey branch region-fusion-20261118 538c3728c, recorded in each manifest entry",
-    "the inject window replaces the shipped ark_inject_c1u1 kernel on that node (region entries are listed first)"
+    "the inject window replaces the shipped ark_inject_c1u1 kernel on that node (region entries are listed first)",
+    "region_gdn_gate (generator tinygrad-arkey branch region-fusion-20261118 f52660073) needs the hook at this commit or later: its window holds three RESHAPE nodes and reads one activation in two gemvs; an older hook refuses the window and the engine's own nodes run",
+    "region_gdn_gate: the generator's static order check does not cover this two-output kernel (its manifest entry's evidence.checks.ok is false), so its identity rests on the hook's check mode (156,929 checks, 0 differ), not on the generator",
+    "region_gdn_gate's softplus and sigmoid are written with exp2 where the engine's nodes call expf under fast math, and the engine's gemv relies on the compiler's multiply-add contraction: equal bytes were measured on one CUDA toolkit build; the manifest keys the engine commit, not the toolkit, so on another toolkit run GGML_CUDA_EXT_KERNELS_CHECK=1 before trusting it"
    ]
   }
  ],
  "tested_trees": [
   {
-   "id": "modules-kpool-mask-range",
-   "path": "storage-tmp/prefill-256k/tree2",
-   "what": "base + the 6 module patches at this commit (indexer with kpool-mask-range); the gate-kp-ident, gate-kp-screen and gate-kp-confirm runs of boltbeam-runs/prefill-256k-20261119 used this tree's build",
-   "contains": "exactly the 6 modules on the base, kv-stream and sparse-split in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap in kernels, ple-prefetch-step in host",
+   "id": "modules-gdn-gate",
+   "path": "storage-tmp/gdn-pkg/tree-modules",
+   "what": "base + the 6 module patches at this commit, assembled from the patches: source only, this exact tree was not built or run. Every touched file was built and run in one of two measured trees: all but ext-kernels.cpp are byte-equal to storage-tmp/prefill-256k/tree2 (boltbeam-runs/prefill-256k-20261119, the modules with kpool-mask-range), and ext-kernels.cpp is byte-equal to storage-tmp/gdn-gate-install/tree, the build boltbeam-runs/gdn-gate-live-20261119 measured (the modules before ple-prefetch-step, idx-keys, topk-rowhist and kpool-mask-range, plus this kernels patch); ext-kernels.cpp includes no file a patch touches",
+   "contains": "exactly the 6 modules on the base (source, not built as one tree): kv-stream and sparse-split in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; region_gdn_gate was measured without ple-prefetch-step, idx-keys, topk-rowhist and kpool-mask-range",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

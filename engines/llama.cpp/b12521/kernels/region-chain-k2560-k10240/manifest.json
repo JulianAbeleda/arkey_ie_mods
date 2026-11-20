@@ -662,6 +662,347 @@
     }
    },
    "tolerance": 0
+  },
+  {
+   "id": "region_gdn_gate",
+   "target": "nvidia_sm120",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        48
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "wa"
+       },
+       {
+        "ext": "x"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_RESHAPE",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 0
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_ADD",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "f32",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ],
+       [
+        48
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 1
+       },
+       {
+        "ext": "dt"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 2
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SOFTPLUS"
+     },
+     {
+      "op": "GGML_OP_MUL",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "f32",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ],
+       [
+        48
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 3
+       },
+       {
+        "ext": "sa"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_RESHAPE",
+      "type": "f32",
+      "ne": [
+       1,
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 4
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        48
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "wb"
+       },
+       {
+        "ext": "x"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_RESHAPE",
+      "type": "f32",
+      "ne": [
+       1,
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 6
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       1,
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        1,
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 7
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SIGMOID"
+     }
+    ],
+    "outputs": [
+     5,
+     8
+    ],
+    "alias_ok": []
+   },
+   "kernel": {
+    "file": "region_gdn_gate.cubin",
+    "sha256": "5ec83b3b0a89acbc34b649b401ebf803e74e8a2274fb632bc79f071a78e7fb3d",
+    "symbol": "region_gdn_gate",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     96,
+     4,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 5,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    },
+    {
+     "node": 6,
+     "src": 0
+    },
+    {
+     "node": 2,
+     "src": 1
+    },
+    {
+     "node": 4,
+     "src": 1
+    },
+    {
+     "node": 8,
+     "src": -1
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "49e13eef5436ed28ec00183b408d138ec55253a51c4977701c6228dd04bef8b6",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)"
+    ],
+    "compile_flags": [
+     "-O3",
+     "-use_fast_math",
+     "-fmad=false"
+    ],
+    "checks": {
+     "outputs": 2,
+     "shared_values": 1,
+     "loops": 0,
+     "fmul": 5,
+     "mma": 0,
+     "ffma": 22,
+     "shfl": 5,
+     "ok": false,
+     "why": [
+      "1 level-0 values written to shared, 2 outputs",
+      "FMUL / MMA present",
+      "a chain's activation operand is not one fp32 load stream",
+      "an output's combine tree differs from the order",
+      "output reads 0 level-0 slots, the order has 8"
+     ],
+     "gate": false
+    },
+    "generator": "tinygrad-arkey branch region-fusion-20261118 f52660073 (extra/llm_research/region_chain.py emit; manifest_entry with binding llama.cpp.ggml_region.v1)"
+   }
   }
  ]
 }

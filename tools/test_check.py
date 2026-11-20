@@ -460,5 +460,36 @@ class Modules(Fixture):
         self.assertTrue(any("c: a parked row cannot be in a module" in b for b in bad), bad)
 
 
+class KernelBudget(Fixture):
+    """A kernels row's lines or budget changed against HEAD needs a budget_raised entry {from, to, why, date}."""
+
+    def kernels(self, row, old):
+        d = os.path.join(self.folder, "kernels", "k")
+        os.makedirs(d, exist_ok=True)
+        write(os.path.join(d, "k.cu"), "x\n" * row["lines"])
+        k = {"name": "k", "dir": "kernels/k/", "hook": "a", "files": {"k.cu": c.sha256(os.path.join(d, "k.cu"))}, "source": "k.cu",
+             "output": {"label": "untested", "evidence": {"numbers": "fixture"}}, **row}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            c.check_kernels(self.folder, {"mods": self.mods, "kernels": [k]}, {"kernels": [{"name": "k", **old}]})
+        return list(c.fails)
+
+    def test_unchanged_row_needs_no_entry(self):
+        self.assertEqual(self.kernels({"lines": 2, "budget": 10}, {"lines": 2, "budget": 10}), [])
+
+    def test_change_without_entry_fails(self):
+        for row in ({"lines": 3, "budget": 10}, {"lines": 2, "budget": 20}):
+            c.fails.clear()
+            self.assertTrue(any("without budget_raised" in f for f in self.kernels(row, {"lines": 2, "budget": 10})), row)
+
+    def test_change_with_entry_passes_and_a_wrong_entry_fails(self):
+        raised = [{"from": 10, "to": 20, "why": "fixture", "date": "2026-11-19"}]
+        self.assertEqual(self.kernels({"lines": 12, "budget": 20, "budget_raised": raised}, {"lines": 2, "budget": 10}), [])
+        for bad in ({"from": 5}, {"to": 30}, {"why": ""}):
+            c.fails.clear()
+            fails = self.kernels({"lines": 12, "budget": 20, "budget_raised": [{**raised[0], **bad}]}, {"lines": 2, "budget": 10})
+            self.assertTrue(any("without budget_raised" in f for f in fails), bad)
+
+
 if __name__ == "__main__":
     unittest.main()

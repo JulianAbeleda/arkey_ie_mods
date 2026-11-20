@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-kpool-mask-range: exactly the 6 modules on the base, kv-stream and sparse-split in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap in kernels, ple-prefetch-step in host",
+    "why": "modules-gdn-gate: exactly the 6 modules on the base (source, not built as one tree): kv-stream and sparse-split in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; region_gdn_gate was measured without ple-prefetch-step, idx-keys, topk-rowhist and kpool-mask-range",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -2395,13 +2395,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "e1a303160019e262c3d1ba3665984f30521e3074febdbbc510dc697e1fefe717",
+   "sha256": "38ffec393550a838c67d8d9b88ba76295662669d8fade7396d2dbb772eb1d37a",
    "lines": {
-    "added": 593,
+    "added": 616,
     "removed": 0
    },
    "budget": {
-    "added": 630,
+    "added": 650,
     "removed": 0
    },
    "files": [
@@ -2441,13 +2441,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "e1a303160019e262c3d1ba3665984f30521e3074febdbbc510dc697e1fefe717",
+   "sha256": "38ffec393550a838c67d8d9b88ba76295662669d8fade7396d2dbb772eb1d37a",
    "lines": {
-    "added": 593,
+    "added": 616,
     "removed": 0
    },
    "budget": {
-    "added": 630,
+    "added": 650,
     "removed": 0
    },
    "files": [
@@ -2496,13 +2496,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "e1a303160019e262c3d1ba3665984f30521e3074febdbbc510dc697e1fefe717",
+   "sha256": "38ffec393550a838c67d8d9b88ba76295662669d8fade7396d2dbb772eb1d37a",
    "lines": {
-    "added": 593,
+    "added": 616,
     "removed": 0
    },
    "budget": {
-    "added": 630,
+    "added": 650,
     "removed": 0
    },
    "files": [
@@ -3379,17 +3379,19 @@
    "hook": "llama.cpp/b12521/ext-kernels-window",
    "dir": "engines/llama.cpp/b12521/kernels/region-chain-k2560-k10240/",
    "files": {
-    "manifest.json": "7d5fb4c014dd76c5289d1e4afafcc21627ca827485d22484864a86fe2a341074",
+    "manifest.json": "9f09dbc9e9f3d87acd39a4107d2026325ddb92028e5a0e8c8bbc9d119044f08f",
     "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
     "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
     "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
     "region_inject_tail.cubin": "71427bcf12349ae7739f10f51194781aa49dd5cb3d33405668a2402cc46dbef7",
     "region_shexp_gate.cu": "9431445de298fe847daa40aa2782c90d1a98122b318fdf99884c0948fb8cb1e8",
-    "region_shexp_gate.cubin": "04710377a8db741ad3739758e243aeaf242e6e07da2c4de8b3527df49d6d3e56"
+    "region_shexp_gate.cubin": "04710377a8db741ad3739758e243aeaf242e6e07da2c4de8b3527df49d6d3e56",
+    "region_gdn_gate.cu": "0b8f21be17958e7921434653b8c24db6d0045fb9b37659defe30f8a860476c94",
+    "region_gdn_gate.cubin": "5ec83b3b0a89acbc34b649b401ebf803e74e8a2274fb632bc79f071a78e7fb3d"
    },
    "output": "identical",
-   "lines": 131,
-   "budget": 140
+   "lines": 185,
+   "budget": 200
   }
  ],
  "archived": [

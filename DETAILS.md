@@ -219,6 +219,10 @@ llama.cpp b12521 modules: `kv` (sparse-direct, fattn-vec-skip, kv-stream, sparse
 idx-inplace, topk-fused, idx-keys, topk-rowhist, kpool-mask-range), `kernels` (ext-kernels, ext-kernels-window, graph-cap), `experts` (moe-inplace, cublas-shared,
 draft-route-count), `state` (mtp-share-head, graph-slots, rs-one-copy), `host` (ckpt-pinned, tokenize-incr,
 ple-prefetch, sched-async-inputs). The switches, check modes and limits are those of the same mods on 1.0.0, above. idx-keys, topk-rowhist and kpool-mask-range exist on b12521 only (rows in its mods.json).
+kernels/region-gdn-gate (b12521 only): the fourth region of `kernels/region-chain-k2560-k10240`, one generated kernel for the GDN gating
+window at the verify step (two gemvs on one activation, add, softplus, mul, sigmoid: 6 launches to 1). Its window holds the engine's
+reshapes, so the window hook takes an interior RESHAPE / VIEW at offset 0 of an earlier window node, and inputs a manifest entry names
+alike must be one tensor. 256k, 3 pairs: decode +3.5 tok/s [+3.0, +4.0], identical text.
 
 ## Archive
 

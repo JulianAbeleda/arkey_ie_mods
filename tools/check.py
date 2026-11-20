@@ -24,7 +24,8 @@ Per folder
   7 archive   every archived patch's sha256 and lines equal its row; archived patches are not budgeted and never in
               the series, parked or index.json's active list (a tested tree may apply one, for byte equality only);
               archive-ledger.json is append-only and keeps every archived patch ever recorded
-  8 files     every file in patches/, parked/, archive/ and tools/ has a row; also_applies_to is checked by applying
+  8 files     every file in patches/, parked/, archive/ and tools/ has a row; also_applies_to is checked by applying;
+              a kernels row's change of lines or budget against HEAD needs a budget_raised entry, as in 4
   9 exports   index.json and each archive/README.md equal what the rows generate (--write regenerates them and
               appends new archived rows to the ledger); index.json requires is engines.json requires (the oldest
               consumer version that reads it: requires.boltbeam a dotted version, with a why)
@@ -68,7 +69,7 @@ TOP_FILES = {".git", ".githooks", ".gitignore", "DETAILS.md", "LICENSE", "LICENS
              "tools", "local.json", "local.example.json", "archive-ledger.json", "__pycache__", "benchmarks"}
 VERSION_ENTRIES = {"mods.json", "stack_budget.json", "patches", "parked", "archive", "retired", "tools", "kernels"}
 RETIRED_KEYS = {"date", "why"}  # a retired mod's row "retired", and an engines.json retired_versions entry
-KERNEL_KEYS = {"name", "dir", "hook", "files", "source", "lines", "budget", "output", "gain", "exercised_by", "limits"}
+KERNEL_KEYS = {"name", "dir", "hook", "files", "source", "lines", "budget", "budget_raised", "output", "gain", "exercised_by", "limits"}
 INDEX_MOD_KEYS = {"id", "engine", "version", "name", "title", "state", "order", "applier", "base", "switch", "switch_null_why", "check", "check_needs",
                   "marker", "knobs", "output", "patch", "sha256", "lines", "budget", "files", "depends_on", "rule_exceptions", "module"}
 TITLE_MAX = 80  # a mod's title: what it changes, in one line (a consumer's list shows it first)
@@ -1000,11 +1001,14 @@ def check_files(folder, spec):
         say("ok" if ok else "FAIL", f"tool    {t['path']} sha256 {t['sha256'][:12]}" + ("" if ok else ": missing or changed"))
 
 
-def check_kernels(folder, spec):
+def check_kernels(folder, spec, old=None):
     """kernels/<name>/: an engine kernel kept as an artifact (a source, its manifest entry for an install hook mod, and
     built binaries if kept), with the mods' rules: the hook mod's switch turns it on and its check mode checks it; an
-    output label with evidence (identical needs a counted match); a line budget on the source; every file's sha256."""
+    output label with evidence (identical needs a counted match); a line budget on the source; every file's sha256;
+    a change of lines or budget against HEAD (old: its mods.json) needs a budget_raised entry {from, to, why, date}."""
     by = {m["name"]: m for m in spec.get("mods", [])}
+    old = head_json(f"{os.path.relpath(folder, ROOT)}/mods.json") if old is None else old
+    old_k = {k["name"]: k for k in (old or {}).get("kernels", [])}
     for k in spec.get("kernels", []):
         bad = [f"unknown keys {sorted(set(k) - KERNEL_KEYS)}"] if set(k) - KERNEL_KEYS else []
         if not k["dir"].startswith("kernels/") or k["dir"].rstrip("/").split("/")[-1] != k["name"]:
@@ -1022,6 +1026,10 @@ def check_kernels(folder, spec):
             bad.append("every source must be one of the row's files")
         if n != k["lines"] or n > k["budget"]:
             bad.append(f"source {n} lines, row says {k['lines']}, budget {k['budget']}")
+        o, last = old_k.get(k["name"]), (k.get("budget_raised") or [None])[-1]
+        if o and (o["lines"], o["budget"]) != (k["lines"], k["budget"]):
+            if not (isinstance(last, dict) and last.get("from") == o["budget"] and last.get("to") == k["budget"] and last.get("why") and last.get("date")):
+                bad.append(f"lines/budget changed against HEAD ({o['lines']} {o['budget']} -> {k['lines']} {k['budget']}) without budget_raised {{from, to, why, date}}")
         ev = k["output"].get("evidence") or {}
         if k["output"].get("label") not in LABELS or not ev.get("numbers") or (k["output"]["label"] == "identical" and not (ev.get("match") or {}).get("of")):
             bad.append("output label with evidence (identical: a counted match)")
