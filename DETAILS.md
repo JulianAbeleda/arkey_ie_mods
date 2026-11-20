@@ -216,13 +216,18 @@ so a module is one patch on one engine extension point: the engine files that up
 - Code that needs no engine internals goes in the module's own new file: a new file cannot conflict on a base move.
 
 llama.cpp b12521 modules: `kv` (sparse-direct, fattn-vec-skip, kv-stream, sparse-split), `indexer` (idx-pooled, kpool-input-device,
-idx-inplace, topk-fused, idx-keys, topk-rowhist, kpool-mask-range), `kernels` (ext-kernels, ext-kernels-window, graph-cap), `experts` (moe-inplace, cublas-shared,
+idx-inplace, topk-fused, idx-keys, topk-rowhist, kpool-mask-range), `kernels` (ext-kernels, ext-kernels-window, graph-cap, concat-rows), `experts` (moe-inplace, cublas-shared,
 draft-route-count), `state` (mtp-share-head, graph-slots, rs-one-copy), `host` (ckpt-pinned, tokenize-incr,
 ple-prefetch, sched-async-inputs). The switches, check modes and limits are those of the same mods on 1.0.0, above. idx-keys, topk-rowhist and kpool-mask-range exist on b12521 only (rows in its mods.json).
 kernels/region-gdn-gate (b12521 only): the fourth region of `kernels/region-chain-k2560-k10240`, one generated kernel for the GDN gating
 window at the verify step (two gemvs on one activation, add, softplus, mul, sigmoid: 6 launches to 1). Its window holds the engine's
 reshapes, so the window hook takes an interior RESHAPE / VIEW at offset 0 of an earlier window node, and inputs a manifest entry names
 alike must be one tensor. 256k, 3 pairs: decode +3.5 tok/s [+3.0, +4.0], identical text.
+kernels/concat-rows (b12521 only, `GGML_CUDA_CONCAT_ROWS=1`, check `GGML_CUDA_CONCAT_ROWS_CHECK=1`): stock llama.cpp launches the
+non-contiguous concat with one 256-thread block a row, so the decode step's [7, 10240] nodes start 10,240 blocks with 7 threads busy in
+each. With the switch a block takes floor(256 / row length) whole rows (285 blocks there); from 129 elements a row up the stock launch
+runs. 256k, 3 pairs: decode +2.6 tok/s [+2.5, +2.8], identical text (30/30 turns, 159,745 checked nodes, 0 differ). Measured in a build
+that also held unreleased hook rules no manifest entry used; the build of this series alone has compiled and has no GPU identity run yet.
 
 ## Archive
 

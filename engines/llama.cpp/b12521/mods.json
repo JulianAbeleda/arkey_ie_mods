@@ -135,24 +135,25 @@
   },
   {
    "name": "kernels",
-   "title": "external kernel hook and the CUDA graph cache bound",
-   "point": "the CUDA backend's graph execution: one hook that swaps a node or a window of nodes for a kernel a manifest names (ext-kernels), and the cache of captured CUDA graphs it launches (graph-cap)",
+   "title": "external kernel hook, the CUDA graph cache bound, the concat launch shape",
+   "point": "the CUDA backend's graph execution: one hook that swaps a node or a window of nodes for a kernel a manifest names (ext-kernels), the cache of captured CUDA graphs it launches (graph-cap), and the launch shape of a backend kernel a graph node runs (concat-rows: the non-contiguous concat)",
    "patch": "patches/kernels.patch",
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu"
    ],
    "lines": {
-    "added": 616,
-    "removed": 0
+    "added": 653,
+    "removed": 9
    },
    "budget": {
-    "added": 650,
-    "removed": 0
+    "added": 653,
+    "removed": 9
    },
    "static": {
-    "hunks_removing_stock_lines": 0
+    "hunks_removing_stock_lines": 3
    },
    "budget_raised": [
     {
@@ -178,6 +179,18 @@
      },
      "why": "kernels/region-gdn-gate (+23 lines in ext-kernels.cpp): a window's interior node may be a RESHAPE / VIEW at offset 0 of an earlier window node, and outside inputs the manifest names alike must be one tensor; budget_rule ceil_105_10 of the new lines",
      "date": "2026-11-19"
+    },
+    {
+     "from": {
+      "added": 650,
+      "removed": 0
+     },
+     "to": {
+      "added": 653,
+      "removed": 9
+     },
+     "why": "kernels/concat-rows (+37 -9 lines in concat.cu): the non-contiguous concat kernel takes floor(block / row length) whole rows a block behind GGML_CUDA_CONCAT_ROWS, with its check mode; measured +2.6 tok/s at 256k (boltbeam-runs/concat-launch-shape-20261120); the budget is the measured lines, not budget_rule ceil_105_10 (owner rule: raise by the measured remainder after review, Owner-approved 2026-11-20); the 9 removed lines are the stock comment and template header, two parameters, the row index, the loop header, the grid and the launch call, rewritten so that the switch unset compiles the stock loop",
+     "date": "2026-11-20"
     }
    ]
   },
@@ -971,6 +984,60 @@
    ]
   },
   {
+   "name": "concat-rows",
+   "title": "non-contiguous concat: a block takes as many whole rows as fit",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_CONCAT_ROWS",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "GGML_CUDA_CONCAT_ROWS_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "GGML_CUDA_CONCAT_ROWS",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/concat-launch-shape-20261120 (ident128/, confirm/; README.md '2026-11-20 7:22-7:29 AM EST' and '7:29-8:06 AM EST')",
+     "numbers": "on b12521, MEASURED IN ANOTHER TREE than this series' tested tree: storage-tmp/region-next/tree-next = the 6 modules as of kernels/region-gdn-gate plus this concat.cu (byte-equal) plus hook rules for strided views and state writes in ext-kernels.cpp that are not in this series; the manifest of these runs (the shipped region-chain-k2560-k10240) holds no entry that uses those rules. The build of this series' own tree (storage-tmp/hardcode-fix/tree-modules-concat-rows) compiled on the CPU; its identity run is PENDING. ident128 (128k context, turns 1-30 of a 256k session, recorded history, the shipped 256k switch set): reply sha256 30/30 equal in three arms: switch off; on; on in check mode (graphs off: GGML_CUDA_CONCAT_ROWS_CHECK ok, 159,745 checks, 0 differ: every byte of the node against the stock launch run after it). confirm (256k, turns 60-116, 3 alternating pairs, both GGUF files evicted from the page cache before every arm): replies 57/57 in all 6 runs; warm decode 233.9 -> 236.5 tok/s, +2.6 [+2.5, +2.8]; session wall 177.9 -> 176.3 s, -1.6 [-1.9, -1.3]; prefill -0 ms [-12, +11]; realized 0.154 ms a step [0.147, 0.162] against the bench's 0.135 [0.122, 0.146] (1.14 [1.09, 1.20] of it). Bench (concatbench-2, one kernel in isolation): the kernel's bytes equal a CPU reference of the op, 0 differ; the bench ran the shape [13, 10240] (a 10-token pass), not the decode step's [7, 10240], so its 0.135 is not a prediction for the measured shape. Shapes read from the engine's graphs: boltbeam-runs/hook-match-gate-20261120",
+     "match": {
+      "what": "reply sha256 per turn, switch on and check mode vs off, same build (ident128, turns 1-30; the tree-next build, see numbers)",
+      "equal": 30,
+      "of": 30
+     }
+    }
+   },
+   "gain": {
+    "value": "+2.6",
+    "unit": "tok/s warm decode [+2.5, +2.8], turns 60-116 of a 256k session (233.9 -> 236.5); session wall of those 57 turns -1.6 s [-1.9, -1.3]; 0.154 ms a decode step [0.147, 0.162]; prefill unchanged (-0 ms [-12, +11])",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 116-turn session to 256k context, MoE model on the engine's qwen4exp graph, q8_0 KV, MTP draft head k=3, the shipped 256k plan (LLAMA_KV_STREAM=52848, GGML_CUDA_GRAPH_MAX_KEYS=2, LLAMA_SPARSE_SPLIT=1, the region-chain-k2560-k10240 manifest); both GGUF files evicted from the page cache before every arm; 3 alternating pairs; the build was storage-tmp/region-next/tree-next (see output.evidence.numbers), not this series' tested tree",
+    "run": "boltbeam-runs/concat-launch-shape-20261120/confirm"
+   },
+   "exercised_by": "a CONCAT node that takes the backend's non-contiguous path (a source that is a transposed or strided view) with a destination row shorter than half a block (ne0 <= 128 of 256 threads); in the measured sessions that is the decode step's 36 nodes [7, 10240] (a contiguous [3, 10240] and a transposed [4, 10240] view, at a 4-token step of the qwen4exp graph: stock 10,240 blocks with 7 of 256 threads busy, with the switch 285 blocks); a 1,024-token prefill pass has [1027, 10240] there and keeps the stock launch",
+   "limits": [
+    "the non-contiguous concat only; the contiguous path and quantized types are untouched. From ne0 = 129 up a block holds one row and the stock instantiation launches",
+    "rows = floor(256 / ne0) and grid = ceil(ne1 / rows) come from the node's shape; the grid's other two dims are the stock ones (ne2, ne3)",
+    "the switch is read once per process; unset compiles and launches the stock loop (a template flag: the stock instantiation carries no row arithmetic)",
+    "check mode compares only launches outside a CUDA graph capture (run it with GGML_CUDA_DISABLE_GRAPHS=1): it runs the stock shape after the new one and compares every byte of the node; the stock result stays in the node",
+    "measured in a build that also held unreleased hook rules in ext-kernels.cpp (no manifest entry used them); this series' own build has compiled and starts, loads the shipped manifest and takes the same windows in a no-GPU dry run, but has had no identity run on the GPU yet",
+    "one session shape ([7, 10240], 4-token decode steps) and one GPU measured; the saving is launch overhead (blocks started), so it depends on the row length and row count of the node"
+   ],
+   "rule_exceptions": []
+  },
+  {
    "name": "moe-inplace",
    "title": "prefill reads cached experts in place",
    "module": "experts",
@@ -1711,10 +1778,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-kv-stream-gate",
-   "path": "storage-tmp/hardcode-fix/tree-modules-gate",
-   "what": "base + the 6 module patches at this commit, assembled from the patches: source only, this exact tree was not built or run. It is storage-tmp/hardcode-fix/tree-modules-log (the tree before it) with the kv-stream gate change; the files that change are byte-equal to those in storage-tmp/hardcode-fix/tree, whose build passed the 256k load check and the 30-turn identity run at 128k (boltbeam-runs/sparse-direct-noop-log-20261119)",
-   "contains": "exactly the 6 modules on the base (source, not built as one tree): kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; the gate and the shape log were run in storage-tmp/hardcode-fix/tree, which lacks the region_gdn_gate hook rules",
+   "id": "modules-concat-rows",
+   "path": "storage-tmp/hardcode-fix/tree-modules-concat-rows",
+   "what": "base + the 6 module patches at this commit. It is storage-tmp/hardcode-fix/tree-modules-gate (the tree before it) with ggml/src/ggml-cuda/concat.cu changed by kernels/concat-rows. Built on the CPU (llama-server, CUDA, Release); NOT run on the GPU: no identity run on this build yet (a dry run without the GPU starts it and the hook takes the shipped manifest's windows as in the measured build: boltbeam-runs/hook-match-gate-20261120). concat-rows was measured in storage-tmp/region-next/tree-next, which differs from this tree: its concat.cu is byte-equal, but its ext-kernels.cpp also holds hook rules for strided views and state writes that are not in this series (no manifest entry used them in the measured runs), and its kv module is the one before sparse-direct's shape log and kv-stream's shape gate",
+   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules and concat-rows in kernels, ple-prefetch-step in host; concat-rows was measured in a tree that also had unreleased hook rules, which no manifest entry used in those runs",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

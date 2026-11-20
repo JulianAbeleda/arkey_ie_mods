@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-kv-stream-gate: exactly the 6 modules on the base (source, not built as one tree): kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; the gate and the shape log were run in storage-tmp/hardcode-fix/tree, which lacks the region_gdn_gate hook rules",
+    "why": "modules-concat-rows: exactly the 6 modules on the base: kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules and concat-rows in kernels, ple-prefetch-step in host; concat-rows was measured in a tree that also had unreleased hook rules, which no manifest entry used in those runs",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -2395,17 +2395,18 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "38ffec393550a838c67d8d9b88ba76295662669d8fade7396d2dbb772eb1d37a",
+   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
    "lines": {
-    "added": 616,
-    "removed": 0
+    "added": 653,
+    "removed": 9
    },
    "budget": {
-    "added": 650,
-    "removed": 0
+    "added": 653,
+    "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu"
    ],
@@ -2441,17 +2442,18 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "38ffec393550a838c67d8d9b88ba76295662669d8fade7396d2dbb772eb1d37a",
+   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
    "lines": {
-    "added": 616,
-    "removed": 0
+    "added": 653,
+    "removed": 9
    },
    "budget": {
-    "added": 650,
-    "removed": 0
+    "added": 653,
+    "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu"
    ],
@@ -2496,17 +2498,18 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "38ffec393550a838c67d8d9b88ba76295662669d8fade7396d2dbb772eb1d37a",
+   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
    "lines": {
-    "added": 616,
-    "removed": 0
+    "added": 653,
+    "removed": 9
    },
    "budget": {
-    "added": 650,
-    "removed": 0
+    "added": 653,
+    "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu"
    ],
@@ -2520,13 +2523,65 @@
    "module": "kernels"
   },
   {
+   "id": "llama.cpp/b12521/concat-rows",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "concat-rows",
+   "title": "non-contiguous concat: a block takes as many whole rows as fit",
+   "state": "series",
+   "order": 15,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_CONCAT_ROWS",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "GGML_CUDA_CONCAT_ROWS_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
+   "marker": "GGML_CUDA_CONCAT_ROWS",
+   "knobs": [
+    "GGML_CUDA_CONCAT_ROWS"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
+   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
+   "lines": {
+    "added": 653,
+    "removed": 9
+   },
+   "budget": {
+    "added": 653,
+    "removed": 9
+   },
+   "files": [
+    "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/concat.cu",
+    "ggml/src/ggml-cuda/ext-kernels.cpp",
+    "ggml/src/ggml-cuda/ggml-cuda.cu"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [],
+   "module": "kernels"
+  },
+  {
    "id": "llama.cpp/b12521/moe-inplace",
    "engine": "llama.cpp",
    "version": "b12521",
    "name": "moe-inplace",
    "title": "prefill reads cached experts in place",
    "state": "series",
-   "order": 15,
+   "order": 16,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2583,7 +2638,7 @@
    "name": "cublas-shared",
    "title": "one cuBLAS handle and workspace per device for every context",
    "state": "series",
-   "order": 16,
+   "order": 17,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2640,7 +2695,7 @@
    "name": "draft-route-count",
    "title": "diagnostic: count the experts the draft's router picks",
    "state": "series",
-   "order": 17,
+   "order": 18,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2697,7 +2752,7 @@
    "name": "mtp-share-head",
    "title": "draft head reads the target's output projection",
    "state": "series",
-   "order": 18,
+   "order": 19,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2756,7 +2811,7 @@
    "name": "graph-slots",
    "title": "draft context keeps a graph per small ubatch size",
    "state": "series",
-   "order": 19,
+   "order": 20,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2816,7 +2871,7 @@
    "name": "rs-one-copy",
    "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
    "state": "series",
-   "order": 20,
+   "order": 21,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2876,7 +2931,7 @@
    "name": "ckpt-pinned",
    "title": "context checkpoints in a pinned pool",
    "state": "series",
-   "order": 21,
+   "order": 22,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2935,7 +2990,7 @@
    "name": "tokenize-incr",
    "title": "server tokenizes only the prompt's new part",
    "state": "series",
-   "order": 22,
+   "order": 23,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2996,7 +3051,7 @@
    "name": "ple-prefetch",
    "title": "per-layer embedding rows read ahead on a thread",
    "state": "series",
-   "order": 23,
+   "order": 24,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3057,7 +3112,7 @@
    "name": "ple-prefetch-step",
    "title": "per-layer embedding rows read ahead as each draft token is known",
    "state": "series",
-   "order": 24,
+   "order": 25,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3118,7 +3173,7 @@
    "name": "sched-async-inputs",
    "title": "scheduler uploads host inputs on the split's stream, no host sync",
    "state": "series",
-   "order": 25,
+   "order": 26,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
