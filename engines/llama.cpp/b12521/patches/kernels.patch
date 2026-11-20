@@ -124,10 +124,10 @@ index f8dcd95ab..663fe3e90 100644
  
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
-index 000000000..d99b63586
+index 000000000..32287d79f
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -0,0 +1,505 @@
+@@ -0,0 +1,566 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
 +// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N.
@@ -170,6 +170,9 @@ index 000000000..d99b63586
 +    std::vector<std::string> src_ext;      // per outside src: its manifest name; one name = one tensor across the window
 +    int                    uses = 0;       // in-window uses (filled at load)
 +    std::vector<float>     params;         // the op's leading op_params as f32, matched bitwise (a scale's factor and bias)
++    std::vector<size_t>    nb;             // a strided node (a view): its byte strides, matched exactly; empty = contiguous
++    std::vector<std::vector<size_t>> src_nb;  // the same per outside src
++    int64_t                view_offs = 0;  // an interior view of a window node: its byte offset in that node's buffer
 +};
 +
 +struct ext_arg {
@@ -185,12 +188,17 @@ index 000000000..d99b63586
 +    std::vector<std::pair<int, int>> alias_ok;  // (node, src) inputs a live output may occupy exactly (same address, size)
 +    CUfunction                       fn;
 +    unsigned                         grid[3], block[3], shmem;
++    bool                             inplace = false;  // an output is a write into an outside tensor (SET_ROWS): no early start
 +    bool                             pdl;  // the kernel waits (griddepcontrol.wait) before it reads a node input
 +    double                           tol;  // check mode: largest allowed |ext - stock|, 0 = bit-identical
 +    std::vector<ext_arg>             args;
 +    uint64_t                         n_match = 0, n_check = 0, n_diff = 0, n_refused = 0;
 +    double                           worst = 0;
 +};
++
++bool ext_is_view(ggml_op op) {   // no bytes of its own
++    return op == GGML_OP_RESHAPE || op == GGML_OP_VIEW || op == GGML_OP_TRANSPOSE || op == GGML_OP_PERMUTE;
++}
 +
 +ggml_type ext_type(const std::string & s) {
 +    for (int t = 0; t < GGML_TYPE_COUNT; ++t) {
@@ -267,9 +275,12 @@ index 000000000..d99b63586
 +        for (const json & v : o.value("op_params_f32", json::array())) {
 +            op.params.push_back(v.get<float>());
 +        }
-+        if (op.op == GGML_OP_SCALE && op.params.size() < 2) {   // its factor and bias are the op: never match on shape alone
-+            throw std::runtime_error("a GGML_OP_SCALE op needs op_params_f32 [scale, bias]");
++        // these op_params are the op: never match on shape alone (scale: factor, bias; arange: start, stop, step; concat: dim)
++        if (op.params.size() < (op.op == GGML_OP_SCALE ? 2u : op.op == GGML_OP_ARANGE ? 3u : op.op == GGML_OP_CONCAT ? 1u : 0u)) {
++            throw std::runtime_error("a GGML_OP_SCALE / ARANGE / CONCAT op needs its op_params_f32 (2 / 3 / 1 values)");
 +        }
++        op.nb        = o.value("nb", std::vector<size_t>());
++        op.view_offs = o.value("view_offs", (int64_t) 0);
 +        if ((op.op == GGML_OP_UNARY) != (op.unary >= 0)) {
 +            throw std::runtime_error("a GGML_OP_UNARY op needs its unary, and only it");
 +        }
@@ -279,8 +290,14 @@ index 000000000..d99b63586
 +        for (const json & s : o.at("src_ne")) {
 +            op.src_ne.push_back(ext_shape(s));
 +        }
-+        if (!o.value("contiguous", false) || op.src_ne.size() != op.src_types.size() || op.src_types.size() > GGML_MAX_SRC) {
-+            throw std::runtime_error("needs contiguous: true and one src_ne per src_types");
++        op.src_nb = o.value("src_nb", std::vector<std::vector<size_t>>(op.src_types.size()));
++        bool nb_ok = op.src_nb.size() == op.src_types.size() && (op.nb.empty() || op.nb.size() == GGML_MAX_DIMS);
++        for (const std::vector<size_t> & nb : op.src_nb) {
++            nb_ok = nb_ok && (nb.empty() || nb.size() == GGML_MAX_DIMS);
++        }
++        // contiguous: true, or the node's strides (nb): a strided tensor is matched only on its exact layout
++        if (o.value("contiguous", false) != op.nb.empty() || !nb_ok || op.src_ne.size() != op.src_types.size() || op.src_types.size() > GGML_MAX_SRC) {
++            throw std::runtime_error("needs contiguous: true or nb (4 strides), one src_ne per src_types, src_nb of 4 strides or []");
 +        }
 +        op.src_node.assign(op.src_types.size(), -1);
 +        op.src_ext.assign(op.src_types.size(), "");
@@ -295,11 +312,12 @@ index 000000000..d99b63586
 +                }
 +                if (w.contains("node")) {
 +                    const int n = w.at("node").get<int>();
-+                    if (n < 0 || n >= (int) k) {
++                    const bool self = n == (int) k && op.op == GGML_OP_CPY && s == 1;   // a cast: its src 1 is the node itself
++                    if (n < 0 || (n >= (int) k && !self)) {
 +                        throw std::runtime_error("a src names a window node that is not earlier");
 +                    }
 +                    op.src_node[s] = n;
-+                    e.ops[n].uses++;
++                    (self ? op : e.ops[n]).uses++;
 +                }
 +            }
 +        }
@@ -317,8 +335,25 @@ index 000000000..d99b63586
 +            throw std::runtime_error("node " + std::to_string(k) + " is read by no one: it must be a listed output");
 +        }
 +    }
++    std::vector<bool> fixed(e.ops.size());   // a node whose value the entry fixes: every src a fixed window node (an ARANGE has none)
++    for (size_t k = 0; k < e.ops.size(); ++k) {   // a SET_ROWS writes into its src 2: a listed output; its rows fixed, its destination a window view
++        const ext_op & op = e.ops[k];
++        fixed[k]          = op.op == GGML_OP_ARANGE || (!op.src_node.empty() && (op.op == GGML_OP_SCALE || op.op == GGML_OP_CPY || op.op == GGML_OP_VIEW || op.op == GGML_OP_RESHAPE));
++        for (size_t s = 0; s < op.src_node.size(); ++s) {
++            fixed[k] = fixed[k] && op.src_node[s] >= 0 && (op.src_node[s] == (int) k || fixed[op.src_node[s]]);
++        }
++        if (op.op == GGML_OP_SET_ROWS && (std::find(e.outputs.begin(), e.outputs.end(), (int) k) == e.outputs.end() || op.src_node.size() != 3 ||
++                                          op.src_node[1] < 0 || !fixed[op.src_node[1]] || op.src_node[2] < 0 || e.ops[op.src_node[2]].src_node.empty() ||
++                                          e.ops[op.src_node[2]].src_node[0] >= 0 || e.ops[op.src_node[2]].uses != 1)) {
++            throw std::runtime_error("a GGML_OP_SET_ROWS must be a listed output, its rows (src 1) fixed by the window, its destination (src 2) a window view of an outside tensor");
++        }
++        e.inplace = e.inplace || op.op == GGML_OP_SET_ROWS;
++    }
 +    for (const json & a : j.at("match").value("alias_ok", json::array())) {
 +        e.alias_ok.emplace_back(a.at("node").get<int>(), a.at("src").get<int>());
++        if (ext_is_view(e.ops.at(e.alias_ok.back().first).op)) {   // a view reads no bytes: an output on its src is a state write
++            throw std::runtime_error("alias_ok names a view's src");
++        }
 +    }
 +    const json & k = j.at("kernel");
 +    std::ifstream f(dir + k.at("file").get<std::string>(), std::ios::binary);
@@ -335,7 +370,7 @@ index 000000000..d99b63586
 +        e.block[d] = l.at("block").at(d).get<unsigned>();
 +    }
 +    e.shmem = l.value("shared_bytes", 0u);
-+    e.pdl   = l.value("pdl", false);
++    e.pdl   = l.value("pdl", false) && !e.inplace;   // a state write never starts before the kernel ahead of it has ended
 +    e.tol   = j.value("tolerance", 0.0);
 +    for (const json & a : j.at("args")) {
 +        ext_arg arg = { -1, -1, 0 };
@@ -344,6 +379,9 @@ index 000000000..d99b63586
 +            arg.src  = a.at("src").get<int>();
 +            if (arg.node < 0 || arg.node >= (int) e.ops.size() || arg.src < -1 || arg.src >= (int) e.ops[arg.node].src_types.size()) {
 +                throw std::runtime_error("argument names a tensor outside the window");
++            }
++            if (arg.src == 0 && ext_is_view(e.ops[arg.node].op) && e.ops[arg.node].src_node[0] < 0) {   // its offset is a run-time value
++                throw std::runtime_error("argument names the tensor a view is of: pass the view (src -1)");
 +            }
 +        } else if (a.at("type") == "f32") {
 +            const float v = a.at("scalar").get<float>();
@@ -400,23 +438,32 @@ index 000000000..d99b63586
 +    return entries;
 +}
 +
-+bool ext_same(const ggml_tensor * t, ggml_type type, const ext_ne & ne) {
-+    return t != nullptr && t->type == type && memcmp(t->ne, ne.data(), sizeof(t->ne)) == 0 && ggml_is_contiguous(t) &&
-+           (uintptr_t) t->data % 16 == 0;
++bool ext_same(const ggml_tensor * t, ggml_type type, const ext_ne & ne, const std::vector<size_t> & nb = {}) {
++    return t != nullptr && t->type == type && memcmp(t->ne, ne.data(), sizeof(t->ne)) == 0 &&
++           (nb.empty() ? ggml_is_contiguous(t) && (uintptr_t) t->data % 16 == 0   // strided: element loads only, the strides exact
++                       : memcmp(t->nb, nb.data(), sizeof(t->nb)) == 0 && (uintptr_t) t->data % ggml_type_size(type) == 0);
 +}
 +
 +std::vector<uint8_t> ext_read(void * stream, const ggml_tensor * t) {
 +    std::vector<uint8_t> v(ggml_nbytes(t));
++    // on the engine's (non-blocking) stream, then a sync: ordered after every queued kernel and complete on return
++    ext_ok(cuMemcpyDtoHAsync(v.data(), (CUdeviceptr) t->data, v.size(), (CUstream) stream), "cuMemcpyDtoHAsync");
 +    ext_ok(cuStreamSynchronize((CUstream) stream), "cuStreamSynchronize");
-+    ext_ok(cuMemcpyDtoH(v.data(), (CUdeviceptr) t->data, v.size()), "cuMemcpyDtoH");
 +    return v;
 +}
 +
-+// an interior node may be a view only of an earlier window node at offset 0 (a RESHAPE / VIEW: same bytes, new shape)
-+bool ext_window_view(const std::vector<ggml_tensor *> & w, int k) {
-+    const ggml_tensor * t = w[k];
-+    return t->view_src == nullptr || ((t->op == GGML_OP_RESHAPE || t->op == GGML_OP_VIEW) && t->view_offs == 0 &&
-+                                      std::find(w.begin(), w.begin() + k, t->view_src) != w.begin() + k);
++// an interior node may be a view (RESHAPE / VIEW / TRANSPOSE / PERMUTE: no bytes of its own) of an earlier window node,
++// at the entry's offset, or of the outside tensor that is its src 0 (state: the offset is a run-time value). Either
++// way its bytes are proven to lie inside the tensor it views
++bool ext_window_view(const std::vector<ggml_tensor *> & w, int k, const ext_op & op) {
++    const ggml_tensor * t = w[k], * base = t->view_src, * s0 = t->src[0];
++    if (base == nullptr) {
++        return true;
++    }
++    const bool inside  = std::find(w.begin(), w.begin() + k, base) != w.begin() + k && (int64_t) t->view_offs == op.view_offs;
++    const bool outside = !op.src_node.empty() && op.src_node[0] < 0 && s0 != nullptr && (s0->view_src ? s0->view_src : s0) == base;
++    return ext_is_view(t->op) && (inside || outside) &&
++           (const char *) t->data >= (const char *) base->data && (const char *) t->data + ggml_nbytes(t) <= (const char *) base->data + ggml_nbytes(base);
 +}
 +
 +// the window at i for entry e, or empty: ops, types, shapes, wiring; interior nodes dead outside; no partial aliasing
@@ -429,7 +476,7 @@ index 000000000..d99b63586
 +    for (int k = 0; k < n; ++k) {
 +        ggml_tensor * node = cgraph->nodes[i + k];
 +        const ext_op & op  = e.ops[k];
-+        if (node->op != op.op || !ext_same(node, op.type, op.ne) || (op.unary >= 0 && (int) ggml_get_unary_op(node) != op.unary) ||
++        if (node->op != op.op || !ext_same(node, op.type, op.ne, op.nb) || (op.unary >= 0 && (int) ggml_get_unary_op(node) != op.unary) ||
 +            (k > 0 && (node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) ||
 +            (!op.params.empty() && memcmp(node->op_params, op.params.data(), op.params.size() * sizeof(float)) != 0)) {
 +            return {};
@@ -437,18 +484,18 @@ index 000000000..d99b63586
 +        if (op.src_types.size() < GGML_MAX_SRC && node->src[op.src_types.size()] != nullptr) {
 +            return {};
 +        }
++        w[k] = node;
 +        for (size_t s = 0; s < op.src_types.size(); ++s) {
-+            if (op.src_node[s] >= 0 ? node->src[s] != w[op.src_node[s]] : !ext_same(node->src[s], op.src_types[s], op.src_ne[s])) {
++            if (op.src_node[s] >= 0 ? node->src[s] != w[op.src_node[s]] : !ext_same(node->src[s], op.src_types[s], op.src_ne[s], op.src_nb[s])) {
 +                return {};
 +            }
 +        }
-+        w[k] = node;
 +    }
 +    for (int k = 0; k < n; ++k) {   // interior: read only inside the window, not a graph output, a view only of a window node
 +        if (std::find(e.outputs.begin(), e.outputs.end(), k) != e.outputs.end()) {
 +            continue;
 +        }
-+        if ((w[k]->flags & GGML_TENSOR_FLAG_OUTPUT) || !ext_window_view(w, k) || ggml_node_get_use_count(cgraph, i + k) != e.ops[k].uses) {
++        if ((w[k]->flags & GGML_TENSOR_FLAG_OUTPUT) || !ext_window_view(w, k, e.ops[k]) || ggml_node_get_use_count(cgraph, i + k) != e.ops[k].uses) {
 +            return {};
 +        }
 +    }
@@ -465,14 +512,20 @@ index 000000000..d99b63586
 +    }
 +    for (int o : e.outputs) {       // written ranges against every input from outside: disjoint, or exactly one allowed input
 +        const char * a0 = (const char *) w[o]->data, * a1 = a0 + ggml_nbytes(w[o]);
++        const int    dv = e.ops[o].op == GGML_OP_SET_ROWS ? e.ops[o].src_node[2] : -1;   // in place: the view it writes through
++        // it writes exactly the bytes of that view (a view of an outside tensor: the interior test above)
++        if (dv >= 0 && (w[dv]->view_src == nullptr || w[o]->data != w[dv]->data || memcmp(w[o]->nb, w[dv]->nb, sizeof(w[o]->nb)) != 0 ||
++                        memcmp(w[o]->ne, w[dv]->ne, sizeof(w[o]->ne)) != 0)) {
++            return {};
++        }
 +        for (int k = 0; k < n; ++k) {
 +            for (size_t s = 0; s < e.ops[k].src_types.size(); ++s) {
-+                if (e.ops[k].src_node[s] >= 0) {
++                if (e.ops[k].src_node[s] >= 0 || (k == dv && s == 0)) {   // the destination view's own src: a view reads no bytes
 +                    continue;
 +                }
-+                const ggml_tensor * x  = w[k]->src[s];
-+                const char *        b0 = (const char *) x->data, * b1 = b0 + ggml_nbytes(x);
-+                if (b1 <= a0 || a1 <= b0) {
++                const ggml_tensor * x  = w[k]->src[s], * v = s == 0 && w[k]->view_src != nullptr ? w[k] : x;   // a view of it: its own bytes too
++                const char *        b0 = (const char *) x->data, * b1 = b0 + ggml_nbytes(x), * v0 = (const char *) v->data;
++                if ((b1 <= a0 || a1 <= b0) && (v0 + ggml_nbytes(v) <= a0 || a1 <= v0)) {
 +                    continue;
 +                }
 +                const bool exact = a0 == b0 && a1 == b1 &&
@@ -565,6 +618,11 @@ index 000000000..d99b63586
 +                              capture == CU_STREAM_CAPTURE_STATUS_NONE;
 +        std::vector<std::pair<const ggml_tensor *, std::vector<uint8_t>>> saved;  // inputs a live output occupies
 +        if (do_check) {
++            for (int o : e.outputs) {   // the state a SET_ROWS writes: the stock replay starts from the same bytes
++                if (e.ops[o].op == GGML_OP_SET_ROWS) {
++                    saved.emplace_back(w[o], ext_read(stream, w[o]));
++                }
++            }
 +            for (const auto & [k, s] : e.alias_ok) {
 +                for (int o : e.outputs) {
 +                    if (w[o]->data == w[k]->src[s]->data) {
@@ -600,8 +658,11 @@ index 000000000..d99b63586
 +                ext.push_back(ext_read(stream, w[o]));
 +            }
 +            for (const auto & [t, bytes] : saved) {   // put back what the external kernel overwrote, then run stock
-+                ext_ok(cuMemcpyHtoD((CUdeviceptr) t->data, bytes.data(), bytes.size()), "cuMemcpyHtoD");
++                // on the engine's stream: cuMemcpyHtoD runs on the legacy stream, which a non-blocking stream does not wait
++                // for, and from pageable memory it may return before the DMA lands, so the stock replay raced it
++                ext_ok(cuMemcpyHtoDAsync((CUdeviceptr) t->data, bytes.data(), bytes.size(), (CUstream) stream), "cuMemcpyHtoDAsync");
 +            }
++            ext_ok(cuStreamSynchronize((CUstream) stream), "cuStreamSynchronize");   // `saved` (pageable) must outlive the copies
 +            for (ggml_tensor * node : w) {
 +                GGML_ASSERT(stock(stock_ctx, node));
 +            }

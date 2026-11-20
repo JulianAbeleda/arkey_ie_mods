@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 4947,
+   "cap": 5008,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -96,6 +96,14 @@
      "to": 4947,
      "measured": 4947,
      "why": "kv/kv-stream crash fix: the device state's control block starts on a 16-byte boundary for every N (+4 lines in kv-stream.cu: one offset helper used by the allocation and every access, and the host reads the 64-bit counters through memcpy); with N not a multiple of 8 the counters were misaligned and the first call past N ended the server with a misaligned-address GPU exception (N 65,292 and 52,852 faulted on the build before, run past N clean on this one; 128k identity 30/30; boltbeam-runs/kvs-align-20261120); owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-20",
+     "approved": "Owner-approved 2026-11-20"
+    },
+    {
+     "from": 4947,
+     "to": 5008,
+     "measured": 5008,
+     "why": "kernels/region-state-copy-k10240, OFF by default: decode +1.8 tok/s [+0.3, +3.2] at 256k (quiet 3-pair confirm, turns 60-116, page cache evicted before every arm; session wall -0.5 s [-3.4, +2.4], not resolved in 3 pairs; realized 0.112 ms a step = 1.21x the blind prediction; boltbeam-runs/decode-shape-regions-20261120); identity on this tree 30/30 in 3 arms, check 156,673 checks 0 differ (boltbeam-runs/sc-mod-20261120); +61 lines in ext-kernels.cpp: strided views, an in-place SET_ROWS state write and the check mode's stream-ordered state restore; owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-20",
      "approved": "Owner-approved 2026-11-20"
     }

@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-kvs-align: exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host",
+    "why": "modules-sc-mod: exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -2395,13 +2395,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
+   "sha256": "7153fa116f29f5ae2c1b8da6ac3bc0954ac58602e566e7d159fe9c7dd38fc2b5",
    "lines": {
-    "added": 653,
+    "added": 714,
     "removed": 9
    },
    "budget": {
-    "added": 653,
+    "added": 714,
     "removed": 9
    },
    "files": [
@@ -2442,13 +2442,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
+   "sha256": "7153fa116f29f5ae2c1b8da6ac3bc0954ac58602e566e7d159fe9c7dd38fc2b5",
    "lines": {
-    "added": 653,
+    "added": 714,
     "removed": 9
    },
    "budget": {
-    "added": 653,
+    "added": 714,
     "removed": 9
    },
    "files": [
@@ -2498,13 +2498,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
+   "sha256": "7153fa116f29f5ae2c1b8da6ac3bc0954ac58602e566e7d159fe9c7dd38fc2b5",
    "lines": {
-    "added": 653,
+    "added": 714,
     "removed": 9
    },
    "budget": {
-    "added": 653,
+    "added": 714,
     "removed": 9
    },
    "files": [
@@ -2552,13 +2552,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
+   "sha256": "7153fa116f29f5ae2c1b8da6ac3bc0954ac58602e566e7d159fe9c7dd38fc2b5",
    "lines": {
-    "added": 653,
+    "added": 714,
     "removed": 9
    },
    "budget": {
-    "added": 653,
+    "added": 714,
     "removed": 9
    },
    "files": [
@@ -3450,6 +3450,21 @@
    "output": "identical",
    "lines": 185,
    "budget": 200
+  },
+  {
+   "id": "llama.cpp/b12521/kernels/region-state-copy-k10240",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "hook": "llama.cpp/b12521/ext-kernels-window",
+   "dir": "engines/llama.cpp/b12521/kernels/region-state-copy-k10240/",
+   "files": {
+    "manifest.json": "3b5b81f79701a3049923c1be9f043c649931f2854b0353c4f4e0eb09558fe78d",
+    "region_state_copy_front.cu": "b2e3abfb4c040ecce761f0ffd3739677e2795183bb59462ecd6ca8ed83507609",
+    "region_state_copy_front.cubin": "6a25ed2f0174257339df8a8b05ee41367828146033f13deae6dc52feb5be6f51"
+   },
+   "output": "identical",
+   "lines": 25,
+   "budget": 25
   }
  ],
  "archived": [

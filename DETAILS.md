@@ -230,6 +230,13 @@ each. With the switch a block takes floor(256 / row length) whole rows (285 bloc
 runs. 256k, 3 pairs: decode +2.6 tok/s [+2.5, +2.8], identical text (30/30 turns, 159,745 checked nodes, 0 differ). Measured in a build
 that also held unreleased hook rules no manifest entry used; the build of this series alone gives identical text too (30/30 turns in
 3 arms, 159,745 checked nodes, 0 differ).
+kernels/region-state-copy-k10240 (b12521 only, OFF by default: `GGML_CUDA_EXT_KERNELS=.../kernels/region-state-copy-k10240/manifest.json`,
+check `GGML_CUDA_EXT_KERNELS_CHECK=1`): one generated kernel for the recurrent layers' conv-state front at the 4-token decode step (the
+strided concat [7, 10240], the window view, the i32 row indices and the SET_ROWS into the state cache: 8 launches to 1, 36 a step). The
+hook can only read one manifest, so this dir holds the shipped dir's six entries plus this one; the default dir is unchanged. The window
+hook gained strided views, an in-place SET_ROWS state write, and a check mode that restores the written state on the engine's stream.
+256k, 3 pairs: decode +1.8 tok/s [+0.3, +3.2]; session wall -0.5 s [-3.4, +2.4]: decode confirmed, the session time (~1 s) too small
+to resolve in 3 pairs, which is why it is off by default. Identical text (30/30 turns in 3 arms; 156,673 checked windows, 0 differ).
 state/mtp-share-head, pending row (b12521 only, part of `LLAMA_MTP_SHARE_HEAD=1`): the draft pairs the first token of a batch with the
 target's last hidden row of the batch before. Stock llama.cpp zeroes that row only when the server starts, so the first token of a
 new prompt is paired with the last row of the previous request. With the shared head that made a reply depend on the request before
