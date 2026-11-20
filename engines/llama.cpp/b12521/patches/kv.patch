@@ -1649,10 +1649,10 @@ index 5dd0e5f02..32edbffb7 100644
          const size_t memory_size_v = size_v_bytes();
 diff --git a/src/llama-kv-stream.cpp b/src/llama-kv-stream.cpp
 new file mode 100644
-index 000000000..2f0055ad4
+index 000000000..82eac8345
 --- /dev/null
 +++ b/src/llama-kv-stream.cpp
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,110 @@
 +#include "llama-kv-stream.h"
 +
 +#include "llama-impl.h"
@@ -1673,27 +1673,44 @@ index 000000000..2f0055ad4
 +
 +llama_kv_stream llama_kv_stream::plan(const llama_model & model, const llama_hparams & hparams, bool main_attn_cache,
 +                                      ggml_type type_k, ggml_type type_v, uint32_t kv_size, uint32_t n_stream, bool offload) {
-+    GGML_UNUSED(hparams);
 +    llama_kv_stream s;
 +    int64_t n_main  = kvs_env("LLAMA_KV_STREAM", 0);
 +    if (n_main <= 0 || !main_attn_cache) {
 +        return s;
 +    }
-+    const char * why = nullptr;
-+    if (model.arch != LLM_ARCH_QWEN4EXP)                          why = "not a QSA model";
-+    else if (type_k != GGML_TYPE_Q8_0 || type_v != GGML_TYPE_Q8_0) why = "K/V are not q8_0";
-+    else if (n_stream != 1 || !offload)                           why = "needs one unified stream on the GPU";
-+    ggml_backend_dev_t dev = why ? nullptr : model.dev_output();
-+    if (!why && !dev) why = "no GPU device";
++    // capability and shape, not the architecture's name: sparse-attention layers whose indexer pools its keys by the
++    // page, read by the sparse-direct path (its head dim and query heads per K/V head); each refusal names what it saw
++    const uint32_t n_layer = hparams.n_layer(), pool = hparams.indexer_kpool;
++    uint32_t n_sparse = 0, bad = n_layer;
++    for (uint32_t il = 0; il < n_layer; ++il) {
++        if (hparams.dsv4_compress_ratios[il] == 0) continue;
++        n_sparse++;
++        if (bad == n_layer && (hparams.n_embd_head_k(il) != 256 || hparams.n_embd_head_v(il) != 256 || hparams.n_head(il) <= 4*hparams.n_head_kv(il))) bad = il;
++    }
++    std::string why;
++    if (n_sparse == 0 || pool == 0 || hparams.indexer_top_k == 0) {
++        why = format("no sparse-attention layer with pooled indexer keys (%u layers with a compress ratio, indexer pool %u, top-k %u)", n_sparse, pool, hparams.indexer_top_k);
++    } else if (pool != 4) {
++        why = format("the indexer pools %u cells a key; a page is 4 cells", pool);
++    } else if (bad != n_layer) {
++        why = format("layer %u has head dim %u (K) / %u (V) and %u query heads over %u K/V heads; the paged read needs head dim 256 and more than 4 query heads per K/V head",
++                     bad, hparams.n_embd_head_k(bad), hparams.n_embd_head_v(bad), hparams.n_head(bad), hparams.n_head_kv(bad));
++    } else if (type_k != GGML_TYPE_Q8_0 || type_v != GGML_TYPE_Q8_0) {
++        why = format("K/V are %s / %s, not q8_0", ggml_type_name(type_k), ggml_type_name(type_v));
++    } else if (n_stream != 1 || !offload) {
++        why = format("needs one unified stream on the GPU (%u streams, K/V offload %s)", n_stream, offload ? "on" : "off");
++    }
++    ggml_backend_dev_t dev = why.empty() ? model.dev_output() : nullptr;
++    if (why.empty() && !dev) why = "no GPU device";
 +    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
 +    auto * get_buft = reg ? (ggml_backend_buffer_type_t (*)(int)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_kvs_host_buft") : nullptr;
-+    if (!why && !get_buft) why = "the backend has no streamed KV (CUDA only)";
-+    if (why) {
-+        LLAMA_LOG_WARN("%s: LLAMA_KV_STREAM ignored: %s\n", __func__, why);
++    if (why.empty() && !get_buft) why = format("the backend %s has no streamed KV (CUDA only)", ggml_backend_reg_name(reg));
++    if (!why.empty()) {
++        LLAMA_LOG_WARN("%s: LLAMA_KV_STREAM ignored: %s\n", __func__, why.c_str());
 +        return s;
 +    }
 +    if (const char * w = kvs_check_n(n_main, kv_size)) {
-+        LLAMA_LOG_WARN("%s: LLAMA_KV_STREAM=%lld ignored: %s\n", __func__, (long long) n_main, w);
++        LLAMA_LOG_WARN("%s: LLAMA_KV_STREAM=%lld ignored: %s (context %u cells)\n", __func__, (long long) n_main, w, kv_size);
 +        return s;
 +    }
 +    int dev_idx = 0;

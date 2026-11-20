@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 4870,
+   "cap": 4887,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -64,6 +64,14 @@
      "to": 4870,
      "measured": 4870,
      "why": "kv/sparse-direct says once when it does nothing for a call's shape (head dim other than 256 or 4 or fewer query heads per K/V head: the hardcode audit's row 17, a silent no-op on a second model); +10 lines, a log only; CPU build done, identity run pending (boltbeam-runs/sparse-direct-noop-log-20261119); owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-20",
+     "approved": "Owner-approved 2026-11-20"
+    },
+    {
+     "from": 4870,
+     "to": 4887,
+     "measured": 4887,
+     "why": "kv/kv-stream is gated by capability and shape instead of the architecture's name (hardcode audit: the name gate would refuse a second model that has the shape, and pass a renamed one that lacks it); each refusal warns with the value seen; +17 lines; build, 256k load check and 30-turn identity run done (boltbeam-runs/sparse-direct-noop-log-20261119); owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-20",
      "approved": "Owner-approved 2026-11-20"
     }

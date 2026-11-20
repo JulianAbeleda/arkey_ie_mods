@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-sparse-direct-log: exactly the 6 modules on the base (source, not built as one tree): kv-stream, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; the shape log has no identity run yet",
+    "why": "modules-kv-stream-gate: exactly the 6 modules on the base (source, not built as one tree): kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; the gate and the shape log were run in storage-tmp/hardcode-fix/tree, which lacks the region_gdn_gate hook rules",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -1755,9 +1755,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "0bbeee3acdeb61fef4891e21dd3615949e4ac939e571eaf825553a6767c0c2d1",
+   "sha256": "8881878cca614b7d7a7b8014682bab04c2759f2cc9a5eaea6c3eaa4207edbb6e",
    "lines": {
-    "added": 1322,
+    "added": 1339,
     "removed": 26
    },
    "budget": {
@@ -1815,9 +1815,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "0bbeee3acdeb61fef4891e21dd3615949e4ac939e571eaf825553a6767c0c2d1",
+   "sha256": "8881878cca614b7d7a7b8014682bab04c2759f2cc9a5eaea6c3eaa4207edbb6e",
    "lines": {
-    "added": 1322,
+    "added": 1339,
     "removed": 26
    },
    "budget": {
@@ -1875,9 +1875,9 @@
    ],
    "output": "quality-gated",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "0bbeee3acdeb61fef4891e21dd3615949e4ac939e571eaf825553a6767c0c2d1",
+   "sha256": "8881878cca614b7d7a7b8014682bab04c2759f2cc9a5eaea6c3eaa4207edbb6e",
    "lines": {
-    "added": 1322,
+    "added": 1339,
     "removed": 26
    },
    "budget": {
@@ -1937,9 +1937,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "0bbeee3acdeb61fef4891e21dd3615949e4ac939e571eaf825553a6767c0c2d1",
+   "sha256": "8881878cca614b7d7a7b8014682bab04c2759f2cc9a5eaea6c3eaa4207edbb6e",
    "lines": {
-    "added": 1322,
+    "added": 1339,
     "removed": 26
    },
    "budget": {

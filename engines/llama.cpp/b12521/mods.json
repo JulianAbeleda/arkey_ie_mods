@@ -31,7 +31,7 @@
     "src/llama-kv-stream.h"
    ],
    "lines": {
-    "added": 1322,
+    "added": 1339,
     "removed": 26
    },
    "budget": {
@@ -418,8 +418,9 @@
      }
     }
    },
-   "exercised_by": "the sparse-attention (indexer) layers of the qwen4exp graph with q8_0 K/V, one sequence on one CUDA GPU, a context larger than N; the speed comes from spending the freed VRAM on expert residency",
+   "exercised_by": "sparse-attention layers whose indexer pools its keys 4 cells a key (measured on the engine's qwen4exp graph only), q8_0 K/V, one sequence on one CUDA GPU, a context larger than N; the speed comes from spending the freed VRAM on expert residency",
    "limits": [
+    "gated by capability and shape, not by the architecture's name: layers with a compress ratio, an indexer pool of 4 cells a key (the page) and top-k above 0, head dim 256 (K and V) and more than 4 query heads per K/V head on every such layer (the sparse-direct read), q8_0 K/V, one unified stream on the GPU; else ignored with a warning that names the value seen (LLAMA_KV_STREAM ignored: ...), stock path. Only the qwen4exp graph has been run: another architecture that shows the shape is unmeasured",
     "N is not a constant of the mod: boltbeam tune derives it per machine from the free memory at load and the runtime growth boltbeam load-probe --stress measures. On a 32 GB card at 256k, N 65,536 loaded with 181 MiB free and ran out of GPU memory after its session; N 63,616 and N 53,240 passed the gate",
     "needs graph-cap on (GGML_CUDA_GRAPH_MAX_KEYS): without it the CUDA graph executables of dead graph keys grow with the request rate, and a server loaded this close to full VRAM runs out of memory (N 53,240 did under the full stress, kvs21)",
     "target attention layers only: the MTP draft layer is not paged (drafter paging collapsed decode once its context passed its page budget; parked)",
@@ -1710,10 +1711,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-sparse-direct-log",
-   "path": "storage-tmp/hardcode-fix/tree-modules-log",
-   "what": "base + the 6 module patches at this commit, assembled from the patches: source only, this exact tree was not built or run. It is storage-tmp/gdn-pkg/tree-modules (the tree before it) with ggml/src/ggml-cuda/fattn.cu changed by sparse-direct's once-only shape log; that fattn.cu is byte-equal to the one in storage-tmp/hardcode-fix/tree, which compiled on the CPU. Its 30-turn identity run (boltbeam-runs/sparse-direct-noop-log-20261119) is PENDING",
-   "contains": "exactly the 6 modules on the base (source, not built as one tree): kv-stream, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; the shape log has no identity run yet",
+   "id": "modules-kv-stream-gate",
+   "path": "storage-tmp/hardcode-fix/tree-modules-gate",
+   "what": "base + the 6 module patches at this commit, assembled from the patches: source only, this exact tree was not built or run. It is storage-tmp/hardcode-fix/tree-modules-log (the tree before it) with the kv-stream gate change; the files that change are byte-equal to those in storage-tmp/hardcode-fix/tree, whose build passed the 256k load check and the 30-turn identity run at 128k (boltbeam-runs/sparse-direct-noop-log-20261119)",
+   "contains": "exactly the 6 modules on the base (source, not built as one tree): kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; the gate and the shape log were run in storage-tmp/hardcode-fix/tree, which lacks the region_gdn_gate hook rules",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",
