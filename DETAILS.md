@@ -104,7 +104,8 @@ No switch: applied = on. `tools/quark_lm_head_int4.py SRC DST` builds the int4-h
   `boltbeam load-probe --stress` measures. It needs 20 (graph-cap) on: without it CUDA graph executables of dead graph
   keys grow with the request rate, and a server loaded this close to full VRAM runs out of memory.
   It pages the target's sparse-attention layers only (q8_0 K/V, one sequence, one CUDA GPU); the MTP draft layer is not
-  paged. N is a multiple of 4, >= 4096 and below the context, else ignored (stock). It pays only where the context
+  paged. N is a multiple of 4, >= 4096 and below the context, else ignored (stock); on b12521 every such N is safe, on
+  1.0.0 N must also be a multiple of 8 (see kv-stream, control block, below). It pays only where the context
   cannot hold all K/V and every expert on the GPU: at 128k it costs about 8.6 tok/s and +25 ms prefill a turn.
   Prompt ubatches past N copy the cells they read from host RAM. Context shift skips the write-through (run with -c at
   the session size); a SET_ROWS kernel from 09 on a streamed layer would too. Debug builds assert on its host buffer.
@@ -238,6 +239,12 @@ the fresh-server reply byte for byte (2 problems, one a 9,455-token reply). A re
 in stock llama.cpp and is unchanged; a restart at a later position without a checkpoint is not covered (limits in the row).
 Cost at 256k, 3 pairs, identical text (57/57 turns in 6 runs): decode -0.6 tok/s [-0.8, -0.5], session wall +0.45 s [+0.32, +0.58] on 176 s,
 about 0.25% and 0.04 s over the speed check's detection line: kept as a correctness fix; the cause of the cost is not known.
+kv/kv-stream, control block (b12521 only, part of `LLAMA_KV_STREAM=N`): the paging state keeps three 64-bit counters after the page
+table and the five slot arrays, at an offset of context/4 + 5*N/4 four-byte words. With N a multiple of 4 but not of 8 the counters sat
+on a 4-byte boundary and the first call past N ended the server with a misaligned-address GPU exception (N 65,292 and 52,852 did).
+The block now starts on a 16-byte boundary for every N (one offset helper used by the allocation and every access). On the fixed build
+both values run 10k and more tokens past N; 128k session turns 1-30 give identical replies (30/30) with and without the fix. 1.0.0 has
+the same code and is not fixed: there use a multiple of 8.
 
 ## Archive
 

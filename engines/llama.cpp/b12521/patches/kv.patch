@@ -850,21 +850,23 @@ index 3d8d30d81..ebe5dac86 100644
      }
 diff --git a/ggml/src/ggml-cuda/kv-stream.cu b/ggml/src/ggml-cuda/kv-stream.cu
 new file mode 100644
-index 000000000..1591c6504
+index 000000000..3a156fb9f
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/kv-stream.cu
-@@ -0,0 +1,557 @@
+@@ -0,0 +1,561 @@
 +// LLAMA_KV_STREAM: see kv-stream.cuh.
 +#include "kv-stream.cuh"
 +#include "set-rows.cuh"
 +
 +#include <cstdlib>
++#include <cstring>
 +#include <mutex>
 +#include <vector>
 +
 +static constexpr int KVS_PAGE  = 4;    // cells per page = the indexer pool
 +static constexpr int KVS_RT    = 1024; // resolve block
 +static constexpr int KVS_CTL   = 16;   // [0] epoch [1] hand [2] misses of the last call [3] overflow [4] u64 misses [6] u64 lookups [8] u64 calls [10] check mismatches
++// the control block starts on a 16-byte boundary for every N and context (its u64 counters need 8): ctl_off() rounds up
 +
 +struct ggml_cuda_kvs_layer {
 +    const char * hk = nullptr; const char * hv = nullptr; // host copies (device-mapped)
@@ -880,7 +882,8 @@ index 000000000..1591c6504
 +    __host__ __device__ int32_t * slot_ref()   const { return st + n_pages + 2*n_slots; }
 +    __host__ __device__ int32_t * miss_page()  const { return st + n_pages + 3*n_slots; }
 +    __host__ __device__ int32_t * miss_slot()  const { return st + n_pages + 4*n_slots; }
-+    __host__ __device__ int32_t * ctl()        const { return st + n_pages + 5*n_slots; }
++    __host__ __device__ int64_t   ctl_off()    const { return (n_pages + 5*n_slots + 3) & ~(int64_t) 3; } // words, a multiple of 4
++    __host__ __device__ int32_t * ctl()        const { return st + ctl_off(); }
 +};
 +
 +static std::vector<ggml_cuda_kvs_layer *> & kvs_layers() {
@@ -1186,7 +1189,8 @@ index 000000000..1591c6504
 +    CUDA_CHECK(cudaMemcpyAsync(c, L->ctl(), sizeof(c), cudaMemcpyDeviceToHost, stream));
 +    CUDA_CHECK(cudaStreamSynchronize(stream));
 +    ++n_checks;
-+    const unsigned long long * u = (const unsigned long long *) (c + 4);
++    unsigned long long u[3];
++    memcpy(u, c + 4, sizeof(u));
 +    if (c[10] != 0 || c[3] != 0) {
 +        GGML_LOG_ERROR("LLAMA_KV_STREAM_CHECK: layer %d, %s call, n_kv %lld: %d rows differ from the host copy, overflow %d\n",
 +            L->il, what, (long long) n_kv, c[10], c[3]);
@@ -1397,7 +1401,7 @@ index 000000000..1591c6504
 +    L->n_cells = n_cells; L->n_pages = n_cells/KVS_PAGE; L->n_slots = n_slot_cells/KVS_PAGE;
 +    L->rk = row_k; L->rv = row_v; L->il = il;
 +    int32_t * state = nullptr;
-+    CUDA_CHECK(cudaMalloc(&state, (L->n_pages + 5*L->n_slots + KVS_CTL)*sizeof(int32_t)));
++    CUDA_CHECK(cudaMalloc(&state, (L->ctl_off() + KVS_CTL)*sizeof(int32_t)));
 +    L->st = state;
 +    const int64_t words = (L->n_pages + 31)/32;
 +    if (words > kvs_bits_words) {

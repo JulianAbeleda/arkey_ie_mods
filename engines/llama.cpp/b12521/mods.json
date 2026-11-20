@@ -31,7 +31,7 @@
     "src/llama-kv-stream.h"
    ],
    "lines": {
-    "added": 1339,
+    "added": 1343,
     "removed": 26
    },
    "budget": {
@@ -77,6 +77,18 @@
      },
      "why": "sparse-direct says once when a call's head dim or GQA ratio is outside its sparse variants (+10 lines in fattn.cu, a log only); the budget is unchanged",
      "date": "2026-11-19"
+    },
+    {
+     "from": {
+      "added": 1380,
+      "removed": 26
+     },
+     "to": {
+      "added": 1380,
+      "removed": 26
+     },
+     "why": "kv-stream's control block starts on a 16-byte boundary for every N (+4 lines in kv-stream.cu, lines 1339 -> 1343 inside the unchanged budget 1380): with N not a multiple of 8 its 64-bit counters were misaligned and the first paged call ended the server with a GPU exception; a crash fix (boltbeam-runs/kvs-align-20261120)",
+     "date": "2026-11-20"
     }
    ]
   },
@@ -432,8 +444,8 @@
    "output": {
     "label": "quality-gated",
     "evidence": {
-     "run": "boltbeam-runs/mods-modules-20261118 (ab-kv2); boltbeam-runs/kv-stream-20261118/b12521 (ident, zero128); boltbeam-runs/rental-20261118/out (kvs11, kvs13, kvs14, kvs20: measured on 1.0.0, the same patch text); boltbeam-runs/graph-cap-20261119",
-     "numbers": "on b12521, the module build with kv-stream in kv against the 02-20 series + kv-stream build (ab-kv2: 128k context, 30 turns of a 256k session, recorded history, full stack, every expert on the GPU): reply sha256 30/30 equal in all five arms: series build off, module build off, series build on (N 32,768), module build on, module build in check mode (graphs off; byte checks to 106,000 and attention-output checks to 52,000, no abort). The port's own runs on b12521 + 02-20: ident, N 32,768 on vs off and check mode, replies and drafts 30/30; zero128, switch off vs the series build without the mod, 59-turn 128k session, 3 pairs: decode -0.1 [-1.7, +1.6] tok/s, prefill +0 [-5, +6] ms, replies 59/59 in all 6 runs. Gate class because it ships with the placement it pays for (every expert on the GPU), which changes rounding against the setup it replaces; the stage-1 gate and the 256k speed were measured on 1.0.0 with the same patch text (engines/llama.cpp/1.0.0/mods.json, kv-stream)",
+     "run": "boltbeam-runs/mods-modules-20261118 (ab-kv2); boltbeam-runs/kv-stream-20261118/b12521 (ident, zero128); boltbeam-runs/rental-20261118/out (kvs11, kvs13, kvs14, kvs20: measured on 1.0.0, the same patch text); boltbeam-runs/graph-cap-20261119; boltbeam-runs/kvs-align-20261120 (control-block alignment: probe-n52852, probe-n65292, ident128, speed256q)",
+     "numbers": "on b12521, the module build with kv-stream in kv against the 02-20 series + kv-stream build (ab-kv2: 128k context, 30 turns of a 256k session, recorded history, full stack, every expert on the GPU): reply sha256 30/30 equal in all five arms: series build off, module build off, series build on (N 32,768), module build on, module build in check mode (graphs off; byte checks to 106,000 and attention-output checks to 52,000, no abort). The port's own runs on b12521 + 02-20: ident, N 32,768 on vs off and check mode, replies and drafts 30/30; zero128, switch off vs the series build without the mod, 59-turn 128k session, 3 pairs: decode -0.1 [-1.7, +1.6] tok/s, prefill +0 [-5, +6] ms, replies 59/59 in all 6 runs. Gate class because it ships with the placement it pays for (every expert on the GPU), which changes rounding against the setup it replaces; the stage-1 gate and the 256k speed were measured on 1.0.0 with the same patch text (engines/llama.cpp/1.0.0/mods.json, kv-stream). Control-block alignment (2026-11-20, against the build before it): N 52,852 and N 65,292 (multiples of 4, not of 8), which ended the server with a misaligned-address GPU exception as the context crossed N, run to 62,907 and 76,919 tokens; 128k session turns 1-30 at N 52,848: replies 30/30 equal; 256k turns 60-116, one pair: replies 57/57, per-turn decode +3.4 tok/s [-0.7, +7.5], session wall 182.0 -> 179.8 s, draft acceptance equal (0.7595)",
      "match": {
       "what": "reply sha256 per turn, switch on vs off and module build vs series build, same placement (ab-kv2)",
       "equal": 30,
@@ -459,7 +471,7 @@
     "context shift writes the host copy without write-through: run with -c at the session size",
     "a SET_ROWS ext kernel (09) on a streamed layer would skip write-through",
     "check mode needs GGML_CUDA_DISABLE_GRAPHS=1 and is for correctness, not timing",
-    "N: a multiple of 4, >= 4096 and below the context, else ignored with a warning (stock path)"
+    "N: a multiple of 4, >= 4096 and below the context, else ignored with a warning (stock path). Every such N is safe: the device state's control block (64-bit counters) starts on a 16-byte boundary whatever N and the context are (ctl_off() rounds its word offset up to a multiple of 4, used by the allocation and every access); before 2026-11-20 an N that is not a multiple of 8 put those counters on a 4-byte boundary and the first call past N ended the server with a misaligned-address GPU exception"
    ],
    "rule_exceptions": []
   },
@@ -1796,10 +1808,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-pendingh",
-   "path": "storage-tmp/pendingh/tree-modules-pendingh",
-   "what": "base + the 6 module patches at this commit (git apply on a clone of the base). It is storage-tmp/hardcode-fix/tree-modules-concat-rows (the tree before it) with common/speculative.cpp changed by the pending-row reset of state/mtp-share-head. Built (llama-server, CUDA, Release) and run on the GPU: boltbeam-runs/pending-row-fix-20261120 (request-order test, 128k identity, 256k 3-pair confirm). The tree before it has its own GPU identity run for kernels/concat-rows (boltbeam-runs/concat-launch-shape-20261120, ident128-rows-only: replies 30/30 in 3 arms, check mode 159,745 checks, 0 differ)",
-   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host",
+   "id": "modules-kvs-align",
+   "path": "storage-tmp/kvs-align/tree",
+   "what": "base + the 6 module patches at this commit (git apply on a clone of the base). It is storage-tmp/pendingh/tree-modules-pendingh (the tree before it) with ggml/src/ggml-cuda/kv-stream.cu changed by the control-block alignment (no other file differs). Built (llama-server, CUDA, Release) and run on the GPU: boltbeam-runs/kvs-align-20261120 (load-probe at N 52,852 and 65,292 past N, 128k identity against the tree before it, one 256k pair)",
+   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

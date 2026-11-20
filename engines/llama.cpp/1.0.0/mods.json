@@ -1479,7 +1479,7 @@
     "context shift writes the host copy without write-through: run with -c at the session size",
     "a SET_ROWS ext kernel (09) on a streamed layer would skip write-through",
     "check mode needs GGML_CUDA_DISABLE_GRAPHS=1 and is for correctness, not timing",
-    "N: a multiple of 4, >= 4096 and below the context, else ignored with a warning (stock path)"
+    "N: a multiple of 4, >= 4096 and below the context, else ignored with a warning (stock path). On this version N must also be a multiple of 8: otherwise the 64-bit counters of the device state's control block sit on a 4-byte boundary and the first call past N ends the server with a misaligned-address GPU exception (measured on b12521's same code, 2026-11-20; fixed there, not ported here)"
    ],
    "rule_exceptions": [],
    "static": {
