@@ -25,21 +25,22 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
     "src/llama-kv-stream.h"
    ],
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "static": {
-    "hunks_removing_stock_lines": 18
+    "hunks_removing_stock_lines": 19
    },
    "budget_raised": [
     {
@@ -88,6 +89,18 @@
       "removed": 26
      },
      "why": "kv-stream's control block starts on a 16-byte boundary for every N (+4 lines in kv-stream.cu, lines 1339 -> 1343 inside the unchanged budget 1380): with N not a multiple of 8 its 64-bit counters were misaligned and the first paged call ended the server with a GPU exception; a crash fix (boltbeam-runs/kvs-align-20261120)",
+     "date": "2026-11-20"
+    },
+    {
+     "from": {
+      "added": 1380,
+      "removed": 26
+     },
+     "to": {
+      "added": 1380,
+      "removed": 28
+     },
+     "why": "HIP port (gfx1201): fattn-vec-skip gives a whole warp to each K row on HIP too (the skip decision is per row; RDNA used 2 threads, other HIP 4), a rewrite of the two stock nthreads_KQ_q lines; raw 32-bit shfl/any masks become ggml_cuda_shfl_*/ggml_cuda_any (HIP needs 64-bit masks); cudaMemcpyDefault gets its HIP name. Removed lines are measured (+2), added stays within budget",
      "date": "2026-11-20"
     }
    ]
@@ -154,14 +167,15 @@
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "lines": {
-    "added": 653,
+    "added": 662,
     "removed": 9
    },
    "budget": {
-    "added": 653,
+    "added": 663,
     "removed": 9
    },
    "static": {
@@ -202,6 +216,18 @@
       "removed": 9
      },
      "why": "kernels/concat-rows (+37 -9 lines in concat.cu): the non-contiguous concat kernel takes floor(block / row length) whole rows a block behind GGML_CUDA_CONCAT_ROWS, with its check mode; measured +2.6 tok/s at 256k (boltbeam-runs/concat-launch-shape-20261120); the budget is the measured lines, not budget_rule ceil_105_10 (owner rule: raise by the measured remainder after review, Owner-approved 2026-11-20); the 9 removed lines are the stock comment and template header, two parameters, the row index, the loop header, the grid and the launch call, rewritten so that the switch unset compiles the stock loop",
+     "date": "2026-11-20"
+    },
+    {
+     "from": {
+      "added": 653,
+      "removed": 9
+     },
+     "to": {
+      "added": 663,
+      "removed": 9
+     },
+     "why": "HIP port (gfx1201): +9 lines: HIP names for cudaStreamIsCapturing and cudaStreamCaptureStatus(None) (concat-rows checks capture), and ext-kernels stubbed on HIP (the hook loads CUDA cubins through the driver API; no hipModule loader yet: every node takes the stock path). budget_rule ceil_105_10 of the new lines",
      "date": "2026-11-20"
     }
    ]

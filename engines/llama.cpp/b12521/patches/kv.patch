@@ -1,5 +1,5 @@
 diff --git a/ggml/src/ggml-cuda/fattn-common.cuh b/ggml/src/ggml-cuda/fattn-common.cuh
-index 666542c80..675db98de 100644
+index 666542c8..675db98d 100644
 --- a/ggml/src/ggml-cuda/fattn-common.cuh
 +++ b/ggml/src/ggml-cuda/fattn-common.cuh
 @@ -1,6 +1,7 @@
@@ -116,7 +116,7 @@ index 666542c80..675db98de 100644
      CUDA_CHECK(cudaGetLastError());
  
 diff --git a/ggml/src/ggml-cuda/fattn-mma-f16.cuh b/ggml/src/ggml-cuda/fattn-mma-f16.cuh
-index dea8d2ad3..ad8f7c61b 100644
+index dea8d2ad..ad8f7c61 100644
 --- a/ggml/src/ggml-cuda/fattn-mma-f16.cuh
 +++ b/ggml/src/ggml-cuda/fattn-mma-f16.cuh
 @@ -413,6 +413,20 @@ static constexpr __device__ int ggml_cuda_fattn_mma_get_nstages(
@@ -163,7 +163,7 @@ index dea8d2ad3..ad8f7c61b 100644
                      } else if (!oob_check || i < i_sup) {
                          const int64_t i_KV = indices ? max(indices[k_VKQ_0 + i], 0) : k_VKQ_0 + i;
 diff --git a/ggml/src/ggml-cuda/fattn-vec.cuh b/ggml/src/ggml-cuda/fattn-vec.cuh
-index 09a46187d..5c6e7d99d 100644
+index 09a46187..4e6e386b 100644
 --- a/ggml/src/ggml-cuda/fattn-vec.cuh
 +++ b/ggml/src/ggml-cuda/fattn-vec.cuh
 @@ -16,7 +16,12 @@ static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_device() {
@@ -180,6 +180,18 @@ index 09a46187d..5c6e7d99d 100644
  __launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), 1)
  static __global__ void flash_attn_ext_vec(
          const char * Q_ptr,
+@@ -75,9 +80,9 @@ static __global__ void flash_attn_ext_vec(
+ 
+ #ifdef GGML_USE_HIP
+ #ifdef RDNA
+-    constexpr int nthreads_KQ_q = 2;
++    constexpr int nthreads_KQ_q = skip_masked ? WARP_SIZE : 2; // a skip decision is per K row: the whole warp on one row
+ #else
+-    constexpr int nthreads_KQ_q = 4;
++    constexpr int nthreads_KQ_q = skip_masked ? WARP_SIZE : 4;
+ #endif // RDNA
+     constexpr int nthreads_V_q  = (D/4 < 32 ? D/4 : 32);
+ #else
 @@ -91,6 +96,8 @@ static __global__ void flash_attn_ext_vec(
  
      static_assert(WARP_SIZE % nthreads_KQ == 0, "bad nthreads_K");
@@ -201,7 +213,7 @@ index 09a46187d..5c6e7d99d 100644
 +            for (int j = 0; j < ncols; ++j) {
 +                live = live || !(ncols == 1 || ic0 + j < int(ne01.z)) || __half2float(maskh[j*ne11 + tid]) != -INFINITY;
 +            }
-+            if (!__any_sync(0xFFFFFFFF, live)) {
++            if (!ggml_cuda_any(live)) {
 +                continue;
 +            }
 +        }
@@ -285,7 +297,7 @@ index 09a46187d..5c6e7d99d 100644
      const bool need_f16_V = type_V == GGML_TYPE_F16;
      constexpr size_t nbytes_shared = 0;
 diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
-index fb542d41c..bd280116d 100644
+index fb542d41..2b2bd358 100644
 --- a/ggml/src/ggml-cuda/fattn.cu
 +++ b/ggml/src/ggml-cuda/fattn.cu
 @@ -1,9 +1,13 @@
@@ -340,7 +352,7 @@ index fb542d41c..bd280116d 100644
 +static __device__ __forceinline__ int split_block_sum(int v, int * sh) {
 +#pragma unroll
 +    for (int o = 16; o > 0; o >>= 1) {
-+        v += __shfl_xor_sync(0xFFFFFFFFu, v, o);
++        v += ggml_cuda_shfl_xor(v, o, 32);
 +    }
 +    if (threadIdx.x % 32 == 0) {
 +        sh[threadIdx.x / 32] = v;
@@ -388,7 +400,7 @@ index fb542d41c..bd280116d 100644
 +    int inc = n;
 +#pragma unroll
 +    for (int o = 1; o < 32; o <<= 1) {
-+        const int y = __shfl_up_sync(0xFFFFFFFFu, inc, o);
++        const int y = ggml_cuda_shfl_up(inc, o, 32);
 +        inc += lane >= o ? y : 0;
 +    }
 +    if (lane == 31) {
@@ -665,7 +677,7 @@ index fb542d41c..bd280116d 100644
          case BEST_FATTN_KERNEL_NONE:
              GGML_ABORT("fatal error");
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 3d8d30d81..ebe5dac86 100644
+index 3d8d30d8..ebe5dac8 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -67,6 +67,7 @@
@@ -850,7 +862,7 @@ index 3d8d30d81..ebe5dac86 100644
      }
 diff --git a/ggml/src/ggml-cuda/kv-stream.cu b/ggml/src/ggml-cuda/kv-stream.cu
 new file mode 100644
-index 000000000..3a156fb9f
+index 00000000..58583905
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/kv-stream.cu
 @@ -0,0 +1,561 @@
@@ -961,13 +973,13 @@ index 000000000..3a156fb9f
 +    const int lane = threadIdx.x & 31, w = threadIdx.x >> 5;
 +    int x = v;
 +#pragma unroll
-+    for (int o = 1; o < 32; o <<= 1) { const int y = __shfl_up_sync(0xffffffffu, x, o); if (lane >= o) x += y; }
++    for (int o = 1; o < 32; o <<= 1) { const int y = ggml_cuda_shfl_up(x, o, 32); if (lane >= o) x += y; }
 +    if (lane == 31) warp_sums[w] = x;
 +    __syncthreads();
 +    if (w == 0) {
 +        int t = warp_sums[lane];
 +#pragma unroll
-+        for (int o = 1; o < 32; o <<= 1) { const int y = __shfl_up_sync(0xffffffffu, t, o); if (lane >= o) t += y; }
++        for (int o = 1; o < 32; o <<= 1) { const int y = ggml_cuda_shfl_up(t, o, 32); if (lane >= o) t += y; }
 +        warp_sums[lane] = t;
 +    }
 +    __syncthreads();
@@ -1417,7 +1429,7 @@ index 000000000..3a156fb9f
 +}
 diff --git a/ggml/src/ggml-cuda/kv-stream.cuh b/ggml/src/ggml-cuda/kv-stream.cuh
 new file mode 100644
-index 000000000..4fe3c44a6
+index 00000000..4fe3c44a
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/kv-stream.cuh
 @@ -0,0 +1,70 @@
@@ -1492,7 +1504,7 @@ index 000000000..4fe3c44a6
 +                                    size_t row_k, size_t row_v, int il);
 +}
 diff --git a/ggml/src/ggml-cuda/top-k-mask.cu b/ggml/src/ggml-cuda/top-k-mask.cu
-index 9ff995240..94df4261d 100644
+index 9ff99524..94df4261 100644
 --- a/ggml/src/ggml-cuda/top-k-mask.cu
 +++ b/ggml/src/ggml-cuda/top-k-mask.cu
 @@ -16,10 +16,13 @@ static __global__ void top_k_mask_kernel(
@@ -1577,8 +1589,20 @@ index 9ff995240..94df4261d 100644
  }
  
  void ggml_cuda_op_top_k_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
+index a4381479..e16ac057 100644
+--- a/ggml/src/ggml-cuda/vendors/hip.h
++++ b/ggml/src/ggml-cuda/vendors/hip.h
+@@ -97,6 +97,7 @@ typedef uint64_t ggml_cuda_thread_mask_t;
+ #define cudaMemcpyDeviceToDevice hipMemcpyDeviceToDevice
+ #define cudaMemcpyDeviceToHost hipMemcpyDeviceToHost
+ #define cudaMemcpyHostToDevice hipMemcpyHostToDevice
++#define cudaMemcpyDefault hipMemcpyDefault
+ #define cudaMemcpyKind hipMemcpyKind
+ #define cudaMemset hipMemset
+ #define cudaMemsetAsync hipMemsetAsync
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 426c48741..cbe1d9c79 100644
+index 426c4874..cbe1d9c7 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -22,6 +22,7 @@ set(LLAMA_CORE_SOURCES
@@ -1590,7 +1614,7 @@ index 426c48741..cbe1d9c79 100644
      llama-kv-cache-dsa.cpp
      llama-kv-cache-dsa-iswa.cpp
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 5dd0e5f02..32edbffb7 100644
+index 5dd0e5f0..32edbffb 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1,4 +1,5 @@
@@ -1653,7 +1677,7 @@ index 5dd0e5f02..32edbffb7 100644
          const size_t memory_size_v = size_v_bytes();
 diff --git a/src/llama-kv-stream.cpp b/src/llama-kv-stream.cpp
 new file mode 100644
-index 000000000..82eac8345
+index 00000000..82eac834
 --- /dev/null
 +++ b/src/llama-kv-stream.cpp
 @@ -0,0 +1,110 @@
@@ -1769,7 +1793,7 @@ index 000000000..82eac8345
 +}
 diff --git a/src/llama-kv-stream.h b/src/llama-kv-stream.h
 new file mode 100644
-index 000000000..a509d1988
+index 00000000..a509d198
 --- /dev/null
 +++ b/src/llama-kv-stream.h
 @@ -0,0 +1,39 @@

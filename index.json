@@ -1755,14 +1755,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "e6956ea9fab73d816d078b10bbdabfd8666d9402d1c52d9229357748ce935500",
+   "sha256": "fc66eb2f7ffe92d67b1a743505d989ef3b57dcd66a8ec274a4996bef4a60f6fc",
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1773,6 +1773,7 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -1815,14 +1816,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "e6956ea9fab73d816d078b10bbdabfd8666d9402d1c52d9229357748ce935500",
+   "sha256": "fc66eb2f7ffe92d67b1a743505d989ef3b57dcd66a8ec274a4996bef4a60f6fc",
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1833,6 +1834,7 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -1875,14 +1877,14 @@
    ],
    "output": "quality-gated",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "e6956ea9fab73d816d078b10bbdabfd8666d9402d1c52d9229357748ce935500",
+   "sha256": "fc66eb2f7ffe92d67b1a743505d989ef3b57dcd66a8ec274a4996bef4a60f6fc",
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1893,6 +1895,7 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -1937,14 +1940,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "e6956ea9fab73d816d078b10bbdabfd8666d9402d1c52d9229357748ce935500",
+   "sha256": "fc66eb2f7ffe92d67b1a743505d989ef3b57dcd66a8ec274a4996bef4a60f6fc",
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1955,6 +1958,7 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -2395,20 +2399,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
+   "sha256": "8b9b63b60e7cf4b73457cc13ef603a27cb996d59c7726c7e1ffdad05bcbc42f7",
    "lines": {
-    "added": 653,
+    "added": 662,
     "removed": 9
    },
    "budget": {
-    "added": 653,
+    "added": 663,
     "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
     "apply": [],
@@ -2442,20 +2447,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
+   "sha256": "8b9b63b60e7cf4b73457cc13ef603a27cb996d59c7726c7e1ffdad05bcbc42f7",
    "lines": {
-    "added": 653,
+    "added": 662,
     "removed": 9
    },
    "budget": {
-    "added": 653,
+    "added": 663,
     "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
     "apply": [],
@@ -2498,20 +2504,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
+   "sha256": "8b9b63b60e7cf4b73457cc13ef603a27cb996d59c7726c7e1ffdad05bcbc42f7",
    "lines": {
-    "added": 653,
+    "added": 662,
     "removed": 9
    },
    "budget": {
-    "added": 653,
+    "added": 663,
     "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
     "apply": [],
@@ -2552,20 +2559,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "20165870328b099a3d26468e1f70e361bf21020d38111184c97c3aab716fa2e6",
+   "sha256": "8b9b63b60e7cf4b73457cc13ef603a27cb996d59c7726c7e1ffdad05bcbc42f7",
    "lines": {
-    "added": 653,
+    "added": 662,
     "removed": 9
    },
    "budget": {
-    "added": 653,
+    "added": 663,
     "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
     "apply": [],

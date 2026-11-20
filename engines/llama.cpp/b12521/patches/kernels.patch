@@ -1,5 +1,5 @@
 diff --git a/ggml/src/ggml-cuda/CMakeLists.txt b/ggml/src/ggml-cuda/CMakeLists.txt
-index 211a8dac7..3ab3adef7 100644
+index 211a8dac..3ab3adef 100644
 --- a/ggml/src/ggml-cuda/CMakeLists.txt
 +++ b/ggml/src/ggml-cuda/CMakeLists.txt
 @@ -127,12 +127,14 @@ if (CUDAToolkit_FOUND)
@@ -18,7 +18,7 @@ index 211a8dac7..3ab3adef7 100644
          add_compile_definitions(GGML_CUDA_USE_GRAPHS)
      endif()
 diff --git a/ggml/src/ggml-cuda/concat.cu b/ggml/src/ggml-cuda/concat.cu
-index f8dcd95ab..663fe3e90 100644
+index f8dcd95a..663fe3e9 100644
 --- a/ggml/src/ggml-cuda/concat.cu
 +++ b/ggml/src/ggml-cuda/concat.cu
 @@ -1,6 +1,7 @@
@@ -124,7 +124,7 @@ index f8dcd95ab..663fe3e90 100644
  
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
-index 000000000..d99b63586
+index 00000000..d99b6358
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
 @@ -0,0 +1,505 @@
@@ -634,7 +634,7 @@ index 000000000..d99b63586
 +    return 0;
 +}
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 3d8d30d81..719de0b6f 100644
+index 3d8d30d8..810feb22 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -805,6 +805,10 @@ ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_
@@ -755,16 +755,22 @@ index 3d8d30d81..719de0b6f 100644
  #ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
          graph->instances[idx].clusters = ggml_cuda_graph_get_clusters(cuda_graph, cuda_ctx->device);
  #endif // USE_CUDA_GRAPH_CLUSTER_CHECK
-@@ -4371,6 +4464,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
+@@ -4371,6 +4464,14 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
      return false;
  }
  
++#if defined(GGML_USE_HIP)
++// the hook loads CUDA cubins through the driver API (ext-kernels.cpp); not ported to hipModule yet: on HIP no manifest
++// entry runs, so every node takes the stock path, as with GGML_CUDA_EXT_KERNELS unset
++static int ggml_cuda_ext_kernels_run(void *, ggml_cgraph *, int, bool (*)(void *, ggml_tensor *), void *) { return 0; }
++#else
 +int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx);
++#endif
 +
  // try and fuse nodes and return the number of nodes to skip
  static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
  
-@@ -5372,6 +5467,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+@@ -5372,6 +5473,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                      continue;
                  }
  
@@ -785,3 +791,17 @@ index 3d8d30d81..719de0b6f 100644
                  int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
  
                  if (nodes_to_skip != 0) {
+diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
+index a4381479..ac3ff797 100644
+--- a/ggml/src/ggml-cuda/vendors/hip.h
++++ b/ggml/src/ggml-cuda/vendors/hip.h
+@@ -145,6 +145,9 @@ typedef uint64_t ggml_cuda_thread_mask_t;
+ #define cudaGraphGetNodes hipGraphGetNodes
+ #define cudaGraphExecUpdate hipGraphExecUpdate
+ #define cudaStreamCaptureModeRelaxed hipStreamCaptureModeRelaxed
++#define cudaStreamCaptureStatus hipStreamCaptureStatus
++#define cudaStreamCaptureStatusNone hipStreamCaptureStatusNone
++#define cudaStreamIsCapturing hipStreamIsCapturing
+ #define cudaStreamBeginCapture hipStreamBeginCapture
+ #define cudaGraph_t hipGraph_t
+ #define cudaStream_t hipStream_t
