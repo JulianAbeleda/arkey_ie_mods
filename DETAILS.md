@@ -227,7 +227,17 @@ kernels/concat-rows (b12521 only, `GGML_CUDA_CONCAT_ROWS=1`, check `GGML_CUDA_CO
 non-contiguous concat with one 256-thread block a row, so the decode step's [7, 10240] nodes start 10,240 blocks with 7 threads busy in
 each. With the switch a block takes floor(256 / row length) whole rows (285 blocks there); from 129 elements a row up the stock launch
 runs. 256k, 3 pairs: decode +2.6 tok/s [+2.5, +2.8], identical text (30/30 turns, 159,745 checked nodes, 0 differ). Measured in a build
-that also held unreleased hook rules no manifest entry used; the build of this series alone has compiled and has no GPU identity run yet.
+that also held unreleased hook rules no manifest entry used; the build of this series alone gives identical text too (30/30 turns in
+3 arms, 159,745 checked nodes, 0 differ).
+state/mtp-share-head, pending row (b12521 only, part of `LLAMA_MTP_SHARE_HEAD=1`): the draft pairs the first token of a batch with the
+target's last hidden row of the batch before. Stock llama.cpp zeroes that row only when the server starts, so the first token of a
+new prompt is paired with the last row of the previous request. With the shared head that made a reply depend on the request before
+it (one problem: 2,323 tokens on a fresh server, 2,231 after another request, first difference at character 6,052). With the switch
+on, a sequence that restarts at position 0 is paired with zeros, as on a fresh server: the reply after another request then equals
+the fresh-server reply byte for byte (2 problems, one a 9,455-token reply). A restart from a checkpoint already restores its own row
+in stock llama.cpp and is unchanged; a restart at a later position without a checkpoint is not covered (limits in the row).
+Cost at 256k, 3 pairs, identical text (57/57 turns in 6 runs): decode -0.6 tok/s [-0.8, -0.5], session wall +0.45 s [+0.32, +0.58] on 176 s,
+about 0.25% and 0.04 s over the speed check's detection line: kept as a correctness fix; the cause of the cost is not known.
 
 ## Archive
 

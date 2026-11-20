@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 4933,
+   "cap": 4943,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -80,6 +80,14 @@
      "to": 4933,
      "measured": 4933,
      "why": "kernels/concat-rows, measured +2.6 tok/s at 256k (3-pair confirm, warm decode [+2.5, +2.8], session wall -1.6 s [-1.9, -1.3], page cache evicted before every arm; identity 30/30 in 3 arms, check mode 159,745 checks, 0 differ; boltbeam-runs/concat-launch-shape-20261120; +37 -9 lines in concat.cu: the non-contiguous concat takes whole rows a block, with its check mode); owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-20",
+     "approved": "Owner-approved 2026-11-20"
+    },
+    {
+     "from": 4933,
+     "to": 4943,
+     "measured": 4943,
+     "why": "state/mtp-share-head resets the draft's pending hidden row when a sequence restarts at position 0: a correctness fix found by measurement (with the shared head a reply depended on the request before it; with the reset the reply after another request equals the fresh-server reply byte for byte on 2 of 2 problems, boltbeam-runs/pending-row-fix-20261120; found in boltbeam-runs/reply-determinism-20261120); +10 lines in common/speculative.cpp, one hunk, no stock line changed; 256k 3-pair confirm: replies 57/57, decode -0.64 tok/s [-0.77, -0.51], wall +0.45 s [+0.32, +0.58] (not a clean pass of the 0.41 s detection line; accepted as a correctness fix that costs about 0.25%); owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-20",
      "approved": "Owner-approved 2026-11-20"
     }

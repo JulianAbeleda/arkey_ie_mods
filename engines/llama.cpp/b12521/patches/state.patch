@@ -1,3 +1,24 @@
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index b40eb5535..6a2a50cb2 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -1989,6 +1989,16 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+             }
+         }
+ 
++        // LOCAL (mtp-share-head): LLAMA_MTP_SHARE_HEAD=1 - a sequence that restarts at position 0 is a new prompt: its first
++        // token has no previous hidden row, so it is paired with zeros (as on a fresh server), not with the row the
++        // previous request left in pending_h. A restart from a checkpoint gets its row from set_state(). Unset = stock.
++        static const bool fresh_row = [] { const char * e = getenv("LLAMA_MTP_SHARE_HEAD"); return e != nullptr && atoi(e) != 0; }();
++        for (llama_seq_id seq_id = 0; fresh_row && seq_id < (llama_seq_id) n_seq; ++seq_id) {
++            if (i_batch_beg[seq_id] >= 0 && batch_in.tokens[i_batch_beg[seq_id]].pos[0] == 0) {
++                std::fill(pending_h[seq_id].begin(), pending_h[seq_id].end(), 0.0f);
++            }
++        }
++
+         auto * ctx_tgt = this->params.ctx_tgt;
+         auto * ctx_dft = this->params.ctx_dft;
+ 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
 index 1d8f66d0e..307ba2c53 100644
 --- a/src/llama-context.cpp

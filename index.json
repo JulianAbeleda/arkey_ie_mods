@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-concat-rows: exactly the 6 modules on the base: kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules and concat-rows in kernels, ple-prefetch-step in host; concat-rows was measured in a tree that also had unreleased hook rules, which no manifest entry used in those runs",
+    "why": "modules-pendingh: exactly the 6 modules on the base: kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -2773,9 +2773,9 @@
    ],
    "output": "quality-gated",
    "patch": "engines/llama.cpp/b12521/patches/state.patch",
-   "sha256": "c063da9ed15f4b781051f932189de3d2127f2a51b2272316f68c6944ccc9f617",
+   "sha256": "51498aba291a3859a8d7a21a00e5c532c679944c18f23735453beda5dc298960",
    "lines": {
-    "added": 696,
+    "added": 706,
     "removed": 10
    },
    "budget": {
@@ -2783,6 +2783,7 @@
     "removed": 10
    },
    "files": [
+    "common/speculative.cpp",
     "src/llama-context.cpp",
     "src/llama-context.h",
     "src/llama-cparams.h",
@@ -2833,9 +2834,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/state.patch",
-   "sha256": "c063da9ed15f4b781051f932189de3d2127f2a51b2272316f68c6944ccc9f617",
+   "sha256": "51498aba291a3859a8d7a21a00e5c532c679944c18f23735453beda5dc298960",
    "lines": {
-    "added": 696,
+    "added": 706,
     "removed": 10
    },
    "budget": {
@@ -2843,6 +2844,7 @@
     "removed": 10
    },
    "files": [
+    "common/speculative.cpp",
     "src/llama-context.cpp",
     "src/llama-context.h",
     "src/llama-cparams.h",
@@ -2895,9 +2897,9 @@
    ],
    "output": "quality-gated",
    "patch": "engines/llama.cpp/b12521/patches/state.patch",
-   "sha256": "c063da9ed15f4b781051f932189de3d2127f2a51b2272316f68c6944ccc9f617",
+   "sha256": "51498aba291a3859a8d7a21a00e5c532c679944c18f23735453beda5dc298960",
    "lines": {
-    "added": 696,
+    "added": 706,
     "removed": 10
    },
    "budget": {
@@ -2905,6 +2907,7 @@
     "removed": 10
    },
    "files": [
+    "common/speculative.cpp",
     "src/llama-context.cpp",
     "src/llama-context.h",
     "src/llama-cparams.h",

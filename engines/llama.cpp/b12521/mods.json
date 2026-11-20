@@ -225,9 +225,10 @@
   {
    "name": "state",
    "title": "draft and recurrent state held by a context",
-   "point": "what a context keeps between steps: the draft head, its graphs and the recurrent state (llama-context, llama-graph, llama-memory-recurrent)",
+   "point": "what a context keeps between steps: the draft head, its graphs and the recurrent state (llama-context, llama-graph, llama-memory-recurrent, and the draft's pending hidden row in common/speculative)",
    "patch": "patches/state.patch",
    "files": [
+    "common/speculative.cpp",
     "src/llama-context.cpp",
     "src/llama-context.h",
     "src/llama-cparams.h",
@@ -241,7 +242,7 @@
     "src/models/qwen4exp.cpp"
    ],
    "lines": {
-    "added": 696,
+    "added": 706,
     "removed": 10
    },
    "budget": {
@@ -250,7 +251,21 @@
    },
    "static": {
     "hunks_removing_stock_lines": 8
-   }
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 740,
+      "removed": 10
+     },
+     "to": {
+      "added": 740,
+      "removed": 10
+     },
+     "why": "mtp-share-head resets the draft's pending hidden row when a sequence restarts at position 0 (+10 lines in common/speculative.cpp, a twelfth file; lines 696 -> 706 inside the unchanged budget 740): a correctness fix found by measurement (boltbeam-runs/pending-row-fix-20261120; boltbeam-runs/reply-determinism-20261120)",
+     "date": "2026-11-20"
+    }
+   ]
   },
   {
    "name": "host",
@@ -1193,8 +1208,8 @@
    "output": {
     "label": "quality-gated",
     "evidence": {
-     "run": "boltbeam-runs/quality-gate-x16-20261114 (dgate.out), stack-margin-20261114; boltbeam-runs/guardrails-20261118 (ab-xcheck, ab-screen2)",
-     "numbers": "on b12521: switch on in the full-stack arms of ab-xcheck and ab-screen2 (no stock comparison of this mod alone); the gate object below was measured on 1.0.0. Separately, the base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0: target model distributions bit-identical teacher-forced (4,608 top-20 rows, 0 differ); the draft head's proposals change, so drafted / accepted counts and speed move; emitted text identical 15/15 turns in stack-margin",
+     "run": "boltbeam-runs/quality-gate-x16-20261114 (dgate.out), stack-margin-20261114; boltbeam-runs/guardrails-20261118 (ab-xcheck, ab-screen2); boltbeam-runs/pending-row-fix-20261120 (det/, ident128/, confirm/); boltbeam-runs/reply-determinism-20261120",
+     "numbers": "on b12521: switch on in the full-stack arms of ab-xcheck and ab-screen2 (no stock comparison of this mod alone); the gate object below was measured on 1.0.0. Separately, the base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0: target model distributions bit-identical teacher-forced (4,608 top-20 rows, 0 differ); the draft head's proposals change, so drafted / accepted counts and speed move; emitted text identical 15/15 turns in stack-margin; pending-row reset on b12521 (boltbeam-runs/pending-row-fix-20261120, build storage-tmp/pendingh/tree-modules-pendingh against the same tree without it): greedy, cache off, one request at a time: a 2,323-token reply after another request is byte-equal to its fresh-server reply and a 9,455-token reply likewise (2 of 2 problems; without the reset the first is 2,231 tokens and differs from character 6,052); 128k session turns 1-30: replies 30/30 equal with and without the reset; 256k turns 60-116, 3 pairs: replies 57/57 in 6 runs, warm decode 234.6 -> 233.9 tok/s (-0.64 [-0.77, -0.51]), session wall 176.1 -> 176.6 s (+0.45 [+0.32, +0.58]), draft acceptance 0.7593 -> 0.7595; a diagnostic build of the same hunk on an earlier tree: 14 of 14 replies equal to the fresh-server ones in two request orders; in those session runs the reset is taken once, at the first turn (the driver sends a 13-token request before it), after which the draft's cell at position 0 differs for the whole session: draft counts differ in 10 of 30 turns (128k) and 26 of 57 (256k) while every reply is equal",
      "gate": {
       "name": "dgate (teacher-forced target distributions)",
       "run": "boltbeam-runs/quality-gate-x16-20261114 (dgate.out)",
@@ -1206,7 +1221,10 @@
    "limits": [
     "MTP draft contexts only; the draft file's own output projection is skipped at load",
     "the target's output projection must be on the draft head's output device; otherwise load throws",
-    "no check mode (the two heads are different quantizations: there is no stock value to equal)"
+    "no check mode (the two heads are different quantizations: there is no stock value to equal)",
+    "with the switch on, a sequence that restarts at position 0 pairs its first token with a zero hidden row (as on a fresh server) instead of the row the previous request left; stock llama.cpp keeps that row, and with this switch a reply then depended on the request before it",
+    "a restart from a checkpoint is unchanged (stock llama.cpp restores the checkpoint's own row); a restart at a later position without a checkpoint (a plain K/V memory cut, or a fully cached prompt whose last token is evaluated again) is not covered: the right row there is the target's hidden row of the position before, which the engine does not keep",
+    "the position-0 reset is not a clean pass of the speed check: at 256k, where a session's first prompt follows another request on the same server, 3 pairs gave decode -0.64 tok/s [-0.77, -0.51] and session wall +0.45 s [+0.32, +0.58] on 176 s (about 0.25%; the wall is 0.04 s over the 0.41 s detection line), replies identical 57/57 in 6 runs; accepted as a correctness fix that costs speed. The +0.040 ms a decode step has no known cause (the step count is equal); the test is the same pair with no request before the first turn"
    ],
    "rule_exceptions": [
     {
@@ -1778,10 +1796,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-concat-rows",
-   "path": "storage-tmp/hardcode-fix/tree-modules-concat-rows",
-   "what": "base + the 6 module patches at this commit. It is storage-tmp/hardcode-fix/tree-modules-gate (the tree before it) with ggml/src/ggml-cuda/concat.cu changed by kernels/concat-rows. Built on the CPU (llama-server, CUDA, Release); NOT run on the GPU: no identity run on this build yet (a dry run without the GPU starts it and the hook takes the shipped manifest's windows as in the measured build: boltbeam-runs/hook-match-gate-20261120). concat-rows was measured in storage-tmp/region-next/tree-next, which differs from this tree: its concat.cu is byte-equal, but its ext-kernels.cpp also holds hook rules for strided views and state writes that are not in this series (no manifest entry used them in the measured runs), and its kv module is the one before sparse-direct's shape log and kv-stream's shape gate",
-   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules and concat-rows in kernels, ple-prefetch-step in host; concat-rows was measured in a tree that also had unreleased hook rules, which no manifest entry used in those runs",
+   "id": "modules-pendingh",
+   "path": "storage-tmp/pendingh/tree-modules-pendingh",
+   "what": "base + the 6 module patches at this commit (git apply on a clone of the base). It is storage-tmp/hardcode-fix/tree-modules-concat-rows (the tree before it) with common/speculative.cpp changed by the pending-row reset of state/mtp-share-head. Built (llama-server, CUDA, Release) and run on the GPU: boltbeam-runs/pending-row-fix-20261120 (request-order test, 128k identity, 256k 3-pair confirm). The tree before it has its own GPU identity run for kernels/concat-rows (boltbeam-runs/concat-launch-shape-20261120, ident128-rows-only: replies 30/30 in 3 arms, check mode 159,745 checks, 0 differ)",
+   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",
