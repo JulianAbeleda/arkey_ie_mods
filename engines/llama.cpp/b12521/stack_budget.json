@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 4860,
+   "cap": 4870,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -58,6 +58,14 @@
      "why": "kernels/region-gdn-gate, measured +3.5 tok/s at 256k (3-pair confirm, warm decode [+3.0, +4.0], page cache dropped before every arm; +23 lines: the window hook takes an interior RESHAPE / VIEW at offset 0 of an earlier window node and ties same-named outside inputs to one tensor); owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-19",
      "approved": "Owner-approved 2026-11-19"
+    },
+    {
+     "from": 4860,
+     "to": 4870,
+     "measured": 4870,
+     "why": "kv/sparse-direct says once when it does nothing for a call's shape (head dim other than 256 or 4 or fewer query heads per K/V head: the hardcode audit's row 17, a silent no-op on a second model); +10 lines, a log only; CPU build done, identity run pending (boltbeam-runs/sparse-direct-noop-log-20261119); owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-20",
+     "approved": "Owner-approved 2026-11-20"
     }
    ]
   },

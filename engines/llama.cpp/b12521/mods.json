@@ -31,7 +31,7 @@
     "src/llama-kv-stream.h"
    ],
    "lines": {
-    "added": 1312,
+    "added": 1322,
     "removed": 26
    },
    "budget": {
@@ -64,6 +64,18 @@
       "removed": 26
      },
      "why": "sparse-split joins the kv module (its extension point: the flash-attention sparse path that reads the K/V, fattn.cu / fattn-common.cuh, and the top_k_mask op that builds its mask)",
+     "date": "2026-11-19"
+    },
+    {
+     "from": {
+      "added": 1380,
+      "removed": 26
+     },
+     "to": {
+      "added": 1380,
+      "removed": 26
+     },
+     "why": "sparse-direct says once when a call's head dim or GQA ratio is outside its sparse variants (+10 lines in fattn.cu, a log only); the budget is unchanged",
      "date": "2026-11-19"
     }
    ]
@@ -314,6 +326,7 @@
    "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
    "limits": [
     "sparse MMA flash-attention path with q8_0 K/V only; other calls take the stock path",
+    "head dim 256 (K and V) and more than 4 query heads per K/V head only (the (256, 256, ncols1, 8) sparse variants); another shape takes the stock path, logged once with the shape seen (LLAMA_SPARSE_DIRECT ignored for attention with head dim ...)",
     "half 2 (ordered index lists from top-k) lost 1.0% and was dropped before this patch"
    ],
    "rule_exceptions": []
@@ -1697,10 +1710,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-gdn-gate",
-   "path": "storage-tmp/gdn-pkg/tree-modules",
-   "what": "base + the 6 module patches at this commit, assembled from the patches: source only, this exact tree was not built or run. Every touched file was built and run in one of two measured trees: all but ext-kernels.cpp are byte-equal to storage-tmp/prefill-256k/tree2 (boltbeam-runs/prefill-256k-20261119, the modules with kpool-mask-range), and ext-kernels.cpp is byte-equal to storage-tmp/gdn-gate-install/tree, the build boltbeam-runs/gdn-gate-live-20261119 measured (the modules before ple-prefetch-step, idx-keys, topk-rowhist and kpool-mask-range, plus this kernels patch); ext-kernels.cpp includes no file a patch touches",
-   "contains": "exactly the 6 modules on the base (source, not built as one tree): kv-stream and sparse-split in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; region_gdn_gate was measured without ple-prefetch-step, idx-keys, topk-rowhist and kpool-mask-range",
+   "id": "modules-sparse-direct-log",
+   "path": "storage-tmp/hardcode-fix/tree-modules-log",
+   "what": "base + the 6 module patches at this commit, assembled from the patches: source only, this exact tree was not built or run. It is storage-tmp/gdn-pkg/tree-modules (the tree before it) with ggml/src/ggml-cuda/fattn.cu changed by sparse-direct's once-only shape log; that fattn.cu is byte-equal to the one in storage-tmp/hardcode-fix/tree, which compiled on the CPU. Its 30-turn identity run (boltbeam-runs/sparse-direct-noop-log-20261119) is PENDING",
+   "contains": "exactly the 6 modules on the base (source, not built as one tree): kv-stream, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap and the region_gdn_gate hook rules in kernels, ple-prefetch-step in host; the shape log has no identity run yet",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",
