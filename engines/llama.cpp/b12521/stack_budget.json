@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 4739,
+   "cap": 4837,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -40,6 +40,14 @@
      "to": 4739,
      "measured": 4739,
      "why": "indexer/idx-keys + indexer/topk-rowhist, measured +5.4 tok/s at 256k (3-pair confirm, warm decode [+4.9, +5.8], page cache dropped before every arm; +250 lines: the one-thread-per-key indexer kernel with its check mode, and the fused top-k's row-histogram path); owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-19",
+     "approved": "Owner-approved 2026-11-19"
+    },
+    {
+     "from": 4739,
+     "to": 4837,
+     "measured": 4837,
+     "why": "indexer/kpool-mask-range, measured -4.0 s session wall [-4.6, -3.3] on turns 60-116 at 256k (3-pair confirm, prefill -46 ms a turn [-52, -41], page cache evicted before every arm, replies 57/57 x6; +98 lines: each token's visible pool range as I32 {first, count} read by every indexer kernel and the CPU op, with its check mode); owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-19",
      "approved": "Owner-approved 2026-11-19"
     }

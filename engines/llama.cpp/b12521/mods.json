@@ -74,23 +74,25 @@
    "point": "the hybrid indexer memory, its scorer and top-k kernels and the graph inputs they feed (llama-memory-hybrid-idx, lightning-indexer, top-k)",
    "patch": "patches/indexer.patch",
    "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
     "src/models/qwen4exp.cpp"
    ],
    "lines": {
-    "added": 1275,
-    "removed": 59
+    "added": 1358,
+    "removed": 74
    },
    "budget": {
-    "added": 1340,
-    "removed": 59
+    "added": 1430,
+    "removed": 74
    },
    "static": {
-    "hunks_removing_stock_lines": 17
+    "hunks_removing_stock_lines": 30
    },
    "budget_raised": [
     {
@@ -103,6 +105,18 @@
       "removed": 59
      },
      "why": "idx-keys and topk-rowhist join the indexer module (its extension point: the indexer's scorer and top-k kernels, lightning-indexer.cu and top-k.cu)",
+     "date": "2026-11-19"
+    },
+    {
+     "from": {
+      "added": 1340,
+      "removed": 59
+     },
+     "to": {
+      "added": 1430,
+      "removed": 74
+     },
+     "why": "kpool-mask-range joins the indexer module (its extension point: the indexer's graph inputs and scorer; the op's mask type check in ggml.c and the CPU op read the new I32 form)",
      "date": "2026-11-19"
     }
    ]
@@ -734,6 +748,58 @@
     "only with LLAMA_TOPK_FUSED=1 (or its check mode); alone it is ignored",
     "CUDA only, as topk-fused; its row histograms take 32 KB after the persistent row states per stream",
     "same picks as the stock fused kernel; the greater picks keep the stock's unordered slots, the tie slots stay in ascending column order"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "kpool-mask-range",
+   "title": "indexer pool mask as each token's visible range, not a dense F16 mask",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_MASK_RANGE",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_MASK_RANGE_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_KPOOL_MASK_RANGE",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/prefill-256k-20261119 (gate-kp-ident/, gate-kp-screen/, gate-kp-confirm/)",
+     "numbers": "on b12521 (gate-kp-ident: 128k context, 30 turns of a 256k session, recorded history, full stack, LLAMA_KV_STREAM=52848): reply sha256 30/30 equal in three arms: switch off; on; on in check mode (graphs off: 70,000+ indexer calls, 1.0e10 scores bit-identical against the stock F16 mask; 16,384+ host range checks, 0 F16 values differ; no abort). The check arm at 262k aborts in cublasCreate (resource allocation failed: the check's second F16 mask and second indexer output leave no VRAM for the cuBLAS handle); K0 and K1 matched 30/30 at 262k in that run (gate-kp-ident-r2). 256k: screen 57/57; 3-pair confirm turns 60-116, page cache evicted and verified cold before all 6 arms: replies 57/57 in 6 runs, prefill -46 ms a turn [-52, -41] (<=163k -33, <=262k -55), TTFT -46 [-53, -39], decode +2.1 tok/s [+1.7, +2.5], session wall -4.0 s [-4.6, -3.3]. Probe (job5): host kpool_fill 13.7 / 30.7 -> 0.10-0.17 ms a prefill turn at 90-243k",
+     "match": {
+      "what": "reply sha256 per turn, switch on and check mode vs off (gate-kp-ident)",
+      "equal": 30,
+      "of": 30
+     }
+    }
+   },
+   "gain": {
+    "value": "-46",
+    "unit": "ms prefill a turn, warm [-52, -41], turns 60-116 of a 256k session (TTFT -46 [-53, -39], decode +2.1 tok/s [+1.7, +2.5]); session wall of those 57 turns -4.0 s [-4.6, -3.3]",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 116-turn session to 256k context, MoE model on the engine's qwen4exp graph (hybrid indexer, k-pool 4, 1,024-token ubatch, draft catch-up ubatch 128), q8_0 KV, MTP draft head k=3, the shipped 256k plan (LLAMA_KV_STREAM=52848, GGML_CUDA_GRAPH_MAX_KEYS=2, LLAMA_SPARSE_SPLIT=1, LLAMA_IDX_KEYS=1, LLAMA_TOPK_ROWHIST=1); both GGUF files evicted from the page cache before every arm; 3 alternating pairs",
+    "run": "boltbeam-runs/prefill-256k-20261119/gate-kp-confirm"
+   },
+   "exercised_by": "every lightning-indexer call on the qwen4exp graph (prefill, catch-up, verify, draft): the host k-pool fill and the mask upload it removes grow with context (13.7 / 30.7 ms of host fill a prefill turn at 100k / 230k, 124 MB a 1,024-token pass at 240k)",
+   "limits": [
+    "CUDA and the CPU op read the I32 range; Vulkan does not check the mask type in supports_op and would read it as F16 (wrong scores); Metal, SYCL and OpenCL reject it and fall back to the CPU op. Measured on CUDA only",
+    "check mode shares score->src[4] with LLAMA_IDX_INPLACE_CHECK (the in-place check wins where both apply); it compares only in the CUDA backend, an indexer placed on another backend is not compared",
+    "check mode needs VRAM for a second F16 mask and a second indexer output: at 262k on a 32 GB card with the shipped plan it aborts in cublasCreate; run it at 128k",
+    "the switch is read once per process (graph reuse relies on it not changing)"
    ],
    "rule_exceptions": []
   },
@@ -1605,10 +1671,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-idx-keys",
-   "path": "storage-tmp/indexer-topk/btree",
-   "what": "base + the 6 module patches at this commit (indexer with idx-keys and topk-rowhist); the ident128, screen and confirm runs of boltbeam-runs/indexer-topk-20261119 used this tree's build (ident128 before the review's two low fixes, which only add a dispatch alignment condition and a static_assert)",
-   "contains": "exactly the 6 modules on the base, kv-stream and sparse-split in kv, idx-keys and topk-rowhist in indexer, graph-cap in kernels, ple-prefetch-step in host",
+   "id": "modules-kpool-mask-range",
+   "path": "storage-tmp/prefill-256k/tree2",
+   "what": "base + the 6 module patches at this commit (indexer with kpool-mask-range); the gate-kp-ident, gate-kp-screen and gate-kp-confirm runs of boltbeam-runs/prefill-256k-20261119 used this tree's build",
+   "contains": "exactly the 6 modules on the base, kv-stream and sparse-split in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap in kernels, ple-prefetch-step in host",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-idx-keys: exactly the 6 modules on the base, kv-stream and sparse-split in kv, idx-keys and topk-rowhist in indexer, graph-cap in kernels, ple-prefetch-step in host",
+    "why": "modules-kpool-mask-range: exactly the 6 modules on the base, kv-stream and sparse-split in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap in kernels, ple-prefetch-step in host",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -1995,18 +1995,20 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "d13daaae542e95cbc03762d415e14ab7fe1b70e614f26bd9260e2fe26b3cbed0",
+   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
    "lines": {
-    "added": 1275,
-    "removed": 59
+    "added": 1358,
+    "removed": 74
    },
    "budget": {
-    "added": 1340,
-    "removed": 59
+    "added": 1430,
+    "removed": 74
    },
    "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2047,18 +2049,20 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "d13daaae542e95cbc03762d415e14ab7fe1b70e614f26bd9260e2fe26b3cbed0",
+   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
    "lines": {
-    "added": 1275,
-    "removed": 59
+    "added": 1358,
+    "removed": 74
    },
    "budget": {
-    "added": 1340,
-    "removed": 59
+    "added": 1430,
+    "removed": 74
    },
    "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2101,18 +2105,20 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "d13daaae542e95cbc03762d415e14ab7fe1b70e614f26bd9260e2fe26b3cbed0",
+   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
    "lines": {
-    "added": 1275,
-    "removed": 59
+    "added": 1358,
+    "removed": 74
    },
    "budget": {
-    "added": 1340,
-    "removed": 59
+    "added": 1430,
+    "removed": 74
    },
    "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2158,18 +2164,20 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "d13daaae542e95cbc03762d415e14ab7fe1b70e614f26bd9260e2fe26b3cbed0",
+   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
    "lines": {
-    "added": 1275,
-    "removed": 59
+    "added": 1358,
+    "removed": 74
    },
    "budget": {
-    "added": 1340,
-    "removed": 59
+    "added": 1430,
+    "removed": 74
    },
    "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2213,18 +2221,20 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "d13daaae542e95cbc03762d415e14ab7fe1b70e614f26bd9260e2fe26b3cbed0",
+   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
    "lines": {
-    "added": 1275,
-    "removed": 59
+    "added": 1358,
+    "removed": 74
    },
    "budget": {
-    "added": 1340,
-    "removed": 59
+    "added": 1430,
+    "removed": 74
    },
    "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2270,18 +2280,20 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "d13daaae542e95cbc03762d415e14ab7fe1b70e614f26bd9260e2fe26b3cbed0",
+   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
    "lines": {
-    "added": 1275,
-    "removed": 59
+    "added": 1358,
+    "removed": 74
    },
    "budget": {
-    "added": 1340,
-    "removed": 59
+    "added": 1430,
+    "removed": 74
    },
    "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2297,13 +2309,69 @@
    "module": "indexer"
   },
   {
+   "id": "llama.cpp/b12521/kpool-mask-range",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "kpool-mask-range",
+   "title": "indexer pool mask as each token's visible range, not a dense F16 mask",
+   "state": "series",
+   "order": 11,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_MASK_RANGE",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "LLAMA_KPOOL_MASK_RANGE_CHECK",
+   "check_needs": [
+    "GGML_CUDA_DISABLE_GRAPHS"
+   ],
+   "marker": "LLAMA_KPOOL_MASK_RANGE",
+   "knobs": [
+    "LLAMA_KPOOL_MASK_RANGE"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
+   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
+   "lines": {
+    "added": 1358,
+    "removed": 74
+   },
+   "budget": {
+    "added": 1430,
+    "removed": 74
+   },
+   "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
+    "ggml/src/ggml-cuda/lightning-indexer.cu",
+    "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
+    "src/llama-memory-hybrid-idx.cpp",
+    "src/llama-memory-hybrid-idx.h",
+    "src/llama-model.cpp",
+    "src/models/qwen4exp.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [],
+   "module": "indexer"
+  },
+  {
    "id": "llama.cpp/b12521/ext-kernels",
    "engine": "llama.cpp",
    "version": "b12521",
    "name": "ext-kernels",
    "title": "external kernel hook",
    "state": "series",
-   "order": 11,
+   "order": 12,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2355,7 +2423,7 @@
    "name": "ext-kernels-window",
    "title": "kernel hook takes a window of nodes: one generated kernel for a region",
    "state": "series",
-   "order": 12,
+   "order": 13,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2406,7 +2474,7 @@
    "name": "graph-cap",
    "title": "a context keeps CUDA graph executables for at most K graphs",
    "state": "series",
-   "order": 13,
+   "order": 14,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2458,7 +2526,7 @@
    "name": "moe-inplace",
    "title": "prefill reads cached experts in place",
    "state": "series",
-   "order": 14,
+   "order": 15,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2515,7 +2583,7 @@
    "name": "cublas-shared",
    "title": "one cuBLAS handle and workspace per device for every context",
    "state": "series",
-   "order": 15,
+   "order": 16,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2572,7 +2640,7 @@
    "name": "draft-route-count",
    "title": "diagnostic: count the experts the draft's router picks",
    "state": "series",
-   "order": 16,
+   "order": 17,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2629,7 +2697,7 @@
    "name": "mtp-share-head",
    "title": "draft head reads the target's output projection",
    "state": "series",
-   "order": 17,
+   "order": 18,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2688,7 +2756,7 @@
    "name": "graph-slots",
    "title": "draft context keeps a graph per small ubatch size",
    "state": "series",
-   "order": 18,
+   "order": 19,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2748,7 +2816,7 @@
    "name": "rs-one-copy",
    "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
    "state": "series",
-   "order": 19,
+   "order": 20,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2808,7 +2876,7 @@
    "name": "ckpt-pinned",
    "title": "context checkpoints in a pinned pool",
    "state": "series",
-   "order": 20,
+   "order": 21,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2867,7 +2935,7 @@
    "name": "tokenize-incr",
    "title": "server tokenizes only the prompt's new part",
    "state": "series",
-   "order": 21,
+   "order": 22,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2928,7 +2996,7 @@
    "name": "ple-prefetch",
    "title": "per-layer embedding rows read ahead on a thread",
    "state": "series",
-   "order": 22,
+   "order": 23,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2989,7 +3057,7 @@
    "name": "ple-prefetch-step",
    "title": "per-layer embedding rows read ahead as each draft token is known",
    "state": "series",
-   "order": 23,
+   "order": 24,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3050,7 +3118,7 @@
    "name": "sched-async-inputs",
    "title": "scheduler uploads host inputs on the split's stream, no host sync",
    "state": "series",
-   "order": 24,
+   "order": 25,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
