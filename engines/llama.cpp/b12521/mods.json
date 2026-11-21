@@ -325,6 +325,9 @@
    "files": [
     "common/common.cpp",
     "common/common.h",
+    "common/reasoning-budget.cpp",
+    "common/reasoning-budget.h",
+    "common/sampling.cpp",
     "common/speculative.cpp",
     "ggml/src/ggml-backend.cpp",
     "include/llama.h",
@@ -338,15 +341,15 @@
     "tools/server/server-context.cpp"
    ],
    "lines": {
-    "added": 518,
-    "removed": 1
+    "added": 555,
+    "removed": 3
    },
    "budget": {
-    "added": 550,
-    "removed": 1
+    "added": 590,
+    "removed": 3
    },
    "static": {
-    "hunks_removing_stock_lines": 1
+    "hunks_removing_stock_lines": 3
    },
    "budget_raised": [
     {
@@ -360,6 +363,18 @@
      },
      "why": "ple-prefetch-step joins the module (its extension point: mapped-input read-ahead, hinted from the drafter as each token is known)",
      "date": "2026-11-19"
+    },
+    {
+     "from": {
+      "added": 550,
+      "removed": 1
+     },
+     "to": {
+      "added": 590,
+      "removed": 3
+     },
+     "why": "rbudget-backend joins the host module (its extension point: host-side work around a decode step; here the sampler's reasoning-budget hand-off, common/sampling.cpp and reasoning-budget.{h,cpp}): +37 added, 2 stock lines rewritten (the condition that turns backend sampling off under a budget, and its assert); budget_rule ceil_105_10 of 555 = 590",
+     "date": "2026-11-21"
     }
    ]
   }
@@ -1617,6 +1632,46 @@
     "decode gain ~1.35% on the 128k chat (smaller at the deepest band); prefill and session wall within noise"
    ],
    "rule_exceptions": []
+  },
+  {
+   "name": "rbudget-backend",
+   "title": "a reasoning budget keeps backend (GPU) sampling on",
+   "module": "host",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_RBUDGET_BACKEND",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_RBUDGET_BACKEND",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "untested",
+    "evidence": {
+     "run": "none yet",
+     "numbers": "not built or run yet (2026-11-21). Cause it targets: with --reasoning-budget set, stock common_sampler_init turns -bs off for every thinking request (log line 'backend sampling is not compatible with reasoning budget, disabling': 59 per capped run, 0 per uncapped run, boltbeam-runs/release-0332-20261120 cap-ab-256k logs); that arm pair measured warm decode 225.7 -> 209.5 tok/s (-16.2 [-20.5, -11.9]) at 256k, replies 57/57 equal. Identity argument (to be measured): outside FORCING the budget sampler's apply is a passthrough, so a backend-sampled step returns what an uncapped -bs step returns; in FORCING the CPU path leaves one finite logit (the forced token) and this switch returns that token"
+    }
+   },
+   "exercised_by": "a server request with a reasoning budget (--reasoning-budget N >= 0, or reasoning control) and backend sampling (-bs) on; a grammar still turns backend sampling off as stock does",
+   "limits": [
+    "acts only on a request that keeps backend sampling (-bs): a grammar still turns it off first, as stock does",
+    "a forced token that logit_bias or the model's suppress list sets to -inf is returned anyway; the stock CPU path then picks among all -inf logits (no forced token is suppressed in the measured templates)",
+    "on a forced step the candidate list is the forced token alone with p 1: post-sampling probabilities (n_probs with post_sampling_probs) list one entry where stock lists the forced token at 1 and the rest at 0; reply text is unaffected",
+    "outside forcing the token is the backend's (as -bs without a budget): identity with the switch off at temp 0 rests on the backend's greedy pick equalling the CPU's, measured, not by construction",
+    "the backend sampler's own state (its RNG at temp > 0) still advances on a forced step; at temp 0 there is none"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: outside forcing the budget sampler does not touch the logits, so the switch only keeps stock backend sampling (-bs) on, the uncapped path; forcing returns the one token the CPU path can return. Identity rests on reply sha256, switch on vs off, with the cap on, at the release budget and at a small budget that forces"
+    }
+   ]
   }
  ],
  "parked": [
@@ -1891,10 +1946,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-hip-merge",
-   "path": "storage-tmp/hip-merge/tree",
-   "what": "base + the 6 module patches at this commit (git apply on an archive of the base). It is storage-tmp/sc-mod/tree (the tree before it, master 3e8d1e9) with the AMD box's HIP port folded into kv and kernels (fattn-vec.cuh, fattn.cu, kv-stream.cu, ggml-cuda.cu, vendors/hip.h; no other file differs): every CUDA-visible edit is a stock helper call (ggml_cuda_shfl_up / ggml_cuda_shfl_xor / ggml_cuda_any, full mask, width 32) or inside #if GGML_USE_HIP. Built (llama-server, CUDA sm_120, Release) and compared to the sc-mod build: 324 objects, 0 CPU-mnemonic differences, 150 CUDA objects, 0 SASS differences (path-hash names masked). Run on the GPU: boltbeam-runs/hip-merge-20261120 (128k identity turns 1-30, -np 1: the 3e8d1e9 build vs this build vs this build with every kv and kernels check mode, 30/30)",
-   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host; the HIP port edits in kv and kernels (HIP names for cudaMemcpyDefault and the stream-capture calls, portable warp-mask helpers, a whole warp per K row for fattn-vec-skip on HIP, ext-kernels stubbed on HIP)",
+   "id": "modules-eng-night",
+   "path": "storage-tmp/eng-night/tree",
+   "what": "base + the 6 module patches at this commit (git apply on a copy of the base; its git history: the b8ac2b1 modules, then each change). Not built yet: no compiler run on the dev box while a timing run held the GPU (2026-11-21); the build, identity and paired timing are boltbeam-runs/eng-night-20261121",
+   "contains": "the 6 modules on the base (master b8ac2b1's) with rbudget-backend in host",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",
