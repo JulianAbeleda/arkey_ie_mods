@@ -183,7 +183,7 @@ new file mode 100644
 index 00000000..cef2b063
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -0,0 +1,564 @@
+@@ -0,0 +1,566 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
 +// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N.
@@ -305,6 +305,7 @@ index 00000000..cef2b063
 +
 +void ext_ok(CUresult r, const char * what) {
 +    if (r != CUDA_SUCCESS) {
++        (void) cudaGetLastError();  // HIP keeps a failed driver call as the runtime's last error: the next stock launch's check would abort on it
 +        throw std::runtime_error(std::string(what) + " failed: " + std::to_string((int) r));
 +    }
 +}
@@ -700,6 +701,7 @@ index 00000000..cef2b063
 +        cfg.attrs          = &attr;
 +        cfg.numAttrs       = e.pdl && pdl_on ? n_pdl : 0;
 +        if (const CUresult r = cuLaunchKernelEx(&cfg, e.fn, params.data(), nullptr); r != CUDA_SUCCESS) {
++            (void) cudaGetLastError();  // as in ext_ok: the stock kernel's launch check must not see this failure
 +            GGML_LOG_WARN("%s: %s launch failed (%d), the engine's own kernel runs\n", __func__, e.id.c_str(), (int) r);
 +            return 0;
 +        }

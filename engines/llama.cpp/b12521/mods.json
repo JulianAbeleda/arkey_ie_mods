@@ -176,11 +176,11 @@
     "ggml/src/ggml-hip/CMakeLists.txt"
    ],
    "lines": {
-    "added": 791,
+    "added": 793,
     "removed": 17
    },
    "budget": {
-    "added": 791,
+    "added": 793,
     "removed": 17
    },
    "static": {
@@ -281,6 +281,18 @@
       "removed": 17
      },
      "why": "the HIP build compiles the hook's sha256.c as C (target_sources, outside GGML_SOURCES_ROCM, which ggml-hip compiles as HIP: C++ mangled sha256_hash and llama-bench failed to link)",
+     "date": "2026-11-21"
+    },
+    {
+     "from": {
+      "added": 791,
+      "removed": 17
+     },
+     "to": {
+      "added": 793,
+      "removed": 17
+     },
+     "why": "a failed module load or launch clears the runtime's last error (+2): HIP keeps a failed driver call there and the next stock launch's check aborted the server (session-ab hip-hook-20261121/ident, arm MK: 7 entries dropped, then ROCm error no kernel image at a repeat op)",
      "date": "2026-11-21"
     }
    ]
