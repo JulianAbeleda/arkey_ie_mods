@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5022,
+   "cap": 5078,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -112,6 +112,14 @@
      "to": 5022,
      "measured": 5022,
      "why": "HIP port (gfx1201) folded into kv and kernels: +14 lines (HIP names for three CUDA calls, portable warp-mask helpers, fattn-vec-skip's warp per K row on HIP, ext-kernels stubbed on HIP); four mods checked on the R9700 (ckpt-pinned, idx-inplace, idx-pooled, tokenize-incr: BoltBeam docs/amd-box-fixes-20261120-amd-results.md); merged onto master 3e8d1e9 (region-state-copy) on the NV box: the AMD box's raise 4947 -> 4961 re-based onto that commit's cap 5008, the same +14 lines",
+     "date": "2026-11-20",
+     "approved": "Owner-approved 2026-11-20"
+    },
+    {
+     "from": 5022,
+     "to": 5078,
+     "measured": 5078,
+     "why": "the ext-kernels hook loads kernels on HIP through ggml's vendor headers (+56: vendors/vendor.h, the HIP driver names, each vendor's chip name, formats and PDL attribute, ggml-hip building the hook)",
      "date": "2026-11-20",
      "approved": "Owner-approved 2026-11-20"
     }
