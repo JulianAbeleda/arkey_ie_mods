@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5022,
+   "cap": 5061,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -114,6 +114,14 @@
      "why": "HIP port (gfx1201) folded into kv and kernels: +14 lines (HIP names for three CUDA calls, portable warp-mask helpers, fattn-vec-skip's warp per K row on HIP, ext-kernels stubbed on HIP); four mods checked on the R9700 (ckpt-pinned, idx-inplace, idx-pooled, tokenize-incr: BoltBeam docs/amd-box-fixes-20261120-amd-results.md); merged onto master 3e8d1e9 (region-state-copy) on the NV box: the AMD box's raise 4947 -> 4961 re-based onto that commit's cap 5008, the same +14 lines",
      "date": "2026-11-20",
      "approved": "Owner-approved 2026-11-20"
+    },
+    {
+     "from": 5022,
+     "to": 5061,
+     "measured": 5061,
+     "why": "host/rbudget-backend: +39 lines, a reasoning budget keeps backend sampling on; measured +13.8 tok/s warm decode [+13.3, +14.2] at 256k (3-pair confirm, turns 60-116, replies 57/57 x6; session wall -8.5 s [-8.9, -8.1]; boltbeam-runs/eng-night-20261121/ab-rb-256k): the thinking cap's -7% won back; owner approved the change 2026-11-21 ~12:15 AM EST and asked to push it on identity with no regression",
+     "date": "2026-11-21",
+     "approved": "Owner-approved 2026-11-21"
     }
    ]
   },

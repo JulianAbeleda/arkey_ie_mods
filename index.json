@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-hip-merge: exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host; the HIP port edits in kv and kernels (HIP names for cudaMemcpyDefault and the stream-capture calls, portable warp-mask helpers, a whole warp per K row for fattn-vec-skip on HIP, ext-kernels stubbed on HIP)",
+    "why": "modules-eng-night: the 6 modules on the base (master b8ac2b1's) with rbudget-backend in host",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -2963,18 +2963,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "17da022257510199601a91b496d2e4b95498350cdb8580a45ec0f4b491dd75fb",
+   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
    "lines": {
-    "added": 518,
-    "removed": 1
+    "added": 555,
+    "removed": 3
    },
    "budget": {
-    "added": 550,
-    "removed": 1
+    "added": 590,
+    "removed": 3
    },
    "files": [
     "common/common.cpp",
     "common/common.h",
+    "common/reasoning-budget.cpp",
+    "common/reasoning-budget.h",
+    "common/sampling.cpp",
     "common/speculative.cpp",
     "ggml/src/ggml-backend.cpp",
     "include/llama.h",
@@ -3024,18 +3027,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "17da022257510199601a91b496d2e4b95498350cdb8580a45ec0f4b491dd75fb",
+   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
    "lines": {
-    "added": 518,
-    "removed": 1
+    "added": 555,
+    "removed": 3
    },
    "budget": {
-    "added": 550,
-    "removed": 1
+    "added": 590,
+    "removed": 3
    },
    "files": [
     "common/common.cpp",
     "common/common.h",
+    "common/reasoning-budget.cpp",
+    "common/reasoning-budget.h",
+    "common/sampling.cpp",
     "common/speculative.cpp",
     "ggml/src/ggml-backend.cpp",
     "include/llama.h",
@@ -3083,18 +3089,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "17da022257510199601a91b496d2e4b95498350cdb8580a45ec0f4b491dd75fb",
+   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
    "lines": {
-    "added": 518,
-    "removed": 1
+    "added": 555,
+    "removed": 3
    },
    "budget": {
-    "added": 550,
-    "removed": 1
+    "added": 590,
+    "removed": 3
    },
    "files": [
     "common/common.cpp",
     "common/common.h",
+    "common/reasoning-budget.cpp",
+    "common/reasoning-budget.h",
+    "common/sampling.cpp",
     "common/speculative.cpp",
     "ggml/src/ggml-backend.cpp",
     "include/llama.h",
@@ -3144,18 +3153,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "17da022257510199601a91b496d2e4b95498350cdb8580a45ec0f4b491dd75fb",
+   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
    "lines": {
-    "added": 518,
-    "removed": 1
+    "added": 555,
+    "removed": 3
    },
    "budget": {
-    "added": 550,
-    "removed": 1
+    "added": 590,
+    "removed": 3
    },
    "files": [
     "common/common.cpp",
     "common/common.h",
+    "common/reasoning-budget.cpp",
+    "common/reasoning-budget.h",
+    "common/sampling.cpp",
     "common/speculative.cpp",
     "ggml/src/ggml-backend.cpp",
     "include/llama.h",
@@ -3207,18 +3219,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "17da022257510199601a91b496d2e4b95498350cdb8580a45ec0f4b491dd75fb",
+   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
    "lines": {
-    "added": 518,
-    "removed": 1
+    "added": 555,
+    "removed": 3
    },
    "budget": {
-    "added": 550,
-    "removed": 1
+    "added": 590,
+    "removed": 3
    },
    "files": [
     "common/common.cpp",
     "common/common.h",
+    "common/reasoning-budget.cpp",
+    "common/reasoning-budget.h",
+    "common/sampling.cpp",
     "common/speculative.cpp",
     "ggml/src/ggml-backend.cpp",
     "include/llama.h",
@@ -3236,6 +3251,70 @@
     "run": []
    },
    "rule_exceptions": [],
+   "module": "host"
+  },
+  {
+   "id": "llama.cpp/b12521/rbudget-backend",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "rbudget-backend",
+   "title": "a reasoning budget keeps backend (GPU) sampling on",
+   "state": "series",
+   "order": 27,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_RBUDGET_BACKEND",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "LLAMA_RBUDGET_BACKEND",
+   "knobs": [
+    "LLAMA_RBUDGET_BACKEND"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/host.patch",
+   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
+   "lines": {
+    "added": 555,
+    "removed": 3
+   },
+   "budget": {
+    "added": 590,
+    "removed": 3
+   },
+   "files": [
+    "common/common.cpp",
+    "common/common.h",
+    "common/reasoning-budget.cpp",
+    "common/reasoning-budget.h",
+    "common/sampling.cpp",
+    "common/speculative.cpp",
+    "ggml/src/ggml-backend.cpp",
+    "include/llama.h",
+    "src/llama-mmap.cpp",
+    "src/llama-mmap.h",
+    "src/llama-model.cpp",
+    "src/llama-model.h",
+    "src/models/models.h",
+    "src/models/qwen4exp-prefetch.cpp",
+    "tools/server/server-common.cpp",
+    "tools/server/server-context.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "check"
+   ],
    "module": "host"
   },
   {

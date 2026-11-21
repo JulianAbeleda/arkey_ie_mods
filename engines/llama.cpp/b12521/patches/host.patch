@@ -164,6 +164,100 @@ index 9b9e892d8..96565aa33 100644
      size_t size() const;
  
      bool empty() const;
+diff --git a/common/reasoning-budget.cpp b/common/reasoning-budget.cpp
+index 81b7c3e56..ffb620e16 100644
+--- a/common/reasoning-budget.cpp
++++ b/common/reasoning-budget.cpp
+@@ -309,3 +309,15 @@ bool common_reasoning_budget_force(struct llama_sampler * smpl) {
+ 
+     return true;
+ }
++
++// LLAMA_RBUDGET_BACKEND: same condition as apply's masking
++llama_token common_reasoning_budget_forced_token(const struct llama_sampler * smpl) {
++    if (!smpl) {
++        return LLAMA_TOKEN_NULL;
++    }
++    const auto * ctx = (const common_reasoning_budget_ctx *) smpl->ctx;
++    if (ctx->state != REASONING_BUDGET_FORCING || ctx->force_pos >= ctx->forced_tokens.size()) {
++        return LLAMA_TOKEN_NULL;
++    }
++    return ctx->forced_tokens[ctx->force_pos];
++}
+diff --git a/common/reasoning-budget.h b/common/reasoning-budget.h
+index 1b89a04c4..17e29eab5 100644
+--- a/common/reasoning-budget.h
++++ b/common/reasoning-budget.h
+@@ -50,3 +50,7 @@ const llama_tokens * common_reasoning_budget_get_end_match(const struct llama_sa
+ // Manually transition the reasoning budget sampler into the FORCING state.
+ // Returns true if the transition occurred.
+ bool common_reasoning_budget_force(struct llama_sampler * smpl);
++
++// LLAMA_RBUDGET_BACKEND: the token FORCING puts next (the one finite logit apply leaves), or LLAMA_TOKEN_NULL in any
++// other state. Lets a backend-sampled step take the forced token without the CPU logits.
++llama_token common_reasoning_budget_forced_token(const struct llama_sampler * smpl);
+diff --git a/common/sampling.cpp b/common/sampling.cpp
+index 078bfd984..ebe32565a 100644
+--- a/common/sampling.cpp
++++ b/common/sampling.cpp
+@@ -10,6 +10,7 @@
+ #include <algorithm>
+ #include <cctype>
+ #include <climits>
++#include <cstdlib>
+ #include <cmath>
+ #include <cstring>
+ #include <random>
+@@ -188,6 +189,12 @@ std::string common_params_sampling::print() const {
+     return std::string(result);
+ }
+ 
++// LLAMA_RBUDGET_BACKEND: a reasoning budget no longer turns backend sampling off
++static bool common_rbudget_backend() {
++    static const bool on = getenv("LLAMA_RBUDGET_BACKEND") != nullptr && atoi(getenv("LLAMA_RBUDGET_BACKEND")) > 0;
++    return on;
++}
++
+ struct common_sampler * common_sampler_init(
+         const struct llama_model * model,
+         struct common_params_sampling & params) {
+@@ -433,7 +440,8 @@ struct common_sampler * common_sampler_init(
+         params.backend_sampling = false;
+     }
+ 
+-    if (rbudget && params.backend_sampling) {
++    // LLAMA_RBUDGET_BACKEND: keep backend sampling; the forced tokens are returned at sample time instead
++    if (rbudget && params.backend_sampling && !common_rbudget_backend()) {
+         LOG_WRN("%s: backend sampling is not compatible with reasoning budget, disabling\n", __func__);
+ 
+         params.backend_sampling = false;
+@@ -626,6 +634,17 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
+ 
+     gsmpl->set_logits(ctx, idx);
+ 
++    // LLAMA_RBUDGET_BACKEND: while forcing, the CPU path's only finite logit is the forced token, so return it, whether or
++    // not the backend picked a token (a chain the backend runs only in part hands the CPU a truncated candidate list)
++    if (gsmpl->params.backend_sampling && gsmpl->rbudget && common_rbudget_backend()) {
++        const llama_token forced = common_reasoning_budget_forced_token(gsmpl->rbudget);
++        if (forced != LLAMA_TOKEN_NULL) {
++            gsmpl->cur.assign(1, llama_token_data{forced, 0.0f, 1.0f});
++            cur_p = { gsmpl->cur.data(), 1, 0, false };
++            return forced;
++        }
++    }
++
+     // Check if a backend sampler has already sampled a token in which case we
+     // return that token id directly.
+     {
+@@ -635,7 +654,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
+             LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, id);
+ 
+             GGML_ASSERT(!gsmpl->grmr    && "using grammar in combination with backend sampling is not supported");
+-            GGML_ASSERT(!gsmpl->rbudget && "using reasoning budget in combination with backend sampling is not supported");
++            GGML_ASSERT((!gsmpl->rbudget || common_rbudget_backend()) && "using reasoning budget in combination with backend sampling is not supported");
+ 
+             for (size_t i = 0; i < cur_p.size; ++i) {
+                 if (cur_p.data[i].id == id) {
 diff --git a/common/speculative.cpp b/common/speculative.cpp
 index b40eb5535..f1d1926e6 100644
 --- a/common/speculative.cpp
