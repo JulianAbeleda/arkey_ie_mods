@@ -2399,13 +2399,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d1485143983772a8a280ab03e141875585eaab298a637b5e5a732171cea236b",
+   "sha256": "2907dfb9739d0e3a304983f8cd78d885bf40316f53a36757181f46e419404d4b",
    "lines": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "budget": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "files": [
@@ -2452,13 +2452,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d1485143983772a8a280ab03e141875585eaab298a637b5e5a732171cea236b",
+   "sha256": "2907dfb9739d0e3a304983f8cd78d885bf40316f53a36757181f46e419404d4b",
    "lines": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "budget": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "files": [
@@ -2514,13 +2514,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d1485143983772a8a280ab03e141875585eaab298a637b5e5a732171cea236b",
+   "sha256": "2907dfb9739d0e3a304983f8cd78d885bf40316f53a36757181f46e419404d4b",
    "lines": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "budget": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "files": [
@@ -2574,13 +2574,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d1485143983772a8a280ab03e141875585eaab298a637b5e5a732171cea236b",
+   "sha256": "2907dfb9739d0e3a304983f8cd78d885bf40316f53a36757181f46e419404d4b",
    "lines": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "budget": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "files": [
@@ -2630,13 +2630,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d1485143983772a8a280ab03e141875585eaab298a637b5e5a732171cea236b",
+   "sha256": "2907dfb9739d0e3a304983f8cd78d885bf40316f53a36757181f46e419404d4b",
    "lines": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "budget": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "files": [

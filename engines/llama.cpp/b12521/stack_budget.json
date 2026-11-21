@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5139,
+   "cap": 5150,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -152,6 +152,14 @@
      "to": 5139,
      "measured": 5139,
      "why": "a failed hook load or launch clears HIP's sticky last error (+2: the HIP server aborted on the next CUDA_CHECK)",
+     "date": "2026-11-21",
+     "approved": "Owner-approved 2026-11-21"
+    },
+    {
+     "from": 5139,
+     "to": 5150,
+     "measured": 5150,
+     "why": "the ext-kernels hook loads each kernel into every device of its chip and launches the current device's function (+11: a model split over two GPUs failed every launch on the second, hipErrorInvalidDevice)",
      "date": "2026-11-21",
      "approved": "Owner-approved 2026-11-21"
     }

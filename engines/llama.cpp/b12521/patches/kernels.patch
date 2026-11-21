@@ -180,10 +180,10 @@ index f1f1bf2da..f8b87904e 100644
      } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F8_E4M3) {
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
-index 00000000..cef2b063
+index 00000000..123c3385
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -0,0 +1,566 @@
+@@ -0,0 +1,577 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
 +// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N.
@@ -242,7 +242,7 @@ index 00000000..cef2b063
 +    std::vector<ext_op>              ops;
 +    std::vector<int>                 outputs;   // window nodes read outside the window
 +    std::vector<std::pair<int, int>> alias_ok;  // (node, src) inputs a live output may occupy exactly (same address, size)
-+    CUfunction                       fn;
++    std::vector<CUfunction>          fn;   // per device: a module launches only on the device it was loaded on; null = another chip
 +    unsigned                         grid[3], block[3], shmem;
 +    bool                             inplace = false;  // an output is a write into an outside tensor (SET_ROWS): no early start
 +    bool                             pdl;  // the kernel waits (griddepcontrol.wait) before it reads a node input
@@ -310,11 +310,11 @@ index 00000000..cef2b063
 +    }
 +}
 +
-+ext_entry ext_load_entry(const json & j, const std::string & dir, const std::string & chip, bool v2) {
++ext_entry ext_load_entry(const json & j, const std::string & dir, const std::vector<std::string> & chips, bool v2) {
 +    ext_entry e;
 +    e.id = j.at("id").get<std::string>();
-+    if (j.at("target") != chip) {
-+        throw std::runtime_error("built for " + j.at("target").get<std::string>() + ", this device is " + chip);
++    if (std::find(chips.begin(), chips.end(), j.at("target")) == chips.end()) {
++        throw std::runtime_error("built for " + j.at("target").get<std::string>() + ", no device here is one");
 +    }
 +    const json & ops = j.at("match").at("ops");
 +    if (ops.empty() || (!v2 && ops.size() != 1)) {
@@ -418,9 +418,14 @@ index 00000000..cef2b063
 +    if (!f || !ggml_cuda_kernel_format_ok(k.at("format").get<std::string>()) || ext_sha256(blob) != k.at("sha256")) {
 +        throw std::runtime_error("kernel file missing, wrong format or wrong sha256");
 +    }
-+    CUmodule mod;
-+    ext_ok(cuModuleLoadData(&mod, blob.c_str()), "cuModuleLoadData");  // cubin or PTX, into the current (primary) context
-+    ext_ok(cuModuleGetFunction(&e.fn, mod, k.at("symbol").get<std::string>().c_str()), "cuModuleGetFunction");
++    e.fn.assign(chips.size(), nullptr);
++    for (size_t d = 0; d < chips.size(); ++d) {   // into each matching device's primary context
++        CUmodule mod;
++        if (chips[d] == j.at("target") && cudaSetDevice((int) d) == cudaSuccess) {
++            ext_ok(cuModuleLoadData(&mod, blob.c_str()), "cuModuleLoadData");
++            ext_ok(cuModuleGetFunction(&e.fn[d], mod, k.at("symbol").get<std::string>().c_str()), "cuModuleGetFunction");
++        }
++    }
 +    const json & l = j.at("launch");
 +    for (int d = 0; d < 3; ++d) {
 +        e.grid[d]  = l.at("grid").at(d).get<unsigned>();
@@ -471,20 +476,24 @@ index 00000000..cef2b063
 +        if (!build_ok) {
 +            throw std::runtime_error("this build (" + commit + ") is not one the manifest was checked on");
 +        }
-+        int dev = 0;
-+        if (cudaGetDevice(&dev) != cudaSuccess) {
++        int dev = 0, n_dev = 0;
++        if (cudaGetDevice(&dev) != cudaSuccess || cudaGetDeviceCount(&n_dev) != cudaSuccess) {
 +            throw std::runtime_error("no current GPU device");
 +        }
-+        const std::string chip = ggml_cuda_chip_name(dev);
++        std::vector<std::string> chips;
++        for (int d = 0; d < n_dev; ++d) {
++            chips.push_back(ggml_cuda_chip_name(d));
++        }
 +        const std::string dir  = path.substr(0, path.find_last_of('/') + 1);
 +        for (const json & j : m.at("entries")) {
 +            try {
-+                entries.push_back(ext_load_entry(j, dir, chip, v2));
++                entries.push_back(ext_load_entry(j, dir, chips, v2));
 +                GGML_LOG_WARN("%s: loaded %s (%zu ops)\n", __func__, entries.back().id.c_str(), entries.back().ops.size());
 +            } catch (const std::exception & err) {
 +                GGML_LOG_WARN("%s: entry %s dropped, the engine's own kernel runs: %s\n", __func__, j.value("id", "?").c_str(), err.what());
 +            }
 +        }
++        (void) cudaSetDevice(dev);   // back to the device the first graph runs on
 +    } catch (const std::exception & err) {
 +        GGML_LOG_WARN("%s: %s not used, the engine's own kernels run: %s\n", __func__, path.c_str(), err.what());
 +    }
@@ -655,9 +664,11 @@ index 00000000..cef2b063
 +    static const bool             check   = getenv("GGML_CUDA_EXT_KERNELS_CHECK") != nullptr;
 +    static const bool             pdl_on  = getenv("GGML_CUDA_PDL") == nullptr || atoi(getenv("GGML_CUDA_PDL")) != 0;
 +    ext_dump(cgraph);   // once per graph shape, only with GGML_CUDA_EXT_KERNELS_DUMP set
++    int dev = 0;
++    (void) cudaGetDevice(&dev);   // the device whose stream this graph runs on
 +
 +    for (ext_entry & e : entries) {
-+        const std::vector<ggml_tensor *> w = ext_match(e, cgraph, i);
++        const std::vector<ggml_tensor *> w = e.fn[dev] ? ext_match(e, cgraph, i) : std::vector<ggml_tensor *>();
 +        if (w.empty()) {
 +            continue;
 +        }
@@ -700,7 +711,7 @@ index 00000000..cef2b063
 +        cfg.hStream        = (CUstream) stream;
 +        cfg.attrs          = &attr;
 +        cfg.numAttrs       = e.pdl && pdl_on ? n_pdl : 0;
-+        if (const CUresult r = cuLaunchKernelEx(&cfg, e.fn, params.data(), nullptr); r != CUDA_SUCCESS) {
++        if (const CUresult r = cuLaunchKernelEx(&cfg, e.fn[dev], params.data(), nullptr); r != CUDA_SUCCESS) {
 +            (void) cudaGetLastError();  // as in ext_ok: the stock kernel's launch check must not see this failure
 +            GGML_LOG_WARN("%s: %s launch failed (%d), the engine's own kernel runs\n", __func__, e.id.c_str(), (int) r);
 +            return 0;

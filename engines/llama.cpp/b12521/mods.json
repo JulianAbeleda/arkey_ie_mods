@@ -176,11 +176,11 @@
     "ggml/src/ggml-hip/CMakeLists.txt"
    ],
    "lines": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "budget": {
-    "added": 793,
+    "added": 804,
     "removed": 17
    },
    "static": {
@@ -293,6 +293,18 @@
       "removed": 17
      },
      "why": "a failed module load or launch clears the runtime's last error (+2): HIP keeps a failed driver call there and the next stock launch's check aborted the server (session-ab hip-hook-20261121/ident, arm MK: 7 entries dropped, then ROCm error no kernel image at a repeat op)",
+     "date": "2026-11-21"
+    },
+    {
+     "from": {
+      "added": 793,
+      "removed": 17
+     },
+     "to": {
+      "added": 804,
+      "removed": 17
+     },
+     "why": "each kernel is loaded into every device of its chip and launched through the current device's function (+11): a module launches only on the device it was loaded on, so a model split over two GPUs failed every launch on the second (hipErrorInvalidDevice 101, session-ab hip-hook-20261121/ident2, 1,152 per run)",
      "date": "2026-11-21"
     }
    ]
