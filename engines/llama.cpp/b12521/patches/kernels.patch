@@ -122,6 +122,43 @@ index f8dcd95ab..663fe3e90 100644
      }
  }
  
+diff --git a/ggml/src/ggml-cuda/cpy.cu b/ggml/src/ggml-cuda/cpy.cu
+index f1f1bf2da..f8b87904e 100644
+--- a/ggml/src/ggml-cuda/cpy.cu
++++ b/ggml/src/ggml-cuda/cpy.cu
+@@ -426,6 +426,22 @@ static bool ggml_cuda_cpy_as_memcpy_2d(const ggml_tensor * src0, const ggml_tens
+     return spitch >= width && dpitch >= width;
+ }
+ 
++// GGML_CUDA_GRAPH_CPY_KERNEL=1 (local mod, off by default): while the stream is capturing a CUDA graph, a same-type strided
++// copy of F32/F16/BF16/I32 takes the scalar copy kernel below instead of cudaMemcpy2DAsync. A 2-D memcpy node cannot take
++// new operand addresses in cudaGraphExecUpdate (only 1-D memcpy nodes can), so a graph holding one is re-instantiated
++// whenever the compute buffer is re-planned; a kernel node takes any address. Outside capture the stock 2-D copy stays.
++static bool ggml_cuda_cpy_graph_kernel(ggml_type type, cudaStream_t stream) {
++    static const bool on = [] {
++        const char * env = getenv("GGML_CUDA_GRAPH_CPY_KERNEL");
++        return env != nullptr && atoi(env) != 0;
++    }();
++    if (!on || (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16 && type != GGML_TYPE_I32)) {
++        return false;
++    }
++    cudaStreamCaptureStatus cap = cudaStreamCaptureStatusNone;
++    return cudaStreamIsCapturing(stream, &cap) == cudaSuccess && cap != cudaStreamCaptureStatusNone;
++}
++
+ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1) {
+     const int64_t ne = ggml_nelements(src0);
+     GGML_ASSERT(ne == ggml_nelements(src1));
+@@ -474,7 +490,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
+         {
+             CUDA_CHECK(cudaMemcpyAsync(src1_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
+         }
+-    } else if (ggml_cuda_cpy_as_memcpy_2d(src0, src1, mc_width, mc_height, mc_spitch, mc_dpitch)) {
++    } else if (ggml_cuda_cpy_as_memcpy_2d(src0, src1, mc_width, mc_height, mc_spitch, mc_dpitch) &&
++               !ggml_cuda_cpy_graph_kernel(src0->type, main_stream)) {
+         CUDA_CHECK(cudaMemcpy2DAsync(src1_ddc, mc_dpitch, src0_ddc, mc_spitch,
+                                      mc_width, mc_height, cudaMemcpyDeviceToDevice, main_stream));
+     } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F8_E4M3) {
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
 index 000000000..32287d79f

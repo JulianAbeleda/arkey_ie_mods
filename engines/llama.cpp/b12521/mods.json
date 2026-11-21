@@ -160,26 +160,27 @@
   },
   {
    "name": "kernels",
-   "title": "external kernel hook, the CUDA graph cache bound, the concat launch shape",
-   "point": "the CUDA backend's graph execution: one hook that swaps a node or a window of nodes for a kernel a manifest names (ext-kernels), the cache of captured CUDA graphs it launches (graph-cap), and the launch shape of a backend kernel a graph node runs (concat-rows: the non-contiguous concat)",
+   "title": "kernel hook, CUDA graph cache bound, concat launch shape, captured strided copy",
+   "point": "the CUDA backend's graph execution: one hook that swaps a node or a window of nodes for a kernel a manifest names (ext-kernels), the cache of captured CUDA graphs it launches (graph-cap), and the launch shape of a backend kernel a graph node runs (concat-rows: the non-contiguous concat; graph-cpy-kernel: the node a same-type strided copy becomes inside a CUDA graph capture)",
    "patch": "patches/kernels.patch",
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
+    "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "lines": {
-    "added": 723,
-    "removed": 9
+    "added": 741,
+    "removed": 10
    },
    "budget": {
-    "added": 723,
-    "removed": 9
+    "added": 741,
+    "removed": 10
    },
    "static": {
-    "hunks_removing_stock_lines": 3
+    "hunks_removing_stock_lines": 4
    },
    "budget_raised": [
     {
@@ -241,6 +242,18 @@
      },
      "why": "HIP port (gfx1201, from the AMD box's hip-port-wip ff50a56): +9 lines: HIP names for cudaStreamIsCapturing and cudaStreamCaptureStatus(None) (concat-rows checks capture), and ext-kernels stubbed on HIP (the hook loads CUDA cubins through the driver API; no hipModule loader yet: every node takes the stock path). The budget is the measured lines (owner rule: raise by the measured remainder after review, Owner-approved 2026-11-20); CUDA SASS of every kernel in the touched files identical to the build before (boltbeam-runs/hip-merge-20261120)",
      "date": "2026-11-20"
+    },
+    {
+     "from": {
+      "added": 723,
+      "removed": 9
+     },
+     "to": {
+      "added": 741,
+      "removed": 10
+     },
+     "why": "kernels/graph-cpy-kernel (+18 -1 lines in cpy.cu): while the stream captures a CUDA graph, a same-type strided F32/F16/BF16/I32 copy takes the stock scalar copy kernel instead of cudaMemcpy2DAsync (a 2-D memcpy node cannot take new operands in cudaGraphExecUpdate), behind GGML_CUDA_GRAPH_CPY_KERNEL; the removed line is the 2-D branch's condition, rewritten to add the switch test (boltbeam-runs/graph-fix-20261121). The budget is the measured lines (owner rule: raise by the measured remainder after review)",
+     "date": "2026-11-21"
     }
    ]
   },
@@ -1121,6 +1134,57 @@
    "rule_exceptions": []
   },
   {
+   "name": "graph-cpy-kernel",
+   "title": "a captured strided copy is a kernel node, so its CUDA graph updates in place",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_GRAPH_CPY_KERNEL",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "GGML_CUDA_GRAPH_CPY_KERNEL",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/graph-fix-20261121 (diag/, ident128/, time256k/)",
+     "numbers": "on b12521, the tested tree storage-tmp/graph-fix/tree-module (the 6 modules with this row): diag (256k shipped plan, turns 100-116, GGML_CUDA_GRAPH_STATS + GRAPH_DEBUG + a local diagnostic that logs cudaGraphExecUpdate's result and failing node, 2,800 decode steps each arm): switch off 696 failed updates (0.249 a decode step): target chunks 0-6 and 8-12 at every n_kv 256-crossing and turn start (46 each), MTP D0 46, MTP prompt-ubatch graph 98; every failure but 32 is result 5 (ParametersChanged) on a memcpy node with height > 1 (24576 x 4, 512 x 2, 512 x 33 bytes x rows), no kernel node; switch on 32 (0.011 a step), all result 2 (topology changed, MTP D0 and prompt graph once a turn each); replies 17/17 equal. ident128 (128k, turns 1-30, recorded history, shipped switch set): reply sha256 30/30 against the b8ac2b1 build with the switch on, and 30/30 with the switch on plus every kv and kernels check mode (graphs off there: ext-kernels 0 differ, concat-rows 159,745 checks 0 differ, sparse_direct 138,000 checks max |diff| 0, sparse-split 271,000 compactions identical)",
+     "match": {
+      "what": "reply sha256 per turn, the module build with the switch on vs the b8ac2b1 build (ident128, turns 1-30)",
+      "equal": 30,
+      "of": 30
+     }
+    }
+   },
+   "exercised_by": "a CPY / CONT / DUP node whose source and destination have the same type and shape and reduce to rows of contiguous bytes with a row pitch (ggml_cuda_cpy_as_memcpy_2d), launched while the stream is capturing: on the measured plan the rs-one-copy kept-input copy of v (24576 B x 4 rows) in each delta-net layer, a 512 B x 2-row copy in target chunks 1-12 and MTP D0, and 512 B x 33 rows in the MTP prompt-ubatch graph",
+   "limits": [
+    "F32, F16, BF16 and I32 only: other same-type strided copies (I16, F8_E4M3, quantized) keep the 2-D memcpy node",
+    "outside a capture (graphs off, the eager warm-up step after a property change) the stock cudaMemcpy2DAsync stays",
+    "the scalar copy kernel does 64-bit index arithmetic per element: fine for the measured KB-sized copies, slower than a 2-D memcpy for large ones (untimed)",
+    "removes the ParametersChanged failures only: a topology change under one key (MTP D0 and the prompt-ubatch graph, once a turn each on the measured plan) still re-instantiates"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the switch only chooses which stock copy (the 2-D memcpy or the stock scalar copy kernel) a captured strided same-type copy runs; both move the same bytes unchanged (ggml_cuda_cast is the identity for equal types). Identity rests on the reply pairs"
+    }
+   ],
+   "gain": {
+    "value": "+0.3",
+    "unit": "tok/s warm decode [-2.8, +3.5], not resolved, turns 60-116 of a 256k session (209.3 -> 209.6); prefill +2 ms [-17, +20]; session wall -0.3 s [-2.3, +1.8]; failed graph updates (re-instantiations) 0.280 -> 0.012 a decode step (2,593 -> 112 over 9,268 steps)",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, one request at a time, 116-turn session to 256k context, MoE model on the engine's qwen4exp graph, the 0.3.32 release 256k command (tune's command with --reasoning-budget 32768, LLAMA_KV_STREAM=52848, LLAMA_RS_ONE_COPY=1, the region-chain-k2560-k10240 manifest), binary = the tested tree plus a failure-only diagnostic log line (GRAPHFIX_DIAG) in both arms; both GGUF files evicted before every arm; 3 alternating pairs",
+    "run": "boltbeam-runs/graph-fix-20261121/time256k"
+   }
+  },
+  {
    "name": "moe-inplace",
    "title": "prefill reads cached experts in place",
    "module": "experts",
@@ -1958,10 +2022,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-eng-night",
-   "path": "storage-tmp/eng-night/tree",
-   "what": "base + the 6 module patches at this commit (git apply on a copy of the base). Built (llama-server, CUDA sm_120, Release, storage-tmp/eng-night/build.sh) and run on the GPU: boltbeam-runs/eng-night-20261121 (ab-rb-256k, force-b64, ident-rb-b64)",
-   "contains": "the 6 modules on the base (master b8ac2b1's) with rbudget-backend in host",
+   "id": "modules-graph-rebase",
+   "path": "storage-tmp/graph-rebase/tree",
+   "what": "base + the 6 module patches at this commit (git archive of the base + git apply in order): storage-tmp/graph-fix/tree-module (graph-cpy-kernel on b8ac2b1) with f35a44d's host module (diff -rq: common/reasoning-budget.{h,cpp}, common/sampling.cpp only), equally storage-tmp/graph-rebase/ref (base + the module patches at f35a44d) with the kernels module's cpy.cu change (diff -rq: cpy.cu only). Each module patch applied alone on the base and re-diffed (git diff --cached --abbrev=9) gives the committed kernels and host patches byte for byte. Built (llama-server, CUDA sm_120, Release; llama-server 048b9377, libggml-cuda 8bfda702, libllama e4f87be3) and run on the GPU: boltbeam-runs/graph-rebase-20261121 (ident128: the 0.3.32 release command at 128k with --reasoning-budget 32768 and -bs, turns 1-30, the f35a44d build (storage-tmp/graph-rebase/ref) vs this build with GGML_CUDA_GRAPH_CPY_KERNEL=1 LLAMA_RBUDGET_BACKEND=1: reply sha256 30/30). Before it: modules-graph-fix (storage-tmp/graph-fix/tree-module, 429c415: ident128 30/30 with every kv and kernels check mode) and modules-eng-night (storage-tmp/eng-night/tree at f35a44d: ab-rb-256k 57/57 x 6, force-b64 8/8)",
+   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host; the HIP port edits in kv and kernels (HIP names for cudaMemcpyDefault and the stream-capture calls, portable warp-mask helpers, a whole warp per K row for fattn-vec-skip on HIP, ext-kernels stubbed on HIP); graph-cpy-kernel in kernels (cpy.cu, off by default); rbudget-backend in host (common/sampling.cpp, reasoning-budget.{h,cpp}, off by default)",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

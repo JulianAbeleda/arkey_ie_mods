@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5061,
+   "cap": 5080,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -120,6 +120,14 @@
      "to": 5061,
      "measured": 5061,
      "why": "host/rbudget-backend: +39 lines, a reasoning budget keeps backend sampling on; measured +13.8 tok/s warm decode [+13.3, +14.2] at 256k (3-pair confirm, turns 60-116, replies 57/57 x6; session wall -8.5 s [-8.9, -8.1]; boltbeam-runs/eng-night-20261121/ab-rb-256k): the thinking cap's -7% won back; owner approved the change 2026-11-21 ~12:15 AM EST and asked to push it on identity with no regression",
+     "date": "2026-11-21",
+     "approved": "Owner-approved 2026-11-21"
+    },
+    {
+     "from": 5061,
+     "to": 5080,
+     "measured": 5080,
+     "why": "kernels/graph-cpy-kernel (+18 -1 lines in cpy.cu, off by default; rebased onto host/rbudget-backend's cap 5061, first raised 5022 -> 5041 on b8ac2b1: the same +19 lines): a strided same-type copy captured into a CUDA graph becomes the stock scalar copy kernel, so cudaGraphExecUpdate succeeds where a 2-D memcpy node made it fail; measured at 256k (3-pair, turns 60-116): failed updates 0.280 -> 0.012 a decode step, warm decode +0.3 tok/s [-2.8, +3.5] (not resolved), prefill +2 ms [-17, +20], session wall -0.3 s [-2.3, +1.8]; replies 57/57 x 6 and 30/30 at 128k with every check mode (boltbeam-runs/graph-fix-20261121); owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-21",
      "approved": "Owner-approved 2026-11-21"
     }
