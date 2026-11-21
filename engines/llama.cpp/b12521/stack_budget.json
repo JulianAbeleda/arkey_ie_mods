@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 4947,
+   "cap": 4961,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -96,6 +96,14 @@
      "to": 4947,
      "measured": 4947,
      "why": "kv/kv-stream crash fix: the device state's control block starts on a 16-byte boundary for every N (+4 lines in kv-stream.cu: one offset helper used by the allocation and every access, and the host reads the 64-bit counters through memcpy); with N not a multiple of 8 the counters were misaligned and the first call past N ended the server with a misaligned-address GPU exception (N 65,292 and 52,852 faulted on the build before, run past N clean on this one; 128k identity 30/30; boltbeam-runs/kvs-align-20261120); owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-20",
+     "approved": "Owner-approved 2026-11-20"
+    },
+    {
+     "from": 4947,
+     "to": 4961,
+     "measured": 4961,
+     "why": "HIP port (gfx1201) folded into kv and kernels: +14 lines (HIP names for three CUDA calls, portable warp-mask helpers, fattn-vec-skip's warp per K row on HIP, ext-kernels stubbed on HIP); four mods checked on the R9700 (ckpt-pinned, idx-inplace, idx-pooled, tokenize-incr: BoltBeam docs/amd-box-fixes-20261120-amd-results.md)",
      "date": "2026-11-20",
      "approved": "Owner-approved 2026-11-20"
     }
