@@ -3630,6 +3630,27 @@
    "output": "identical",
    "lines": 25,
    "budget": 25
+  },
+  {
+   "id": "llama.cpp/b12521/kernels/region-chain-gfx1201",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "hook": "llama.cpp/b12521/ext-kernels-window",
+   "dir": "engines/llama.cpp/b12521/kernels/region-chain-gfx1201/",
+   "files": {
+    "manifest.json": "23d236a7e7130d00fd501fff81e7aac3a9129c614a66daca45c1538f08a3e63c",
+    "region_13731eab3f40.hip": "ed21b4f2de64a245bab578d24ad94d9385282cbf196b35ea512b7b00a2f0f5a6",
+    "region_13731eab3f40.hsaco": "403a77981bc173e4a388142008a463fbfc8dd90e6822a369e0dd96858ca70ae6",
+    "region_3816a666a26f.hip": "a29865617288ed31304f65e4fb933595868ea9c7887e298f6cc5717c901bc949",
+    "region_3816a666a26f.hsaco": "215f989b4ba728f12413b27493e044c20b34e50f0ed3b20f3c9140fee0ce1fc7",
+    "region_38607c745880.hip": "c8fd1085321b8e7c9c57ff45fb4a51fd53f23d81fbc67d7f98cf4670ab935e46",
+    "region_38607c745880.hsaco": "07838ea1ebf18e4c11983fb6cb13f8f128257404862d1b32a7d665eb1ad2e81d",
+    "region_c91579f0a96b.hip": "771cf1ea4a69b0df9b47e9aec49c7ca3e8f41702450ba1e361a6b1d17a385052",
+    "region_c91579f0a96b.hsaco": "034837e53724a166ebcb34e2a59ea3eeb5039d2d11d42f5f713d9c7cd2dd9d74"
+   },
+   "output": "identical",
+   "lines": 245,
+   "budget": 260
   }
  ],
  "archived": [

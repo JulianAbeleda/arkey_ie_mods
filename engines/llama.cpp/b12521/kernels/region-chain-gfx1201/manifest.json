@@ -1,0 +1,845 @@
+{
+ "schema": "boltbeam.kernel_manifest.v2",
+ "engine": {
+  "name": "llama.cpp",
+  "builds": [
+   "6f311d7a"
+  ]
+ },
+ "entries": [
+  {
+   "id": "region_13731eab3f40",
+   "target": "amd_gfx1201",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_SCALE",
+      "type": "f32",
+      "ne": [
+       320,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        320,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x0"
+       }
+      ],
+      "op_params_f32": [
+       0.25,
+       0.0
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       320,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        320,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 0
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SILU"
+     }
+    ],
+    "outputs": [
+     1
+    ],
+    "alias_ok": [
+     {
+      "node": 0,
+      "src": 0
+     }
+    ]
+   },
+   "kernel": {
+    "file": "region_13731eab3f40.hsaco",
+    "sha256": "403a77981bc173e4a388142008a463fbfc8dd90e6822a369e0dd96858ca70ae6",
+    "symbol": "region_13731eab3f40",
+    "format": "hsaco"
+   },
+   "launch": {
+    "grid": [
+     5,
+     1,
+     1
+    ],
+    "block": [
+     4,
+     16,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": false
+   },
+   "args": [
+    {
+     "node": 1,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "564806a42ec100fb771eda473b7d45630cda71860e34e2813ed9209109554c8e",
+    "order": null,
+    "opts": [],
+    "compile_flags": [
+     "-O3",
+     "-ffp-contract=off",
+     "-cuid=diwa-gen"
+    ],
+    "checks": null,
+    "generator": {
+     "repo": "diwa-gen",
+     "commit": "272f29b62",
+     "branch": "amd",
+     "input": "tests/fixtures/region_chain/windows.json:down",
+     "toolchain": "hipcc (HIP 7.16.26385, AMD clang 24.0.0git d6f6cb69), ROCm ld.lld -shared"
+    }
+   }
+  },
+  {
+   "id": "region_38607c745880",
+   "target": "amd_gfx1201",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        10240,
+        4
+       ],
+       [
+        10240,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x0"
+       },
+       {
+        "ext": "x1"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_SCALE",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        4,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 0
+       }
+      ],
+      "op_params_f32": [
+       0.25,
+       0.0
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        4,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 1
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SIGMOID"
+     },
+     {
+      "op": "GGML_OP_SCALE",
+      "type": "f32",
+      "ne": [
+       4,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        4,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 2
+       }
+      ],
+      "op_params_f32": [
+       2.0,
+       0.0
+      ]
+     }
+    ],
+    "outputs": [
+     3
+    ],
+    "alias_ok": []
+   },
+   "kernel": {
+    "file": "region_38607c745880.hsaco",
+    "sha256": "07838ea1ebf18e4c11983fb6cb13f8f128257404862d1b32a7d665eb1ad2e81d",
+    "symbol": "region_38607c745880",
+    "format": "hsaco"
+   },
+   "launch": {
+    "grid": [
+     4,
+     4,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": false
+   },
+   "args": [
+    {
+     "node": 3,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "5f310c344f983182ba39fcb6a1d666cab2658541cbc088f367d15ce8309a446d",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)"
+    ],
+    "compile_flags": [
+     "-O3",
+     "-ffp-contract=off",
+     "-cuid=diwa-gen"
+    ],
+    "checks": null,
+    "generator": {
+     "repo": "diwa-gen",
+     "commit": "272f29b62",
+     "branch": "amd",
+     "input": "tests/fixtures/region_chain/windows.json:inject",
+     "toolchain": "hipcc (HIP 7.16.26385, AMD clang 24.0.0git d6f6cb69), ROCm ld.lld -shared"
+    }
+   }
+  },
+  {
+   "id": "region_c91579f0a96b",
+   "target": "amd_gfx1201",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       1,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        1
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x0"
+       },
+       {
+        "ext": "x1"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       1,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        1,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 0
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SIGMOID"
+     },
+     {
+      "op": "GGML_OP_MUL",
+      "type": "f32",
+      "ne": [
+       2560,
+       4
+      ],
+      "src_types": [
+       "f32",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        4
+       ],
+       [
+        1,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x2"
+       },
+       {
+        "node": 1
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_ADD",
+      "type": "f32",
+      "ne": [
+       2560,
+       4
+      ],
+      "src_types": [
+       "f32",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        4
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x3"
+       },
+       {
+        "node": 2
+       }
+      ]
+     }
+    ],
+    "outputs": [
+     3
+    ],
+    "alias_ok": [
+     {
+      "node": 2,
+      "src": 0
+     },
+     {
+      "node": 3,
+      "src": 0
+     }
+    ]
+   },
+   "kernel": {
+    "file": "region_c91579f0a96b.hsaco",
+    "sha256": "034837e53724a166ebcb34e2a59ea3eeb5039d2d11d42f5f713d9c7cd2dd9d74",
+    "symbol": "region_c91579f0a96b",
+    "format": "hsaco"
+   },
+   "launch": {
+    "grid": [
+     4,
+     1,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": false
+   },
+   "args": [
+    {
+     "node": 3,
+     "src": -1
+    },
+    {
+     "node": 3,
+     "src": 0
+    },
+    {
+     "node": 2,
+     "src": 0
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "7d9af44762777591c995ff138396720a7a850eaf9ee772b496cd717c9f467d0a",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)",
+     "Opt(op=OptOps.LANES, axis=1, arg=256)",
+     "Opt(op=OptOps.UPCAST, axis=1, arg=10)"
+    ],
+    "compile_flags": [
+     "-O3",
+     "-ffp-contract=off",
+     "-cuid=diwa-gen"
+    ],
+    "checks": null,
+    "generator": {
+     "repo": "diwa-gen",
+     "commit": "272f29b62",
+     "branch": "amd",
+     "input": "tests/fixtures/region_chain/windows.json:shexp",
+     "toolchain": "hipcc (HIP 7.16.26385, AMD clang 24.0.0git d6f6cb69), ROCm ld.lld -shared"
+    }
+   }
+  },
+  {
+   "id": "region_3816a666a26f",
+   "target": "amd_gfx1201",
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        48
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x0"
+       },
+       {
+        "ext": "x1"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_RESHAPE",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 0
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_ADD",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "f32",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ],
+       [
+        48
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 1
+       },
+       {
+        "ext": "x2"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 2
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SOFTPLUS"
+     },
+     {
+      "op": "GGML_OP_MUL",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "f32",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ],
+       [
+        48
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 3
+       },
+       {
+        "ext": "x3"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_RESHAPE",
+      "type": "f32",
+      "ne": [
+       1,
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 4
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       48,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        48
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x4"
+       },
+       {
+        "ext": "x1"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_RESHAPE",
+      "type": "f32",
+      "ne": [
+       1,
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 6
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       1,
+       48,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        1,
+        48,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 7
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SIGMOID"
+     }
+    ],
+    "outputs": [
+     5,
+     8
+    ],
+    "alias_ok": []
+   },
+   "kernel": {
+    "file": "region_3816a666a26f.hsaco",
+    "sha256": "215f989b4ba728f12413b27493e044c20b34e50f0ed3b20f3c9140fee0ce1fc7",
+    "symbol": "region_3816a666a26f",
+    "format": "hsaco"
+   },
+   "launch": {
+    "grid": [
+     96,
+     4,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": false
+   },
+   "args": [
+    {
+     "node": 5,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    },
+    {
+     "node": 6,
+     "src": 0
+    },
+    {
+     "node": 2,
+     "src": 1
+    },
+    {
+     "node": 4,
+     "src": 1
+    },
+    {
+     "node": 8,
+     "src": -1
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "fa7c434e3d5e441bf95ceaf7c6bdc4c5fbc28f155ac800aa8a22bd40b2fb7c09",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)"
+    ],
+    "compile_flags": [
+     "-O3",
+     "-ffp-contract=off",
+     "-cuid=diwa-gen"
+    ],
+    "checks": null,
+    "generator": {
+     "repo": "diwa-gen",
+     "commit": "272f29b62",
+     "branch": "amd",
+     "input": "tests/fixtures/region_chain/windows.json:gdn",
+     "toolchain": "hipcc (HIP 7.16.26385, AMD clang 24.0.0git d6f6cb69), ROCm ld.lld -shared"
+    }
+   }
+  }
+ ]
+}
