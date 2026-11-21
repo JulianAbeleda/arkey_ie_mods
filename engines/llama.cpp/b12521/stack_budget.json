@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5137,
+   "cap": 5139,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -144,6 +144,14 @@
      "to": 5137,
      "measured": 5137,
      "why": "the HIP build compiles the hook's sha256.c as C (+1: target_sources outside GGML_SOURCES_ROCM, which ggml-hip compiles as HIP; llama-bench failed to link)",
+     "date": "2026-11-21",
+     "approved": "Owner-approved 2026-11-21"
+    },
+    {
+     "from": 5137,
+     "to": 5139,
+     "measured": 5139,
+     "why": "a failed hook load or launch clears HIP's sticky last error (+2: the HIP server aborted on the next CUDA_CHECK)",
      "date": "2026-11-21",
      "approved": "Owner-approved 2026-11-21"
     }
