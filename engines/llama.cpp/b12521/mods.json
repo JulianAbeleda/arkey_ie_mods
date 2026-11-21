@@ -2098,11 +2098,11 @@
     "label": "identical",
     "evidence": {
      "run": "boltbeam-runs/hip-hook-20261121 (ident-exp2; kernels-exp2)",
-     "numbers": "on b12521 (build 6f311d7ad-mods-c7b7e923: arkey_ie_mods amd b7acb55, the per-device hook), 2x R9700 (gfx1201) with the model split over both: session-ab ident-exp2, turns 1-8 of the 256k Go session, recorded history, arms M0 (stock), MK (this manifest), MKC (MK + GGML_CUDA_EXT_KERNELS_CHECK, graphs off): reply sha256 8/8 equal in MK and MKC; check mode differ 0, worst 0 on every entry (region_13731eab3f40 769 checks, region_38607c745880 769, region_c91579f0a96b 257, region_3816a666a26f 257); 4 entries loaded and matched on both cards, 0 launch failures, none dropped. Before the fix (ident3: the same windows generated with NV's fast-math exp): differ on every launch, worst 1.5e-5, replies 1/8.",
+     "numbers": "on b12521 (build 6f311d7ad-mods-c7b7e923: arkey_ie_mods amd b7acb55, the per-device hook), 2x R9700 (gfx1201) with the model split over both: session-ab ident-exp2, turns 1-8 of the 256k Go session, recorded history, arms M0 (stock), MK (this manifest), MKC (MK + GGML_CUDA_EXT_KERNELS_CHECK, graphs off): reply sha256 8/8 equal in MK and MKC; check mode differ 0, worst 0 on every entry (region_13731eab3f40 769 checks, region_38607c745880 769, region_c91579f0a96b 257, region_3816a666a26f 257); 4 entries loaded and matched on both cards, 0 launch failures, none dropped. Before the fix (ident3: the same windows generated with NV's fast-math exp): differ on every launch, worst 1.5e-5, replies 1/8. Speed A/B (boltbeam-runs/hip-hook-20261121/speed-gfx1201: M0 vs MK, turns 1-20, 3 alternating pairs, same build, layer split): reply sha256 20/20 in all 6 runs; warm decode 35.8 -> 35.7 tok/s (-0.1 [-0.6, +0.5]), prefill +25 ms [-7, +56], session wall on the 14 unflagged turns -0.3 s [-1.2, +0.5]: no change resolved.",
      "match": {
-      "what": "reply sha256 per turn, arms MK and MKC vs M0, same build (ident-exp2, turns 1-8)",
-      "equal": 8,
-      "of": 8
+      "what": "reply sha256 per turn, MK vs M0, same build (speed-gfx1201, turns 1-20, 3 pairs; ident-exp2 turns 1-8 also MKC)",
+      "equal": 60,
+      "of": 60
      }
     }
    },
@@ -2110,7 +2110,7 @@
    "limits": [
     "OFF by default: it runs only with GGML_CUDA_EXT_KERNELS pointed at this dir's manifest.json",
     "gfx1201 only (target amd_gfx1201); one engine build (6f311d7a = b12521); needs the hook at amd b7acb55 or later (per-device load: an older hook launches on one card only)",
-    "speed not measured: identity is proven (check mode and replies); a paired speed A/B against stock is the next step, so no gain is claimed",
+    "no speed change resolved in layer split (decode -0.1 tok/s [-0.6, +0.5], 3 pairs): four fused windows save a few dozen launches a token against ~28 ms; and in tensor split (how the model is served here) the split matrices have other shapes, so these entries likely match nothing there. Ships for identity, off by default",
     "author: diwa-gen (family region_chain.v1), commit 272f29b62 on amd, inputs tests/fixtures/region_chain/windows.json (down, inject, shexp, gdn); each entry's evidence names its recipe. The manifest is the tested one's 4 matched entries (of 7: sc4, sc10 and v1 matched no node in this session) with the recipe added to evidence"
    ]
   }
