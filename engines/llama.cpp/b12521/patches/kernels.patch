@@ -997,15 +997,16 @@ index 35a898e2..3a127b8e 100644
  list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
  
  file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
-+list(APPEND GGML_SOURCES_ROCM ../ggml-cuda/ext-kernels.cpp ../../../vendor/hash/sha256/sha256.c)  # opt-in mod GGML_CUDA_EXT_KERNELS
++list(APPEND GGML_SOURCES_ROCM ../ggml-cuda/ext-kernels.cpp)  # opt-in mod GGML_CUDA_EXT_KERNELS
  file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
  list(APPEND GGML_SOURCES_ROCM ${SRCS})
  file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
-@@ -77,6 +78,7 @@ ggml_add_backend_library(ggml-hip
+@@ -77,6 +78,8 @@ ggml_add_backend_library(ggml-hip
                           ${GGML_HEADERS_ROCM}
                           ${GGML_SOURCES_ROCM}
                          )
 +target_include_directories(ggml-hip PRIVATE ../../../vendor ../../../vendor/hash)  # the ext-kernels hook: nlohmann json, sha256
++target_sources(ggml-hip PRIVATE ../../../vendor/hash/sha256/sha256.c)  # C, outside GGML_SOURCES_ROCM: that list is compiled as HIP (C++), which mangles sha256_hash
  
  # TODO: do not use CUDA definitions for HIP
  if (NOT GGML_BACKEND_DL)

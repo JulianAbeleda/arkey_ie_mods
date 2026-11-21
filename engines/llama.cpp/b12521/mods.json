@@ -176,11 +176,11 @@
     "ggml/src/ggml-hip/CMakeLists.txt"
    ],
    "lines": {
-    "added": 790,
+    "added": 791,
     "removed": 17
    },
    "budget": {
-    "added": 790,
+    "added": 791,
     "removed": 17
    },
    "static": {
@@ -270,6 +270,18 @@
      },
      "why": "the hook loads kernels on HIP: the driver calls go through ggml's vendor headers (vendors/hip.h maps the CUDA driver names; vendors/vendor.h is the one vendor selection, read by common.cuh and the hook); each vendor header names its chip (nvidia_sm120 / amd_gfx1201), the binary formats it loads (cubin, ptx / hsaco) and its PDL attribute (none on HIP); the HIP stub in ggml-cuda.cu is gone; ggml-hip builds ext-kernels.cpp. budget_rule ceil_105_10 of the new lines; removed lines measured",
      "date": "2026-11-20"
+    },
+    {
+     "from": {
+      "added": 790,
+      "removed": 17
+     },
+     "to": {
+      "added": 791,
+      "removed": 17
+     },
+     "why": "the HIP build compiles the hook's sha256.c as C (target_sources, outside GGML_SOURCES_ROCM, which ggml-hip compiles as HIP: C++ mangled sha256_hash and llama-bench failed to link)",
+     "date": "2026-11-21"
     }
    ]
   },
