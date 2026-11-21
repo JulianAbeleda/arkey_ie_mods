@@ -237,6 +237,15 @@ hook can only read one manifest, so this dir holds the shipped dir's six entries
 hook gained strided views, an in-place SET_ROWS state write, and a check mode that restores the written state on the engine's stream.
 256k, 3 pairs: decode +1.8 tok/s [+0.3, +3.2]; session wall -0.5 s [-3.4, +2.4]: decode confirmed, the session time (~1 s) too small
 to resolve in 3 pairs, which is why it is off by default. Identical text (30/30 turns in 3 arms; 156,673 checked windows, 0 differ).
+kernels/ext-kernels-window, launch sequences (b12521 only, off unless a kernel list uses them): an entry may be a sequence of launches
+(`launches`) with scratch slots, for regions cut where a reduction needs another block's outputs and for the generated sparse
+attention (compaction, kv-stream step, tile, combine). Every launch loads before any runs; a value cut between launches is a live
+output's own tensor or a scratch slot, and a launch may read only what an earlier one wrote; after a launch that writes outside state
+the next one does not start early. Run-time extents (`{"ne": [node, src, dim]}`), -1 wildcards bounded by the kernel's limit
+(`ne_max`), `op_params_hex` and a kv-stream step (the engine's own page resolve for a streamed K/V cache) serve the attention entry;
+check mode takes a relative tolerance (`tolerance_mode: rel_max`). Format: boltbeam-runs/hook-r5-20261121/FORMAT.md. Single-launch
+lists give identical text (30/30 turns, every shipped entry 0 differ in check mode); a 3-launch entry from two generated kernels
+runs bit-identical (2,049+ checked windows, 0 differ, 30/30 turns).
 state/mtp-share-head, pending row (b12521 only, part of `LLAMA_MTP_SHARE_HEAD=1`): the draft pairs the first token of a batch with the
 target's last hidden row of the batch before. Stock llama.cpp zeroes that row only when the server starts, so the first token of a
 new prompt is paired with the last row of the previous request. With the shared head that made a reply depend on the request before

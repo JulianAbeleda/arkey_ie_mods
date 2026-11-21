@@ -161,13 +161,16 @@ index f1f1bf2da..f8b87904e 100644
      } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F8_E4M3) {
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
-index 000000000..32287d79f
+index 000000000..03faefaa5
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -0,0 +1,566 @@
+@@ -0,0 +1,831 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
-+// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N.
++// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N, or a
++// sequence of launches (launches + scratch: values cut between launches that are not live outputs live in scratch),
++// with run-time extents ({"ne": [node, src, dim]} args, -1 in ne / nb: any), op_params bytes (op_params_hex) and a
++// kv-stream step (kv_stream: a streamed K/V cache resolved into VRAM for the launches after it).
 +// Unset = the stock engine. This file holds no kernels: they arrive as cubin / PTX files, verified by sha256.
 +// Anything that does not match or does not load falls back to the engine's own path for that node.
 +// GGML_CUDA_EXT_KERNELS_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1) runs both and compares every live output at the
@@ -184,12 +187,35 @@ index 000000000..32287d79f
 +#include <array>
 +#include <cmath>
 +#include <cstring>
++#include <deque>
 +#include <fstream>
++#include <functional>
 +#include <iterator>
++#include <mutex>
 +#include <string>
 +#include <vector>
 +
 +int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx);
++
++// the kv module's kv-stream (kv-stream.cuh), weak: a build without that module has no streamed cache, the step is a no-op.
++// The mask struct is that header's layout (kv-stream.cuh includes device code a host compiler cannot read)
++struct ggml_cuda_kvs_mask {
++    const void * data = nullptr;
++    int64_t      stride = 0, ne01 = 0;
++    int          ncols1 = 1;
++    int32_t *    cells = nullptr;
++    void *       scratch = nullptr;
++    bool         swapped = false;
++    int64_t      out_stride = 0;
++};
++static_assert(sizeof(ggml_cuda_kvs_mask) == 64, "the layout of kv-stream.cuh's ggml_cuda_kvs_mask");
++#if defined(__GNUC__)
++#define EXT_KVS 1
++__attribute__((weak)) int64_t ggml_cuda_kvs_resolve_cells(const ggml_tensor * K, int64_t n_kv, int64_t n_lists, int64_t n_kv_max, int64_t ne01);
++__attribute__((weak)) bool ggml_cuda_kvs_attn(CUstream stream, const ggml_tensor * K, const ggml_tensor * V, int64_t n_kv, bool sparse_direct,
++                                              int32_t * indices, const int32_t * counts, int64_t n_lists, int64_t n_kv_max,
++                                              ggml_cuda_kvs_mask * mask, const char ** K_data, const char ** V_data);
++#endif
 +
 +namespace {
 +
@@ -200,15 +226,16 @@ index 000000000..32287d79f
 +    ggml_op                op;
 +    int                    unary = -1;     // GGML_OP_UNARY: the unary op, else -1
 +    ggml_type              type;
-+    ext_ne                 ne;
++    ext_ne                 ne, ne_max = {};   // ne -1 (launches entries only): any extent up to ne_max (the kernel's bound)
 +    std::vector<ggml_type> src_types;
-+    std::vector<ext_ne>    src_ne;
++    std::vector<ext_ne>    src_ne, src_ne_max;
 +    std::vector<int>       src_node;       // per src: the window node it is (0..), or -1 = a tensor from outside
 +    std::vector<std::string> src_ext;      // per outside src: its manifest name; one name = one tensor across the window
 +    int                    uses = 0;       // in-window uses (filled at load)
 +    std::vector<float>     params;         // the op's leading op_params as f32, matched bitwise (a scale's factor and bias)
-+    std::vector<size_t>    nb;             // a strided node (a view): its byte strides, matched exactly; empty = contiguous
-+    std::vector<std::vector<size_t>> src_nb;  // the same per outside src
++    std::vector<uint8_t>   params_raw;     // op_params_hex: the leading op_params bytes, matched exactly
++    std::vector<int64_t>   nb;             // a strided node (a view): its byte strides, matched exactly (-1: dense in that dim); empty = contiguous
++    std::vector<std::vector<int64_t>> src_nb;  // the same per outside src
 +    int64_t                view_offs = 0;  // an interior view of a window node: its byte offset in that node's buffer
 +};
 +
@@ -216,6 +243,31 @@ index 000000000..32287d79f
 +    int      node;  // window node, or -1: a constant
 +    int      src;   // -1: the node's output, 0..: its src
 +    uint64_t bits;  // the constant (i32 / u32 / f32 in the low 4 bytes, i64 in 8)
++    int      scratch = -1;  // a scratch slot's address (node -1)
++    int      dim = -1;      // >= 0: the extent ne[dim] of the node / src as i32 (not its address)
++    bool     kv = false;    // after a kv-stream step: an arg at K's / V's address takes the step's pointer
++};
++
++struct ext_kvs {               // a kv-stream step: K, V, mask (node, src); the index lists and counts (scratch slots)
++    ext_arg  k, v, mask;
++    int      lists, counts;
++    int64_t  n_lists, n_kv_max, ncols1;
++};
++
++struct ext_launch {
++    CUfunction           fn;
++    unsigned             grid[3], block[3], shmem;
++    bool                 pdl = false;   // the kernel waits (griddepcontrol.wait) before it reads or writes any argument
++    bool                 state = false; // it writes outside state (a SET_ROWS output, or an output while alias_ok is set)
++    std::vector<ext_arg> args;
++    bool                 is_kvs = false;  // a kv-stream step, not a kernel
++    ext_kvs              kvs;
++};
++
++struct ext_mem {                // per engine stream: the scratch block and the kv-stream step's mask scratch
++    void *      stream;
++    CUdeviceptr base = 0, kvs = 0;
++    size_t      kvs_bytes = 0;   // SIZE_MAX: the kv-stream buffer failed (said once, never retried)
 +};
 +
 +struct ext_entry {
@@ -223,12 +275,12 @@ index 000000000..32287d79f
 +    std::vector<ext_op>              ops;
 +    std::vector<int>                 outputs;   // window nodes read outside the window
 +    std::vector<std::pair<int, int>> alias_ok;  // (node, src) inputs a live output may occupy exactly (same address, size)
-+    CUfunction                       fn;
-+    unsigned                         grid[3], block[3], shmem;
++    std::vector<ext_launch>          launches;  // one, or a sequence run in order (all loaded before any runs)
++    std::vector<size_t>              scratch;   // per slot: its byte offset in the scratch block; back(): the block's size
++    std::deque<ext_mem>              scratch_mem;  // per engine stream: allocated once (a deque: references stay valid)
 +    bool                             inplace = false;  // an output is a write into an outside tensor (SET_ROWS): no early start
-+    bool                             pdl;  // the kernel waits (griddepcontrol.wait) before it reads a node input
 +    double                           tol;  // check mode: largest allowed |ext - stock|, 0 = bit-identical
-+    std::vector<ext_arg>             args;
++    bool                             rel = false;  // tol is relative to max|stock| of each output (tolerance_mode rel_max)
 +    uint64_t                         n_match = 0, n_check = 0, n_diff = 0, n_refused = 0;
 +    double                           worst = 0;
 +};
@@ -296,7 +348,8 @@ index 000000000..32287d79f
 +    if (j.at("target") != chip) {
 +        throw std::runtime_error("built for " + j.at("target").get<std::string>() + ", this device is " + chip);
 +    }
-+    const json & ops = j.at("match").at("ops");
++    const json & ops   = j.at("match").at("ops");
++    const bool   multi = j.contains("launches");
 +    if (ops.empty() || (!v2 && ops.size() != 1)) {
 +        throw std::runtime_error("a v1 entry takes a window of one op, a v2 entry at least one");
 +    }
@@ -316,7 +369,14 @@ index 000000000..32287d79f
 +        if (op.params.size() < (op.op == GGML_OP_SCALE ? 2u : op.op == GGML_OP_ARANGE ? 3u : op.op == GGML_OP_CONCAT ? 1u : 0u)) {
 +            throw std::runtime_error("a GGML_OP_SCALE / ARANGE / CONCAT op needs its op_params_f32 (2 / 3 / 1 values)");
 +        }
-+        op.nb        = o.value("nb", std::vector<size_t>());
++        const std::string hex = o.value("op_params_hex", std::string());
++        if ((!hex.empty() && !v2) || hex.size() % 2 != 0 || hex.size() / 2 > GGML_MAX_OP_PARAMS || hex.find_first_not_of("0123456789abcdef") != std::string::npos) {
++            throw std::runtime_error("op_params_hex: whole bytes in lower-case hex, at most GGML_MAX_OP_PARAMS");
++        }
++        for (size_t c = 0; c < hex.size(); c += 2) {
++            op.params_raw.push_back((uint8_t) std::stoul(hex.substr(c, 2), nullptr, 16));
++        }
++        op.nb        = o.value("nb", std::vector<int64_t>());
 +        op.view_offs = o.value("view_offs", (int64_t) 0);
 +        if ((op.op == GGML_OP_UNARY) != (op.unary >= 0)) {
 +            throw std::runtime_error("a GGML_OP_UNARY op needs its unary, and only it");
@@ -327,14 +387,30 @@ index 000000000..32287d79f
 +        for (const json & s : o.at("src_ne")) {
 +            op.src_ne.push_back(ext_shape(s));
 +        }
-+        op.src_nb = o.value("src_nb", std::vector<std::vector<size_t>>(op.src_types.size()));
++        op.src_nb = o.value("src_nb", std::vector<std::vector<int64_t>>(op.src_types.size()));
++        op.ne_max = ext_shape(o.value("ne_max", json::array()));
++        const json src_max = o.value("src_ne_max", json::array());
++        for (size_t s = 0; s < op.src_types.size(); ++s) {
++            op.src_ne_max.push_back(ext_shape(s < src_max.size() ? src_max[s] : json::array()));
++        }
++
 +        bool nb_ok = op.src_nb.size() == op.src_types.size() && (op.nb.empty() || op.nb.size() == GGML_MAX_DIMS);
-+        for (const std::vector<size_t> & nb : op.src_nb) {
++        for (const std::vector<int64_t> & nb : op.src_nb) {
 +            nb_ok = nb_ok && (nb.empty() || nb.size() == GGML_MAX_DIMS);
 +        }
 +        // contiguous: true, or the node's strides (nb): a strided tensor is matched only on its exact layout
 +        if (o.value("contiguous", false) != op.nb.empty() || !nb_ok || op.src_ne.size() != op.src_types.size() || op.src_types.size() > GGML_MAX_SRC) {
 +            throw std::runtime_error("needs contiguous: true or nb (4 strides), one src_ne per src_types, src_nb of 4 strides or []");
++        }
++        for (size_t s = 0; s <= op.src_types.size(); ++s) {   // a wildcard (the node, then each src): a launches entry, bounded
++            const bool                   self = s == op.src_types.size();
++            const ext_ne &               ne = self ? op.ne : op.src_ne[s], & mx = self ? op.ne_max : op.src_ne_max[s];
++            const std::vector<int64_t> & nb = self ? op.nb : op.src_nb[s];
++            for (int d = 0; d < GGML_MAX_DIMS; ++d) {
++                if ((ne[d] < 0 && (!multi || ne[d] != -1 || mx[d] <= 1)) || (!nb.empty() && nb[d] < 0 && (!multi || nb[d] != -1))) {
++                    throw std::runtime_error("-1 (any) in ne / nb: a launches entry only, an ne -1 with its bound in ne_max / src_ne_max");
++                }
++            }
 +        }
 +        op.src_node.assign(op.src_types.size(), -1);
 +        op.src_ext.assign(op.src_types.size(), "");
@@ -392,42 +468,153 @@ index 000000000..32287d79f
 +            throw std::runtime_error("alias_ok names a view's src");
 +        }
 +    }
-+    const json & k = j.at("kernel");
-+    std::ifstream f(dir + k.at("file").get<std::string>(), std::ios::binary);
-+    std::string   blob((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-+    if (!f || k.at("format") == "hsaco" || ext_sha256(blob) != k.at("sha256")) {
-+        throw std::runtime_error("kernel file missing, wrong format or wrong sha256");
++    if (multi && (!v2 || j.contains("kernel") || j.contains("launch") || j.contains("args") || j.at("launches").empty())) {
++        throw std::runtime_error("launches: a v2 entry only, non-empty, in place of kernel / launch / args");
 +    }
-+    CUmodule mod;
-+    ext_ok(cuModuleLoadData(&mod, blob.c_str()), "cuModuleLoadData");  // cubin or PTX, into the current (primary) context
-+    ext_ok(cuModuleGetFunction(&e.fn, mod, k.at("symbol").get<std::string>().c_str()), "cuModuleGetFunction");
-+    const json & l = j.at("launch");
-+    for (int d = 0; d < 3; ++d) {
-+        e.grid[d]  = l.at("grid").at(d).get<unsigned>();
-+        e.block[d] = l.at("block").at(d).get<unsigned>();
-+    }
-+    e.shmem = l.value("shared_bytes", 0u);
-+    e.pdl   = l.value("pdl", false) && !e.inplace;   // a state write never starts before the kernel ahead of it has ended
-+    e.tol   = j.value("tolerance", 0.0);
-+    for (const json & a : j.at("args")) {
-+        ext_arg arg = { -1, -1, 0 };
-+        if (a.contains("node")) {
-+            arg.node = a.at("node").get<int>();
-+            arg.src  = a.at("src").get<int>();
-+            if (arg.node < 0 || arg.node >= (int) e.ops.size() || arg.src < -1 || arg.src >= (int) e.ops[arg.node].src_types.size()) {
-+                throw std::runtime_error("argument names a tensor outside the window");
-+            }
-+            if (arg.src == 0 && ext_is_view(e.ops[arg.node].op) && e.ops[arg.node].src_node[0] < 0) {   // its offset is a run-time value
-+                throw std::runtime_error("argument names the tensor a view is of: pass the view (src -1)");
-+            }
-+        } else if (a.at("type") == "f32") {
-+            const float v = a.at("scalar").get<float>();
-+            memcpy(&arg.bits, &v, sizeof(v));
-+        } else {
-+            arg.bits = (uint64_t) a.at("scalar").get<int64_t>();
++    e.launches.reserve(multi ? j.at("launches").size() : 1);
++    for (const json & s : j.value("scratch", json::array())) {   // slots 0..n-1, each 256-byte aligned in one block
++        if (!multi || s.at("slot").get<size_t>() != e.scratch.size() || s.at("bytes").get<int64_t>() <= 0) {
++            throw std::runtime_error("scratch: slots 0..n-1 in order, bytes > 0, with launches only");
 +        }
-+        e.args.push_back(arg);
++        e.scratch.push_back(e.scratch.empty() ? 0 : e.scratch.back());
++        e.scratch.back() += (s.at("bytes").get<size_t>() + 255) / 256 * 256;
 +    }
++    e.scratch.insert(e.scratch.begin(), 0);   // e.scratch[s]: slot s's offset; back(): the block's bytes
++    std::vector<bool> named(e.scratch.size() - 1), written(e.ops.size());   // written: by an earlier launch
++    // a node's bytes are held: an outside tensor, written by an earlier launch, or a view of a held node
++    std::function<bool(int)> held = [&](int m) { return m < 0 || written[m] || (ext_is_view(e.ops[m].op) && held(e.ops[m].src_node[0])); };
++    auto node_ref = [&](const json & r, bool dim) {   // {"node": k, "src": s} or [node, src, dim]: a tensor of the window
++        ext_arg a = { r.is_array() ? r.at(0).get<int>() : r.at("node").get<int>(), r.is_array() ? r.at(1).get<int>() : r.at("src").get<int>(), 0 };
++        a.dim = dim ? r.at(2).get<int>() : -1;
++        if (a.node < 0 || a.node >= (int) e.ops.size() || a.src < -1 || a.src >= (int) e.ops[a.node].src_types.size() || (dim && (a.dim < 0 || a.dim >= GGML_MAX_DIMS))) {
++            throw std::runtime_error("argument names a tensor outside the window");
++        }
++        return a;
++    };
++    const ext_kvs * kvs = nullptr;   // the kv-stream step, once it has run: later args naming its K / V take its pointers
++    for (const json & q : multi ? j.at("launches") : json::array({j})) {
++        ext_launch L;
++        std::vector<int> writes;
++        if (multi && q.contains("kv_stream")) {   // K, V, mask (node, src); lists / counts (scratch slots, written before)
++            const json & kq = q.at("kv_stream");
++            L.is_kvs = true;
++            L.kvs    = { node_ref(kq.at("k"), false), node_ref(kq.at("v"), false), node_ref(kq.at("mask"), false), kq.at("lists").get<int>(),
++                         kq.at("counts").get<int>(), kq.at("n_lists").get<int64_t>(), kq.at("n_kv_max").get<int64_t>(), kq.value("ncols1", (int64_t) 1) };
++            const ext_kvs & K = L.kvs;
++            if (kvs != nullptr || K.k.src < 0 || K.v.src < 0 || K.mask.src < 0 || !held(e.ops[K.k.node].src_node[K.k.src]) ||
++                !held(e.ops[K.v.node].src_node[K.v.src]) || !held(e.ops[K.mask.node].src_node[K.mask.src]) || K.n_lists <= 0 || K.n_kv_max <= 0 || K.ncols1 <= 0 || K.lists < 0 || K.counts < 0 || K.lists == K.counts ||
++                K.lists >= (int) named.size() || K.counts >= (int) named.size() || e.scratch[K.lists + 1] - e.scratch[K.lists] < (size_t) (K.n_lists*K.n_kv_max*4) ||
++                e.scratch[K.counts + 1] - e.scratch[K.counts] < (size_t) (K.n_lists*4) || !named[K.lists] || !named[K.counts]) {
++                throw std::runtime_error("kv_stream: one step; k / v / mask inputs; lists and counts two slots an earlier launch names, of n_lists x n_kv_max / n_lists i32");
++            }
++            e.launches.push_back(L);
++            kvs = &e.launches.back().kvs;   // reserved below: no reallocation while launches are parsed
++            continue;
++        }
++        const json & k = q.at("kernel");
++        std::ifstream f(dir + k.at("file").get<std::string>(), std::ios::binary);
++        std::string   blob((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
++        if (!f || k.at("format") == "hsaco" || ext_sha256(blob) != k.at("sha256")) {
++            throw std::runtime_error("kernel file missing, wrong format or wrong sha256");
++        }
++        CUmodule mod;
++        ext_ok(cuModuleLoadData(&mod, blob.c_str()), "cuModuleLoadData");  // cubin or PTX, into the current (primary) context
++        ext_ok(cuModuleGetFunction(&L.fn, mod, k.at("symbol").get<std::string>().c_str()), "cuModuleGetFunction");
++        const json & l = q.at("launch");
++        for (int d = 0; d < 3; ++d) {
++            L.grid[d]  = l.at("grid").at(d).get<unsigned>();
++            L.block[d] = l.at("block").at(d).get<unsigned>();
++        }
++        L.shmem = l.value("shared_bytes", 0u);
++        L.pdl   = l.value("pdl", false) && !e.inplace;   // a state write never starts before the kernel ahead of it has ended
++        if (multi) {   // what would fail at launch fails here: no sequence stops half way on a launch error
++            int max_threads = 0;
++            ext_ok(cuFuncGetAttribute(&max_threads, CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, L.fn), "cuFuncGetAttribute");
++            int grid_max[3], smem_static = 0, smem_max = 0;
++            CUdevice dev;
++            ext_ok(cuCtxGetDevice(&dev), "cuCtxGetDevice");
++            for (int d = 0; d < 3; ++d) {
++                ext_ok(cuDeviceGetAttribute(&grid_max[d], (CUdevice_attribute) (CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X + d), dev), "cuDeviceGetAttribute");
++            }
++            ext_ok(cuDeviceGetAttribute(&smem_max, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev), "cuDeviceGetAttribute");
++            ext_ok(cuFuncGetAttribute(&smem_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, L.fn), "cuFuncGetAttribute");
++            bool ok = (int64_t) L.block[0] * L.block[1] * L.block[2] <= max_threads && (int64_t) smem_static + L.shmem <= smem_max;
++            for (int d = 0; d < 3; ++d) {
++                ok = ok && L.grid[d] >= 1 && L.block[d] >= 1 && L.grid[d] <= (unsigned) grid_max[d];
++            }
++            if (!ok) {
++                throw std::runtime_error("a launch's grid, block or shared memory is outside what its kernel and this device allow");
++            }
++            if (L.shmem > 48*1024) {
++                ext_ok(cuFuncSetAttribute(L.fn, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, (int) L.shmem), "cuFuncSetAttribute");
++            }
++        }
++        for (const json & a : q.at("args")) {
++            ext_arg arg = { -1, -1, 0 };
++            if (multi && a.contains("scratch") && !a.contains("node")) {
++                arg.scratch = a.at("scratch").get<int>();
++                if (arg.scratch < 0 || arg.scratch >= (int) named.size()) {
++                    throw std::runtime_error("argument names a scratch slot the entry does not declare");
++                }
++                named[arg.scratch] = true;
++            } else if (multi && a.contains("ne") && !a.contains("node")) {   // a run-time extent: metadata, no bytes read
++                arg = node_ref(a.at("ne"), true);
++            } else if (a.contains("node")) {
++                arg = node_ref(a, false);
++                const std::string & x = arg.src >= 0 ? e.ops[arg.node].src_ext[arg.src] : "";
++                if (kvs != nullptr && ((arg.node == kvs->mask.node && arg.src == kvs->mask.src) || (!x.empty() && x == e.ops[kvs->mask.node].src_ext[kvs->mask.src]))) {
++                    throw std::runtime_error("a launch after the kv_stream step reads its mask (its columns no longer match the rewritten lists)");
++                }
++                arg.kv = kvs != nullptr;   // K / V by address at run time: any route to them takes the step's pointers
++                if (arg.src == 0 && ext_is_view(e.ops[arg.node].op) && e.ops[arg.node].src_node[0] < 0) {   // its offset is a run-time value
++                    throw std::runtime_error("argument names the tensor a view is of: pass the view (src -1)");
++                }
++                const bool out = std::find(e.outputs.begin(), e.outputs.end(), arg.node) != e.outputs.end();
++                if (multi && arg.src == -1 && !out) {   // the allocator may alias interior tensors: a cut value goes to scratch
++                    throw std::runtime_error("a launch writes node " + std::to_string(arg.node) + ", not a listed output: pass a scratch slot");
++                }
++                const int m = arg.src >= 0 ? e.ops[arg.node].src_node[arg.src] : -1;   // a cast's src 1 is the node itself
++                if (multi && m != arg.node && !held(m)) {   // a cut value no earlier launch wrote
++                    throw std::runtime_error("a launch reads node " + std::to_string(m) + ", which no earlier launch wrote: pass a scratch slot");
++                }
++                if (arg.src == -1 && out) {
++                    writes.push_back(arg.node);
++                    L.state = L.state || !e.alias_ok.empty() || e.ops[arg.node].op == GGML_OP_SET_ROWS;
++                }
++            } else if (a.at("type") == "f32") {
++                const float v = a.at("scalar").get<float>();
++                memcpy(&arg.bits, &v, sizeof(v));
++            } else {
++                arg.bits = (uint64_t) a.at("scalar").get<int64_t>();
++            }
++            L.args.push_back(arg);
++        }
++        for (int m : writes) {   // a full view (RESHAPE / TRANSPOSE / PERMUTE) of a window node writes that node's bytes
++            for (; m >= 0 && !written[m]; m = ext_is_view(e.ops[m].op) && e.ops[m].op != GGML_OP_VIEW ? e.ops[m].src_node[0] : -1) {
++                written[m] = true;
++            }
++        }
++        e.launches.push_back(L);
++    }
++    for (size_t s = 0; s < named.size(); ++s) {
++        if (!named[s]) {
++            throw std::runtime_error("scratch slot " + std::to_string(s) + " is named by no launch");
++        }
++    }
++    for (int o : e.outputs) {   // a view's bytes are those of the node it views
++        if (multi && !held(o)) {
++            throw std::runtime_error("output " + std::to_string(o) + " is written by no launch");
++        }
++    }
++    for (size_t q = 1; q < e.launches.size(); ++q) {   // a launch after a state write waits for it: no early start
++        e.launches[q].state = e.launches[q].state || e.launches[q - 1].state;
++        e.launches[q].pdl   = e.launches[q].pdl && !e.launches[q - 1].state;
++    }
++    e.tol = j.value("tolerance", 0.0);
++    if (j.value("tolerance_mode", "abs") != "abs" && j.value("tolerance_mode", "abs") != "rel_max") {
++        throw std::runtime_error("tolerance_mode: abs or rel_max");
++    }
++    e.rel = j.value("tolerance_mode", "abs") == "rel_max";
 +    return e;
 +}
 +
@@ -475,10 +662,15 @@ index 000000000..32287d79f
 +    return entries;
 +}
 +
-+bool ext_same(const ggml_tensor * t, ggml_type type, const ext_ne & ne, const std::vector<size_t> & nb = {}) {
-+    return t != nullptr && t->type == type && memcmp(t->ne, ne.data(), sizeof(t->ne)) == 0 &&
-+           (nb.empty() ? ggml_is_contiguous(t) && (uintptr_t) t->data % 16 == 0   // strided: element loads only, the strides exact
-+                       : memcmp(t->nb, nb.data(), sizeof(t->nb)) == 0 && (uintptr_t) t->data % ggml_type_size(type) == 0);
++bool ext_same(const ggml_tensor * t, ggml_type type, const ext_ne & ne, const std::vector<int64_t> & nb = {}, const ext_ne & ne_max = {}) {
++    bool same = t != nullptr && t->type == type;
++    for (int d = 0; same && d < GGML_MAX_DIMS; ++d) {   // -1: an extent up to its bound / a dense stride (the kernel's ne args)
++        const bool dense = t->ne[d] == 1 || (int64_t) t->nb[d] == (d == 0 ? (int64_t) ggml_type_size(type) : (int64_t) (t->nb[d - 1] * t->ne[d - 1]));
++        same = (ne[d] == -1 ? t->ne[d] <= ne_max[d] : t->ne[d] == ne[d]) && (nb.empty() || (nb[d] == -1 ? dense : (int64_t) t->nb[d] == nb[d]));
++    }
++    // strided: the strides exact; a block-quantized view 16-byte aligned (vector row loads), else element-aligned
++    return same && (nb.empty() ? ggml_is_contiguous(t) && (uintptr_t) t->data % 16 == 0
++                               : (uintptr_t) t->data % (ggml_blck_size(type) > 1 ? 16 : ggml_type_size(type)) == 0);
 +}
 +
 +std::vector<uint8_t> ext_read(void * stream, const ggml_tensor * t) {
@@ -513,9 +705,10 @@ index 000000000..32287d79f
 +    for (int k = 0; k < n; ++k) {
 +        ggml_tensor * node = cgraph->nodes[i + k];
 +        const ext_op & op  = e.ops[k];
-+        if (node->op != op.op || !ext_same(node, op.type, op.ne, op.nb) || (op.unary >= 0 && (int) ggml_get_unary_op(node) != op.unary) ||
++        if (node->op != op.op || !ext_same(node, op.type, op.ne, op.nb, op.ne_max) || (op.unary >= 0 && (int) ggml_get_unary_op(node) != op.unary) ||
 +            (k > 0 && (node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) ||
-+            (!op.params.empty() && memcmp(node->op_params, op.params.data(), op.params.size() * sizeof(float)) != 0)) {
++            (!op.params.empty() && memcmp(node->op_params, op.params.data(), op.params.size() * sizeof(float)) != 0) ||
++            (!op.params_raw.empty() && memcmp(node->op_params, op.params_raw.data(), op.params_raw.size()) != 0)) {
 +            return {};
 +        }
 +        if (op.src_types.size() < GGML_MAX_SRC && node->src[op.src_types.size()] != nullptr) {
@@ -523,7 +716,7 @@ index 000000000..32287d79f
 +        }
 +        w[k] = node;
 +        for (size_t s = 0; s < op.src_types.size(); ++s) {
-+            if (op.src_node[s] >= 0 ? node->src[s] != w[op.src_node[s]] : !ext_same(node->src[s], op.src_types[s], op.src_ne[s], op.src_nb[s])) {
++            if (op.src_node[s] >= 0 ? node->src[s] != w[op.src_node[s]] : !ext_same(node->src[s], op.src_types[s], op.src_ne[s], op.src_nb[s], op.src_ne_max[s])) {
 +                return {};
 +            }
 +        }
@@ -642,13 +835,24 @@ index 000000000..32287d79f
 +        if (w.empty()) {
 +            continue;
 +        }
-+        std::vector<uint64_t> values;
-+        std::vector<void *>   params;
-+        for (const ext_arg & a : e.args) {
-+            values.push_back(a.node < 0 ? a.bits : (uint64_t) (uintptr_t) (a.src == -1 ? w[a.node] : w[a.node]->src[a.src])->data);
-+        }
-+        for (uint64_t & v : values) {
-+            params.push_back(&v);
++        static std::mutex mu;   // contexts may run on several threads
++        ext_mem *         mem     = nullptr;   // this stream's scratch: once per engine stream (context), never freed (graphs keep it)
++        CUdeviceptr       scratch = 0;
++        if (e.scratch.back() > 0) {
++            std::lock_guard<std::mutex> lock(mu);
++            auto sm = std::find_if(e.scratch_mem.begin(), e.scratch_mem.end(), [&](const ext_mem & m) { return m.stream == stream; });
++            if (sm == e.scratch_mem.end()) {
++                if (const CUresult r = cuMemAlloc(&scratch, e.scratch.back()); r != CUDA_SUCCESS) {
++                    scratch = 0;   // remembered: no retry, said once
++                    GGML_LOG_WARN("%s: %s scratch of %zu bytes failed (%d), the engine's own kernels run\n", __func__, e.id.c_str(), e.scratch.back(), (int) r);
++                }
++                e.scratch_mem.push_back(ext_mem{ stream, scratch });
++                sm = e.scratch_mem.end() - 1;
++            }
++            if ((scratch = sm->base) == 0) {
++                return 0;
++            }
++            mem = &*sm;
 +        }
 +        CUstreamCaptureStatus capture = CU_STREAM_CAPTURE_STATUS_NONE;
 +        const bool do_check = check && cuStreamIsCapturing((CUstream) stream, &capture) == CUDA_SUCCESS &&
@@ -671,20 +875,78 @@ index 000000000..32287d79f
 +        CUlaunchAttribute attr;
 +        attr.id                                         = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
 +        attr.value.programmaticStreamSerializationAllowed = 1;
-+        CUlaunchConfig cfg = {};
-+        cfg.gridDimX       = e.grid[0];
-+        cfg.gridDimY       = e.grid[1];
-+        cfg.gridDimZ       = e.grid[2];
-+        cfg.blockDimX      = e.block[0];
-+        cfg.blockDimY      = e.block[1];
-+        cfg.blockDimZ      = e.block[2];
-+        cfg.sharedMemBytes = e.shmem;
-+        cfg.hStream        = (CUstream) stream;
-+        cfg.attrs          = &attr;
-+        cfg.numAttrs       = e.pdl && pdl_on ? 1 : 0;
-+        if (const CUresult r = cuLaunchKernelEx(&cfg, e.fn, params.data(), nullptr); r != CUDA_SUCCESS) {
-+            GGML_LOG_WARN("%s: %s launch failed (%d), the engine's own kernel runs\n", __func__, e.id.c_str(), (int) r);
++        auto tensor = [&](const ext_arg & a) { return a.src == -1 ? w[a.node] : w[a.node]->src[a.src]; };
++        const char * fn = __func__;
++        auto failed = [&](size_t q, const char * what, int r) {   // stock recomputes every node, unless outside state is written
++            if (q > 0 && e.launches[q - 1].state) {
++                GGML_ABORT("%s: %s launch %zu: %s failed (%d) after a launch wrote outside state", fn, e.id.c_str(), q, what, r);
++            }
++            GGML_LOG_WARN("%s: %s %s failed (%d), the engine's own kernel runs\n", fn, e.id.c_str(), what, r);
 +            return 0;
++        };
++        const char * kv_ptr[3] = {}, * kv_at[3] = {};   // the kv-stream step's K / V (index 1 / 2): resolved, and the nodes' addresses
++        for (size_t q = 0; q < e.launches.size(); ++q) {
++            const ext_launch &    L = e.launches[q];
++            if (L.is_kvs) {   // as the engine's sparse attention: resolve the listed pages into VRAM, rows rewritten in place
++                const ext_kvs &     K = L.kvs;
++                const ggml_tensor * k = tensor(K.k), * v = tensor(K.v), * m = tensor(K.mask);
++                kv_ptr[1] = kv_at[1] = (const char *) k->data;
++                kv_ptr[2] = kv_at[2] = (const char *) v->data;
++#ifdef EXT_KVS
++                if (ggml_cuda_kvs_attn == nullptr || ggml_cuda_kvs_resolve_cells == nullptr) {
++                    continue;   // no kv module in this build: no streamed cache
++                }
++                ggml_cuda_kvs_mask kvm;
++                const int64_t      cells = ggml_cuda_kvs_resolve_cells(k, k->ne[1], K.n_lists, K.n_kv_max, m->ne[1]);
++                if (cells > 0) {   // the mask scattered to slot rows, as fattn does (cells: the lists before the rewrite)
++                    const size_t need = (size_t) (K.n_lists*K.n_kv_max*4 + 255) / 256 * 256 + (size_t) (m->ne[1]*cells*2);
++                    std::lock_guard<std::mutex> lock(mu);   // sized once: the pool's cell count is fixed for the server's life
++                    if (mem->kvs_bytes == 0 && cuMemAlloc(&mem->kvs, need) != CUDA_SUCCESS) {
++                        mem->kvs_bytes = SIZE_MAX;
++                        GGML_LOG_WARN("%s: %s kv-stream buffer of %zu bytes failed, the engine's own kernels run\n", fn, e.id.c_str(), need);
++                    }
++                    mem->kvs_bytes = mem->kvs_bytes == 0 ? need : mem->kvs_bytes;
++                    if (mem->kvs_bytes == SIZE_MAX || mem->kvs_bytes < need) {
++                        return failed(q, "kv-stream buffer", (int) (need / 1024));
++                    }
++                    kvm.data    = m->data;
++                    kvm.stride  = m->nb[1] / 2;
++                    kvm.ne01    = m->ne[1];
++                    kvm.ncols1  = (int) K.ncols1;
++                    kvm.cells   = (int32_t *) mem->kvs;
++                    kvm.scratch = (void *) (mem->kvs + (K.n_lists*K.n_kv_max*4 + 255) / 256 * 256);
++                }
++                ggml_cuda_kvs_attn((CUstream) stream, k, v, k->ne[1], true, (int32_t *) (scratch + e.scratch[K.lists]),
++                                   (const int32_t *) (scratch + e.scratch[K.counts]), K.n_lists, K.n_kv_max, &kvm, &kv_ptr[1], &kv_ptr[2]);
++#endif
++                continue;
++            }
++            std::vector<uint64_t> values;
++            std::vector<void *>   params;
++            for (const ext_arg & a : L.args) {
++                values.push_back(a.scratch >= 0 ? (uint64_t) scratch + e.scratch[a.scratch] : a.node < 0 ? a.bits
++                                 : a.dim >= 0 ? (uint64_t) (uint32_t) (int32_t) tensor(a)->ne[a.dim]
++                                 : a.kv && tensor(a)->data == kv_at[1] ? (uint64_t) (uintptr_t) kv_ptr[1]
++                                 : a.kv && tensor(a)->data == kv_at[2] ? (uint64_t) (uintptr_t) kv_ptr[2]
++                                                                       : (uint64_t) (uintptr_t) tensor(a)->data);
++            }
++            for (uint64_t & v : values) {
++                params.push_back(&v);
++            }
++            CUlaunchConfig cfg = {};
++            cfg.gridDimX       = L.grid[0];
++            cfg.gridDimY       = L.grid[1];
++            cfg.gridDimZ       = L.grid[2];
++            cfg.blockDimX      = L.block[0];
++            cfg.blockDimY      = L.block[1];
++            cfg.blockDimZ      = L.block[2];
++            cfg.sharedMemBytes = L.shmem;
++            cfg.hStream        = (CUstream) stream;
++            cfg.attrs          = &attr;
++            cfg.numAttrs       = L.pdl && pdl_on ? 1 : 0;
++            if (const CUresult r = cuLaunchKernelEx(&cfg, L.fn, params.data(), nullptr); r != CUDA_SUCCESS) {
++                return failed(q, "launch", (int) r);
++            }
 +        }
 +        if (e.n_match++ == 0) {
 +            GGML_LOG_WARN("%s: %s first match at node %d (%s), %zu nodes\n", __func__, e.id.c_str(), i, w[0]->name, w.size());
@@ -707,20 +969,23 @@ index 000000000..32287d79f
 +            for (size_t q = 0; q < e.outputs.size(); ++q) {
 +                const ggml_tensor *        t   = w[e.outputs[q]];
 +                const std::vector<uint8_t> ref = ext_read(stream, t);  // the engine's result stays in the node
++                double                     out = 0, scale = 0;         // rel_max: |ext - stock| over max|stock| of the output
 +                for (size_t b = 0; b < ref.size(); b += 4) {
-+                    if (memcmp(&ext[q][b], &ref[b], 4) != 0) {  // bitwise first: a NaN or a signed zero counts
-+                        float x, y;
-+                        memcpy(&x, &ext[q][b], 4);
-+                        memcpy(&y, &ref[b], 4);
++                    float x, y;
++                    memcpy(&x, &ext[q][b], 4);
++                    memcpy(&y, &ref[b], 4);
++                    scale = e.rel && t->type == GGML_TYPE_F32 && std::isfinite(y) ? std::max(scale, (double) fabsf(y)) : scale;
++                    if (memcmp(&ext[q][b], &ref[b], 4) != 0 && !(e.rel && x == 0 && y == 0)) {  // bitwise first: a NaN or a signed zero counts (abs)
 +                        const double d = t->type == GGML_TYPE_F32 ? fabs((double) x - y) : INFINITY;
-+                        worst          = d > 0 ? std::max(worst, d) : INFINITY;
++                        out            = d > 0 ? std::max(out, d) : INFINITY;
 +                    }
 +                }
++                worst = std::max(worst, e.rel && out > 0 ? (scale > 0 ? out / scale : INFINITY) : out);
 +            }
 +            e.worst = std::max(e.worst, worst);
 +            if (worst > e.tol) {
 +                e.n_diff++;
-+                GGML_LOG_WARN("GGML_CUDA_EXT_KERNELS_CHECK differs: %s worst |ext - stock| %g > %g\n", e.id.c_str(), worst, e.tol);
++                GGML_LOG_WARN("GGML_CUDA_EXT_KERNELS_CHECK differs: %s worst |ext - stock|%s %g > %g\n", e.id.c_str(), e.rel ? " / max|stock|" : "", worst, e.tol);
 +            }
 +            if (e.n_check++ % 256 == 0) {
 +                GGML_LOG_WARN("GGML_CUDA_EXT_KERNELS_CHECK %s: %s checks %llu, differ %llu, worst %g\n", e.n_diff ? "DIFF" : "ok",

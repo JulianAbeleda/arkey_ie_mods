@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-graph-rebase: exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host; the HIP port edits in kv and kernels (HIP names for cudaMemcpyDefault and the stream-capture calls, portable warp-mask helpers, a whole warp per K row for fattn-vec-skip on HIP, ext-kernels stubbed on HIP); graph-cpy-kernel in kernels (cpy.cu, off by default); rbudget-backend in host (common/sampling.cpp, reasoning-budget.{h,cpp}, off by default)",
+    "why": "modules-hook-r5: the 6 modules on the base (master 617b227's) with the kernels module's launch sequences (R5)",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -2399,13 +2399,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "163ae94e2f0f3de757f167375ac538bae76374b7a4fd4a71bd1b11fceb205bbd",
    "lines": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "budget": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "files": [
@@ -2448,13 +2448,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "163ae94e2f0f3de757f167375ac538bae76374b7a4fd4a71bd1b11fceb205bbd",
    "lines": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "budget": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "files": [
@@ -2506,13 +2506,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "163ae94e2f0f3de757f167375ac538bae76374b7a4fd4a71bd1b11fceb205bbd",
    "lines": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "budget": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "files": [
@@ -2562,13 +2562,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "163ae94e2f0f3de757f167375ac538bae76374b7a4fd4a71bd1b11fceb205bbd",
    "lines": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "budget": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "files": [
@@ -2614,13 +2614,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "163ae94e2f0f3de757f167375ac538bae76374b7a4fd4a71bd1b11fceb205bbd",
    "lines": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "budget": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "files": [

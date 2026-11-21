@@ -172,11 +172,11 @@
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "lines": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "budget": {
-    "added": 741,
+    "added": 1006,
     "removed": 10
    },
    "static": {
@@ -253,6 +253,18 @@
       "removed": 10
      },
      "why": "kernels/graph-cpy-kernel (+18 -1 lines in cpy.cu): while the stream captures a CUDA graph, a same-type strided F32/F16/BF16/I32 copy takes the stock scalar copy kernel instead of cudaMemcpy2DAsync (a 2-D memcpy node cannot take new operands in cudaGraphExecUpdate), behind GGML_CUDA_GRAPH_CPY_KERNEL; the removed line is the 2-D branch's condition, rewritten to add the switch test (boltbeam-runs/graph-fix-20261121). The budget is the measured lines (owner rule: raise by the measured remainder after review)",
+     "date": "2026-11-21"
+    },
+    {
+     "from": {
+      "added": 741,
+      "removed": 10
+     },
+     "to": {
+      "added": 1006,
+      "removed": 10
+     },
+     "why": "ext-kernels-window launch sequences (hook R5, +265 lines in ext-kernels.cpp): a kernel-list entry may be a sequence of launches with scratch slots (all loaded before any runs; a cut value that is a live output goes to the node's tensor, others to scratch; read-after-write held rules; PDL off after an outside-state write; relative check tolerance), run-time extent args, bounded -1 wildcards, op_params bytes and a kv-stream step (the engine's own ggml_cuda_kvs_attn through weak references) for the generated sparse attention: 0.51x the stock op's busy time in the engine (39.0 vs 77.1 us, nsys, boltbeam-runs/gen-attention-gpu-20261121 F6, screen); single-launch entries identical (boltbeam-runs/hook-r5-20261121). The budget is the measured lines (owner rule: raise by the measured remainder after review)",
      "date": "2026-11-21"
     }
    ]
@@ -1006,7 +1018,7 @@
     "label": "identical",
     "evidence": {
      "run": "boltbeam-runs/guardrails-20261118 (ab-xcheck)",
-     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm)): check mode (09's GGML_CUDA_EXT_KERNELS_CHECK, extended to every live output of a window; graphs off, turns 40-41, tolerance 0): shared gate 6,145 checks, inject region 12,545, down tail 12,801, shipped one-op entries 12,545, 0 differences, worst 0; with kernels/region-chain-k2560-k10240 on vs the shipped one-op manifest: reply sha256 identical 59/59 in all 6 runs of the 3-pair confirm; region_gdn_gate through the reshape / shared-input rules (boltbeam-runs/gdn-gate-live-20261119): check mode 156,929 checks, 0 differ, worst 0; R1-R3 and the one-op entries checked in the same run, 0 differ; replies 30/30 equal in the shipped-manifest, gate and check arms; the gdn-gate-live build held the modules before host/ple-prefetch-step, indexer/idx-keys, indexer/topk-rowhist and indexer/kpool-mask-range (their switches unset in both arms): region_gdn_gate is not yet run together with those four; region_state_copy_front through the strided-view / state-write rules: identity on this commit's tree (storage-tmp/sc-mod/tree, built; boltbeam-runs/sc-mod-20261120 ident128: 128k context, turns 1-30 of the 256k session, recorded history, the shipped 256k switch set + GGML_CUDA_CONCAT_ROWS=1): reply sha256 30/30 equal in arms S (shipped kernels dir), N (region-state-copy-k10240) and C (N + GGML_CUDA_EXT_KERNELS_CHECK, graphs off); check mode region_state_copy_front 156,673 checks, 0 differ, worst 0 (region_gdn_gate 156,673: 36.00 a step); every other entry 0 differ; 7 entries loaded, none dropped",
+     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm)): check mode (09's GGML_CUDA_EXT_KERNELS_CHECK, extended to every live output of a window; graphs off, turns 40-41, tolerance 0): shared gate 6,145 checks, inject region 12,545, down tail 12,801, shipped one-op entries 12,545, 0 differences, worst 0; with kernels/region-chain-k2560-k10240 on vs the shipped one-op manifest: reply sha256 identical 59/59 in all 6 runs of the 3-pair confirm; region_gdn_gate through the reshape / shared-input rules (boltbeam-runs/gdn-gate-live-20261119): check mode 156,929 checks, 0 differ, worst 0; R1-R3 and the one-op entries checked in the same run, 0 differ; replies 30/30 equal in the shipped-manifest, gate and check arms; the gdn-gate-live build held the modules before host/ple-prefetch-step, indexer/idx-keys, indexer/topk-rowhist and indexer/kpool-mask-range (their switches unset in both arms): region_gdn_gate is not yet run together with those four; region_state_copy_front through the strided-view / state-write rules: identity on this commit's tree (storage-tmp/sc-mod/tree, built; boltbeam-runs/sc-mod-20261120 ident128: 128k context, turns 1-30 of the 256k session, recorded history, the shipped 256k switch set + GGML_CUDA_CONCAT_ROWS=1): reply sha256 30/30 equal in arms S (shipped kernels dir), N (region-state-copy-k10240) and C (N + GGML_CUDA_EXT_KERNELS_CHECK, graphs off); check mode region_state_copy_front 156,673 checks, 0 differ, worst 0 (region_gdn_gate 156,673: 36.00 a step); every other entry 0 differ; 7 entries loaded, none dropped; launch sequences (hook R5, boltbeam-runs/hook-r5-20261121, this commit's tree storage-tmp/hook-r5/tree): 128k, turns 1-30 of the 256k session, recorded history, the 0.3.32 release command: reply sha256 30/30 against the f35a44d build in the shipped-dir arm, its check-mode arm (every shipped entry 0 differ, worst 0: region_down_tail 431,105 checks, ark_down_c4u1 422,401, region_inject_tail 418,049, region_shexp_gate 208,897, region_gdn_gate 156,673) and a 3-launch entry of two generated kernels with a scratch slot (check mode 2,049+ windows, 0 differ, worst 0; 30/30 graphs on and in check mode); 12 malformed entries each dropped with its reason; on this commit's tree (617b227's modules + R5, ident617): reply sha256 30/30 against the 617b227 build in the R5 shipped-dir arm, its check-mode arm (the same counts, 0 differ, worst 0) and the 3-launch arm (2,049+ windows, 0 differ)",
      "match": {
       "what": "reply sha256 per turn, check mode on vs the unchecked arm, same build and manifest (ab-xcheck, turns 1-4)",
       "equal": 4,
@@ -1014,13 +1026,18 @@
      }
     }
    },
-   "exercised_by": "a kernel_manifest.v2 entry whose match.ops lists N consecutive graph nodes with their wiring; measured with three windows (gemv + sigmoid + mul + add; gemv + scale + sigmoid + scale; scale + silu) and one nine-node window with three reshapes and one activation read by two gemvs (region_gdn_gate); one eight-node state window with a strided concat source, an i32 index chain and an in-place SET_ROWS into the recurrent state cache (region_state_copy_front, opt-in dir)",
+   "exercised_by": "a kernel_manifest.v2 entry whose match.ops lists N consecutive graph nodes with their wiring; measured with three windows (gemv + sigmoid + mul + add; gemv + scale + sigmoid + scale; scale + silu) and one nine-node window with three reshapes and one activation read by two gemvs (region_gdn_gate); one eight-node state window with a strided concat source, an i32 index chain and an in-place SET_ROWS into the recurrent state cache (region_state_copy_front, opt-in dir); a launches entry: 3 launches (a copy fixture, two generated region_chain kernels of a 10-node window) with one scratch slot and an alias_ok output; the generated sparse attention (4 launches + a kv-stream step, rel_max 1e-3) at 256k with K/V streamed",
    "limits": [
     "a window is N consecutive compute nodes; a node that is not contiguous matches only on its exact strides (nb / src_nb in the entry); an interior node may be a view (RESHAPE / VIEW / TRANSPOSE / PERMUTE) of an earlier window node at the entry's view_offs, or of the outside tensor that is its src 0, and its bytes must lie inside the tensor it views; interior nodes must be read only inside the window; outside inputs the entry gives one ext name must be one tensor; a live output may share memory with an input only exactly and only where the entry allows it (alias_ok, never a view's src), else the engine's own nodes run",
     "a GGML_OP_SCALE op matches only on its op_params (factor, bias); a SCALE entry without them is refused at load",
     "a GGML_OP_SET_ROWS writes in place: it must be a listed output, its row indices fixed by the window (ARANGE, SCALE, CPY, VIEW chains) and its destination a one-use window view of an outside tensor; such an entry never starts early (no PDL); ARANGE and CONCAT, like SCALE, match only on their op_params",
     "one launch per entry; region entries must come before one-op entries in the manifest (first match wins)",
-    "GGML_CUDA_EXT_KERNELS_DUMP=<file> appends each graph shape the hook sees (JSON lines) for the region finder; off when unset"
+    "GGML_CUDA_EXT_KERNELS_DUMP=<file> appends each graph shape the hook sees (JSON lines) for the region finder; off when unset",
+    "launches entries (boltbeam-runs/hook-r5-20261121/FORMAT.md): every launch loads before any runs; a cut value is a live output's tensor or a scratch slot; a launch reads only what an earlier one wrote; PDL off after an outside-state write; a failure after an outside-state write aborts (no stock fallback on damaged inputs)",
+    "scratch: cuMemAlloc once per (entry, engine stream), never freed, outside the engine's VRAM plan",
+    "-1 wildcards only in launches entries, ne bounded by ne_max / src_ne_max, nb -1 = dense; block-quantized strided views need 16-byte alignment",
+    "kv-stream step: calls the kv module's ggml_cuda_kvs_attn through weak references with a redeclared ggml_cuda_kvs_mask (same layout, static_assert); a no-op without the kv module or with LLAMA_KV_STREAM unset",
+    "generated attention entries are not bit-equal (their own rel_max tolerance): at 256k, K/V streamed, check mode: attention v3 (v10ls21) 1 of 3,841 windows over rel 1e-3 (worst 1.09e-3; K/V in VRAM 2, 1.08e-3), v5 287 (worst 4.9e-3; the same with K/V in VRAM: the tile's own envelope, not the kv step)"
    ],
    "rule_exceptions": [
     {
@@ -2022,10 +2039,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-graph-rebase",
-   "path": "storage-tmp/graph-rebase/tree",
-   "what": "base + the 6 module patches at this commit (git archive of the base + git apply in order): storage-tmp/graph-fix/tree-module (graph-cpy-kernel on b8ac2b1) with f35a44d's host module (diff -rq: common/reasoning-budget.{h,cpp}, common/sampling.cpp only), equally storage-tmp/graph-rebase/ref (base + the module patches at f35a44d) with the kernels module's cpy.cu change (diff -rq: cpy.cu only). Each module patch applied alone on the base and re-diffed (git diff --cached --abbrev=9) gives the committed kernels and host patches byte for byte. Built (llama-server, CUDA sm_120, Release; llama-server 048b9377, libggml-cuda 8bfda702, libllama e4f87be3) and run on the GPU: boltbeam-runs/graph-rebase-20261121 (ident128: the 0.3.32 release command at 128k with --reasoning-budget 32768 and -bs, turns 1-30, the f35a44d build (storage-tmp/graph-rebase/ref) vs this build with GGML_CUDA_GRAPH_CPY_KERNEL=1 LLAMA_RBUDGET_BACKEND=1: reply sha256 30/30). Before it: modules-graph-fix (storage-tmp/graph-fix/tree-module, 429c415: ident128 30/30 with every kv and kernels check mode) and modules-eng-night (storage-tmp/eng-night/tree at f35a44d: ab-rb-256k 57/57 x 6, force-b64 8/8)",
-   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host; the HIP port edits in kv and kernels (HIP names for cudaMemcpyDefault and the stream-capture calls, portable warp-mask helpers, a whole warp per K row for fattn-vec-skip on HIP, ext-kernels stubbed on HIP); graph-cpy-kernel in kernels (cpy.cu, off by default); rbudget-backend in host (common/sampling.cpp, reasoning-budget.{h,cpp}, off by default)",
+   "id": "modules-hook-r5",
+   "path": "storage-tmp/hook-r5/tree",
+   "what": "base + the 6 module patches at this commit (graph-rebase/tree = 617b227's modules, ext-kernels.cpp replaced; the GPU runs of boltbeam-runs/hook-r5-20261121 ab128f / ab256g3 / ab256ns / time256 used this tree with f35a44d's cpy.cu, the only other difference: graph-cpy-kernel, off by default). Built (llama-server, CUDA sm_120, Release, storage-tmp/hook-r5/build.sh + job_*.sh) and run on the GPU: boltbeam-runs/hook-r5-20261121 (ident617)",
+   "contains": "the 6 modules on the base (master 617b227's) with the kernels module's launch sequences (R5)",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

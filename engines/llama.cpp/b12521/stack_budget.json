@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5080,
+   "cap": 5345,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -128,6 +128,14 @@
      "to": 5080,
      "measured": 5080,
      "why": "kernels/graph-cpy-kernel (+18 -1 lines in cpy.cu, off by default; rebased onto host/rbudget-backend's cap 5061, first raised 5022 -> 5041 on b8ac2b1: the same +19 lines): a strided same-type copy captured into a CUDA graph becomes the stock scalar copy kernel, so cudaGraphExecUpdate succeeds where a 2-D memcpy node made it fail; measured at 256k (3-pair, turns 60-116): failed updates 0.280 -> 0.012 a decode step, warm decode +0.3 tok/s [-2.8, +3.5] (not resolved), prefill +2 ms [-17, +20], session wall -0.3 s [-2.3, +1.8]; replies 57/57 x 6 and 30/30 at 128k with every check mode (boltbeam-runs/graph-fix-20261121); owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-21",
+     "approved": "Owner-approved 2026-11-21"
+    },
+    {
+     "from": 5080,
+     "to": 5345,
+     "measured": 5345,
+     "why": "kernels/ext-kernels-window launch sequences (hook R5, +265 lines in ext-kernels.cpp): launch sequences + scratch, run-time extents, bounded wildcards, op_params bytes and a kv-stream step, needed by the generated sparse attention (0.51x the stock op's busy time in the engine, 39.0 vs 77.1 us, boltbeam-runs/gen-attention-gpu-20261121 F6, screen) and by multi-reduction regions; single-launch entries identical (boltbeam-runs/hook-r5-20261121); owner standing rule: raise by the measured remainder after review (the owner rule, not a separate sign-off: confirm)",
      "date": "2026-11-21",
      "approved": "Owner-approved 2026-11-21"
     }
