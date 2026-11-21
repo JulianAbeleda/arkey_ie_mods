@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5136,
+   "cap": 5137,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -138,6 +138,14 @@
      "why": "the ext-kernels hook loads kernels on HIP through ggml's vendor headers (+56: vendors/vendor.h, the HIP driver names, each vendor's chip name, formats and PDL attribute, ggml-hip building the hook)",
      "date": "2026-11-20",
      "approved": "Owner-approved 2026-11-20"
+    },
+    {
+     "from": 5136,
+     "to": 5137,
+     "measured": 5137,
+     "why": "the HIP build compiles the hook's sha256.c as C (+1: target_sources outside GGML_SOURCES_ROCM, which ggml-hip compiles as HIP; llama-bench failed to link)",
+     "date": "2026-11-21",
+     "approved": "Owner-approved 2026-11-21"
     }
    ]
   },
