@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5008,
+   "cap": 5022,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -104,6 +104,14 @@
      "to": 5008,
      "measured": 5008,
      "why": "kernels/region-state-copy-k10240, OFF by default: decode +1.8 tok/s [+0.3, +3.2] at 256k (quiet 3-pair confirm, turns 60-116, page cache evicted before every arm; session wall -0.5 s [-3.4, +2.4], not resolved in 3 pairs; realized 0.112 ms a step = 1.21x the blind prediction; boltbeam-runs/decode-shape-regions-20261120); identity on this tree 30/30 in 3 arms, check 156,673 checks 0 differ (boltbeam-runs/sc-mod-20261120); +61 lines in ext-kernels.cpp: strided views, an in-place SET_ROWS state write and the check mode's stream-ordered state restore; owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-20",
+     "approved": "Owner-approved 2026-11-20"
+    },
+    {
+     "from": 5008,
+     "to": 5022,
+     "measured": 5022,
+     "why": "HIP port (gfx1201) folded into kv and kernels: +14 lines (HIP names for three CUDA calls, portable warp-mask helpers, fattn-vec-skip's warp per K row on HIP, ext-kernels stubbed on HIP); four mods checked on the R9700 (ckpt-pinned, idx-inplace, idx-pooled, tokenize-incr: BoltBeam docs/amd-box-fixes-20261120-amd-results.md); merged onto master 3e8d1e9 (region-state-copy) on the NV box: the AMD box's raise 4947 -> 4961 re-based onto that commit's cap 5008, the same +14 lines",
      "date": "2026-11-20",
      "approved": "Owner-approved 2026-11-20"
     }

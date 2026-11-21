@@ -25,21 +25,22 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
     "src/llama-kv-stream.h"
    ],
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "static": {
-    "hunks_removing_stock_lines": 18
+    "hunks_removing_stock_lines": 19
    },
    "budget_raised": [
     {
@@ -88,6 +89,18 @@
       "removed": 26
      },
      "why": "kv-stream's control block starts on a 16-byte boundary for every N (+4 lines in kv-stream.cu, lines 1339 -> 1343 inside the unchanged budget 1380): with N not a multiple of 8 its 64-bit counters were misaligned and the first paged call ended the server with a GPU exception; a crash fix (boltbeam-runs/kvs-align-20261120)",
+     "date": "2026-11-20"
+    },
+    {
+     "from": {
+      "added": 1380,
+      "removed": 26
+     },
+     "to": {
+      "added": 1380,
+      "removed": 28
+     },
+     "why": "HIP port (gfx1201): fattn-vec-skip gives a whole warp to each K row on HIP too (the skip decision is per row; RDNA used 2 threads, other HIP 4), a rewrite of the two stock nthreads_KQ_q lines; raw 32-bit shfl/any masks become ggml_cuda_shfl_*/ggml_cuda_any (HIP needs 64-bit masks); cudaMemcpyDefault gets its HIP name. Removed lines are measured (+2), added stays within budget",
      "date": "2026-11-20"
     }
    ]
@@ -154,14 +167,15 @@
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "lines": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "budget": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "static": {
@@ -214,6 +228,18 @@
       "removed": 9
      },
      "why": "kernels/region-state-copy-k10240 (+61 lines in ext-kernels.cpp): the window hook matches strided views (nb / src_nb; TRANSPOSE and PERMUTE views; an interior view at the entry's offset or of an outside tensor), ARANGE and CONCAT op_params, a CPY cast's own src, and an in-place SET_ROWS (no early start); check mode saves and restores the state a SET_ROWS writes, on the engine's stream (the restore raced the stock replay on the legacy stream); decode +1.8 tok/s [+0.3, +3.2] at 256k with the opt-in dir, session wall not resolved in 3 pairs (boltbeam-runs/decode-shape-regions-20261120); the budget is the measured lines, not budget_rule ceil_105_10 (owner rule: raise by the measured remainder after review, Owner-approved 2026-11-20)",
+     "date": "2026-11-20"
+    },
+    {
+     "from": {
+      "added": 714,
+      "removed": 9
+     },
+     "to": {
+      "added": 723,
+      "removed": 9
+     },
+     "why": "HIP port (gfx1201, from the AMD box's hip-port-wip ff50a56): +9 lines: HIP names for cudaStreamIsCapturing and cudaStreamCaptureStatus(None) (concat-rows checks capture), and ext-kernels stubbed on HIP (the hook loads CUDA cubins through the driver API; no hipModule loader yet: every node takes the stock path). The budget is the measured lines (owner rule: raise by the measured remainder after review, Owner-approved 2026-11-20); CUDA SASS of every kernel in the touched files identical to the build before (boltbeam-runs/hip-merge-20261120)",
      "date": "2026-11-20"
     }
    ]
@@ -423,7 +449,8 @@
    "limits": [
     "one-query calls only (the vector kernel, q8_0 K/V, with a sparse mask): the draft passes",
     "apply order needs patch 02 (shares its env helper and check block); the two switches are independent at run time",
-    "an accumulator that is exactly -0 would stay -0 where stock gives +0 (equal as values; never observed)"
+    "an accumulator that is exactly -0 would stay -0 where stock gives +0 (equal as values; never observed)",
+    "CUDA only for identity: on HIP (gfx1201, R9700, the AMD box) it builds but its output is not identical to stock (a whole warp per K row reorders the sums); identity is measured on CUDA sm_120 only"
    ],
    "rule_exceptions": []
   },
@@ -1864,10 +1891,10 @@
  ],
  "tested_trees": [
   {
-   "id": "modules-sc-mod",
-   "path": "storage-tmp/sc-mod/tree",
-   "what": "base + the 6 module patches at this commit (git apply on a clone of the base). It is storage-tmp/kvs-align/tree (the tree before it) with ggml/src/ggml-cuda/ext-kernels.cpp changed by the strided-view / state-write hook rules and the check-mode stream order (no other file differs). Built (llama-server, CUDA, Release) and run on the GPU: boltbeam-runs/sc-mod-20261120 (128k identity, arms S / N / C)",
-   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host",
+   "id": "modules-hip-merge",
+   "path": "storage-tmp/hip-merge/tree",
+   "what": "base + the 6 module patches at this commit (git apply on an archive of the base). It is storage-tmp/sc-mod/tree (the tree before it, master 3e8d1e9) with the AMD box's HIP port folded into kv and kernels (fattn-vec.cuh, fattn.cu, kv-stream.cu, ggml-cuda.cu, vendors/hip.h; no other file differs): every CUDA-visible edit is a stock helper call (ggml_cuda_shfl_up / ggml_cuda_shfl_xor / ggml_cuda_any, full mask, width 32) or inside #if GGML_USE_HIP. Built (llama-server, CUDA sm_120, Release) and compared to the sc-mod build: 324 objects, 0 CPU-mnemonic differences, 150 CUDA objects, 0 SASS differences (path-hash names masked). Run on the GPU: boltbeam-runs/hip-merge-20261120 (128k identity turns 1-30, -np 1: the 3e8d1e9 build vs this build vs this build with every kv and kernels check mode, 30/30)",
+   "contains": "exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host; the HIP port edits in kv and kernels (HIP names for cudaMemcpyDefault and the stream-capture calls, portable warp-mask helpers, a whole warp per K row for fattn-vec-skip on HIP, ext-kernels stubbed on HIP)",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

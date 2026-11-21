@@ -98,7 +98,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "modules-sc-mod: exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host",
+    "why": "modules-hip-merge: exactly the 6 modules on the base: kv-stream with its capability and shape gate and the aligned control block, sparse-split and sparse-direct's shape log in kv, idx-keys, topk-rowhist and kpool-mask-range in indexer, graph-cap, the region_gdn_gate hook rules, the strided-view / state-write rules and concat-rows in kernels, the pending-row reset of mtp-share-head in state, ple-prefetch-step in host; the HIP port edits in kv and kernels (HIP names for cudaMemcpyDefault and the stream-capture calls, portable warp-mask helpers, a whole warp per K row for fattn-vec-skip on HIP, ext-kernels stubbed on HIP)",
     "entries": [
      {
       "id": "guardrails-b12521",
@@ -1755,14 +1755,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "e6956ea9fab73d816d078b10bbdabfd8666d9402d1c52d9229357748ce935500",
+   "sha256": "8b3bc340e90ad9f2c31b2058eec9ec64552edc46113ed8ed80433d5e456f67f9",
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1773,6 +1773,7 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -1815,14 +1816,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "e6956ea9fab73d816d078b10bbdabfd8666d9402d1c52d9229357748ce935500",
+   "sha256": "8b3bc340e90ad9f2c31b2058eec9ec64552edc46113ed8ed80433d5e456f67f9",
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1833,6 +1834,7 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -1875,14 +1877,14 @@
    ],
    "output": "quality-gated",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "e6956ea9fab73d816d078b10bbdabfd8666d9402d1c52d9229357748ce935500",
+   "sha256": "8b3bc340e90ad9f2c31b2058eec9ec64552edc46113ed8ed80433d5e456f67f9",
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1893,6 +1895,7 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -1937,14 +1940,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "e6956ea9fab73d816d078b10bbdabfd8666d9402d1c52d9229357748ce935500",
+   "sha256": "8b3bc340e90ad9f2c31b2058eec9ec64552edc46113ed8ed80433d5e456f67f9",
    "lines": {
-    "added": 1343,
-    "removed": 26
+    "added": 1346,
+    "removed": 28
    },
    "budget": {
     "added": 1380,
-    "removed": 26
+    "removed": 28
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1955,6 +1958,7 @@
     "ggml/src/ggml-cuda/kv-stream.cu",
     "ggml/src/ggml-cuda/kv-stream.cuh",
     "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
     "src/llama-kv-stream.cpp",
@@ -2395,20 +2399,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "7153fa116f29f5ae2c1b8da6ac3bc0954ac58602e566e7d159fe9c7dd38fc2b5",
+   "sha256": "b77e5dee832808c16722f1ea7ceb576076f99305ee8a9b6e5996cb672aa124d2",
    "lines": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "budget": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
     "apply": [],
@@ -2442,20 +2447,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "7153fa116f29f5ae2c1b8da6ac3bc0954ac58602e566e7d159fe9c7dd38fc2b5",
+   "sha256": "b77e5dee832808c16722f1ea7ceb576076f99305ee8a9b6e5996cb672aa124d2",
    "lines": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "budget": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
     "apply": [],
@@ -2498,20 +2504,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "7153fa116f29f5ae2c1b8da6ac3bc0954ac58602e566e7d159fe9c7dd38fc2b5",
+   "sha256": "b77e5dee832808c16722f1ea7ceb576076f99305ee8a9b6e5996cb672aa124d2",
    "lines": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "budget": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
     "apply": [],
@@ -2552,20 +2559,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "7153fa116f29f5ae2c1b8da6ac3bc0954ac58602e566e7d159fe9c7dd38fc2b5",
+   "sha256": "b77e5dee832808c16722f1ea7ceb576076f99305ee8a9b6e5996cb672aa124d2",
    "lines": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "budget": {
-    "added": 714,
+    "added": 723,
     "removed": 9
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu"
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
     "apply": [],
