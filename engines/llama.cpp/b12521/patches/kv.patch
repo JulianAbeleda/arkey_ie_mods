@@ -1,5 +1,5 @@
 diff --git a/ggml/src/ggml-cuda/fattn-common.cuh b/ggml/src/ggml-cuda/fattn-common.cuh
-index 666542c80..675db98de 100644
+index 666542c80..1a663053c 100644
 --- a/ggml/src/ggml-cuda/fattn-common.cuh
 +++ b/ggml/src/ggml-cuda/fattn-common.cuh
 @@ -1,6 +1,7 @@
@@ -10,7 +10,7 @@ index 666542c80..675db98de 100644
  #include "convert.cuh"
  #include "vecdotq.cuh"
  
-@@ -776,6 +777,14 @@ static __global__ void flash_attn_mask_to_KV_max(
+@@ -776,6 +777,17 @@ static __global__ void flash_attn_mask_to_KV_max(
  
  void ggml_cuda_flash_attn_ext_compact_mask(
          const ggml_tensor * mask, int32_t * indices, int32_t * counts, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream);
@@ -22,10 +22,13 @@ index 666542c80..675db98de 100644
 +
 +// LLAMA_FATTN_VEC_SKIP: the vector kernel does not read the K/V rows that the mask rules out
 +bool ggml_cuda_flash_attn_ext_vec_skip(const ggml_tensor * dst);
++
++// LLAMA_FATTN_KV_SPLITS: the stream-K block count for calls with fewer output tiles than resident blocks (stock otherwise)
++int ggml_cuda_flash_attn_ext_kv_splits(int ntiles_dst, int ntiles_KV, int max_blocks, int stock_blocks);
  
  template<int D, int ncols1, int ncols2> // D == head size
  __launch_bounds__(D, 1)
-@@ -1071,9 +1080,16 @@ void launch_fattn(
+@@ -1071,9 +1083,16 @@ void launch_fattn(
          ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
  
      ggml_cuda_pool_alloc<int>    KV_max(pool);
@@ -42,7 +45,7 @@ index 666542c80..675db98de 100644
      const char * K_data = (const char *) K->data;
      size_t nb11 = K->nb[1];
      size_t nb12 = K->nb[2];
-@@ -1084,7 +1100,14 @@ void launch_fattn(
+@@ -1084,7 +1103,14 @@ void launch_fattn(
      size_t nb22 = V->nb[2];
      size_t nb23 = V->nb[3];
  
@@ -58,7 +61,7 @@ index 666542c80..675db98de 100644
          const size_t bs = ggml_blck_size(K->type);
          const size_t ts = ggml_type_size(K->type);
  
-@@ -1112,7 +1135,7 @@ void launch_fattn(
+@@ -1112,7 +1138,7 @@ void launch_fattn(
          K_data = (char *) K_f16;
      }
  
@@ -67,7 +70,7 @@ index 666542c80..675db98de 100644
          if (V_is_K_view) {
              V_data = K_data;
              nb21   = nb11;
-@@ -1163,8 +1186,22 @@ void launch_fattn(
+@@ -1163,8 +1189,22 @@ void launch_fattn(
  
          const size_t n_lists = size_t(ntiles_x) * mask->ne[3];
  
@@ -91,7 +94,17 @@ index 666542c80..675db98de 100644
      }
  
      // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
-@@ -1314,17 +1351,19 @@ void launch_fattn(
+@@ -1245,6 +1285,9 @@ void launch_fattn(
+                 : nblocks_stream_k_raw;
+ 
+             blocks_num.x = nblocks_stream_k;
++
++            // LLAMA_FATTN_KV_SPLITS: same kernel and fixups, another block count
++            blocks_num.x = ggml_cuda_flash_attn_ext_kv_splits(ntiles_dst, ntiles_KV, max_blocks, blocks_num.x);
+         }
+ 
+         if (ntiles_dst % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
+@@ -1314,17 +1357,19 @@ void launch_fattn(
          (const char *) Q->data,
          K_data,
          V_data,
@@ -297,10 +310,10 @@ index 09a46187d..4e6e386bc 100644
      const bool need_f16_V = type_V == GGML_TYPE_F16;
      constexpr size_t nbytes_shared = 0;
 diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
-index fb542d41c..2b2bd3588 100644
+index fb542d41c..c1df6f484 100644
 --- a/ggml/src/ggml-cuda/fattn.cu
 +++ b/ggml/src/ggml-cuda/fattn.cu
-@@ -1,9 +1,13 @@
+@@ -1,9 +1,15 @@
 +#include <vector>
  #include "common.cuh"
  #include "fattn-common.cuh"
@@ -309,12 +322,14 @@ index fb542d41c..2b2bd3588 100644
  #include "fattn-vec.cuh"
  #include "fattn.cuh"
 +#include "kv-stream.cuh"
++#include <algorithm>
 +#include <atomic>
++#include <mutex>
 +#include <cstring>
  
  #if !defined(GGML_USE_MUSA)
  
-@@ -112,8 +116,142 @@ static __global__ void flash_attn_mask_to_sparse_indices(
+@@ -112,8 +118,142 @@ static __global__ void flash_attn_mask_to_sparse_indices(
      // the dependent grid reads indices, signal once the row is complete
      ggml_cuda_pdl_lc();
  }
@@ -457,7 +472,7 @@ index fb542d41c..2b2bd3588 100644
  void ggml_cuda_flash_attn_ext_compact_mask(
          const ggml_tensor * mask, int32_t * indices, int32_t * counts, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream) {
  #ifdef GGML_USE_MUSA
-@@ -122,6 +260,39 @@ void ggml_cuda_flash_attn_ext_compact_mask(
+@@ -122,6 +262,39 @@ void ggml_cuda_flash_attn_ext_compact_mask(
  #else
      const int64_t s31 = mask->nb[1] / sizeof(half);
      const int64_t s33 = mask->nb[3] / sizeof(half);
@@ -497,7 +512,7 @@ index fb542d41c..2b2bd3588 100644
      const dim3 blocks_num((n_queries + ncols1 - 1)/ncols1, mask->ne[3], 1);
      const dim3 block_dim(256, 1, 1);
      const ggml_cuda_kernel_launch_params launch_params(blocks_num, block_dim, 0, stream);
-@@ -791,6 +962,69 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+@@ -791,6 +964,91 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
      return BEST_FATTN_KERNEL_TILE;
  }
  
@@ -542,6 +557,28 @@ index fb542d41c..2b2bd3588 100644
 +                           ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 8, 8);
 +}
 +
++// LLAMA_FATTN_KV_SPLITS=k (local mod, off by default): where the engine chose stream-K (the MMA kernel) for a call with
++// fewer output tiles than resident blocks (decode and verify steps), run k blocks per output tile, k clamped to
++// [1, KV tiles] and to at most 4 waves of resident blocks, instead of the stock count (resident blocks rounded to a
++// multiple of the output tiles). k = 1 is one block per tile, no fixup. The partial results are combined in another
++// order, so the output is not bit-equal to stock for k other than stock's. Each output-tile count is logged once.
++int ggml_cuda_flash_attn_ext_kv_splits(int ntiles_dst, int ntiles_KV, int max_blocks, int stock_blocks) {
++    static const int k = sparse_direct_env("LLAMA_FATTN_KV_SPLITS");
++    if (k <= 0 || ntiles_dst >= max_blocks) {
++        return stock_blocks;
++    }
++    const int nblocks = ntiles_dst*std::max(1, std::min({k, ntiles_KV, 4*max_blocks/ntiles_dst}));
++    static std::mutex mtx;
++    static std::vector<int> logged;
++    std::lock_guard<std::mutex> lock(mtx);
++    if (std::find(logged.begin(), logged.end(), ntiles_dst) == logged.end() && logged.size() < 16) {
++        logged.push_back(ntiles_dst);
++        GGML_LOG_INFO("LLAMA_FATTN_KV_SPLITS: %d output tiles, %d KV tiles: %d blocks (stock stream-K %d, resident %d)\n",
++            ntiles_dst, ntiles_KV, nblocks, stock_blocks, max_blocks);
++    }
++    return nblocks;
++}
++
 +// LLAMA_FATTN_VEC_SKIP=1 (local long-context mod, off by default): calls that take the vector kernel with q8_0 K/V and a
 +// selection mask (the graph passes n_kv_max > 0, e.g. the MTP draft's one-token passes) skip the masked K/V rows instead
 +// of reading the whole cache. One query only: the 2-column instance with the skips compiled in rounded differently
@@ -567,7 +604,7 @@ index fb542d41c..2b2bd3588 100644
  size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
      GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
  
-@@ -821,6 +1055,12 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
+@@ -821,6 +1079,12 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
              break;
      }
  
@@ -580,7 +617,7 @@ index fb542d41c..2b2bd3588 100644
      const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
          ggml_cuda_flash_attn_ext_get_f16_extra_data(dst, need_f16_K, need_f16_V);
  
-@@ -829,6 +1069,95 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
+@@ -829,6 +1093,95 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
  
  void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
      ggml_cuda_set_device(ctx.device);

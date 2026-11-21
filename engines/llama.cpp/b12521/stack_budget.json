@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5061,
+   "cap": 5091,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -120,6 +120,14 @@
      "to": 5061,
      "measured": 5061,
      "why": "host/rbudget-backend: +39 lines, a reasoning budget keeps backend sampling on (the thinking cap cost -7% warm decode at 256k, release-0332-20261120 cap-ab-256k: -bs off under the cap); the owner approved this engine change 2026-11-21 ~12:15 AM EST (relayed); no gain measured yet: confirm the raise or revert before any push",
+     "date": "2026-11-21",
+     "approved": "Owner-approved 2026-11-21"
+    },
+    {
+     "from": 5061,
+     "to": 5091,
+     "measured": 5091,
+     "why": "kv/fattn-kv-splits: +30 lines, the verify step's stream-K block count as a switch BoltBeam can sweep (top-gaps-20261121 A4); the owner approved this engine change 2026-11-21 ~12:15 AM EST (relayed); no gain measured yet: confirm the raise or revert before any push",
      "date": "2026-11-21",
      "approved": "Owner-approved 2026-11-21"
     }

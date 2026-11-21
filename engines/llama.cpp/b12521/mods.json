@@ -32,7 +32,7 @@
     "src/llama-kv-stream.h"
    ],
    "lines": {
-    "added": 1346,
+    "added": 1376,
     "removed": 28
    },
    "budget": {
@@ -102,6 +102,18 @@
      },
      "why": "HIP port (gfx1201): fattn-vec-skip gives a whole warp to each K row on HIP too (the skip decision is per row; RDNA used 2 threads, other HIP 4), a rewrite of the two stock nthreads_KQ_q lines; raw 32-bit shfl/any masks become ggml_cuda_shfl_*/ggml_cuda_any (HIP needs 64-bit masks); cudaMemcpyDefault gets its HIP name. Removed lines are measured (+2), added stays within budget",
      "date": "2026-11-20"
+    },
+    {
+     "from": {
+      "added": 1380,
+      "removed": 28
+     },
+     "to": {
+      "added": 1380,
+      "removed": 28
+     },
+     "why": "fattn-kv-splits joins the kv module (its extension point: the flash-attention launch that reads the K/V, fattn-common.cuh's stream-K block count, and fattn.cu's env helper): +30 lines inside the unchanged budget 1380",
+     "date": "2026-11-21"
     }
    ]
   },
@@ -579,6 +591,45 @@
     "the compaction becomes two launches (count, write); its chunk counts take n_lists x ceil(n_kv / 4,096) extra int32 in the pooled index buffer"
    ],
    "rule_exceptions": []
+  },
+  {
+   "name": "fattn-kv-splits",
+   "title": "decode attention stream-K launch takes k blocks per output tile",
+   "module": "kv",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_FATTN_KV_SPLITS",
+    "on": "k: blocks per output tile (an integer >= 1, clamped to the call's KV tiles)"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_FATTN_KV_SPLITS",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "untested",
+    "evidence": {
+     "run": "none yet",
+     "numbers": "not built or run yet (2026-11-21). Target: at 240k the verify step's flash_attn_ext_f16 runs grid (160,1,1) = 16 output tiles x 10 (stock rule: resident blocks rounded to a multiple of the output tiles), 0.649 ms a step for 12 launches at ~41 GB/s against a 0.016 ms byte limit (boltbeam-runs/top-gaps-20261121, A4). The switch only changes the block count of the existing stream-K launch; the kernel and both fixups are stock"
+    }
+   },
+   "exercised_by": "stream-K flash-attention launches (the MMA f16 kernel) with fewer output tiles than resident blocks: the 4-token verify step and other small-batch calls; prefill (more tiles than resident blocks) keeps the stock count",
+   "limits": [
+    "only where the engine chose stream-K (the MMA kernel) and the call has fewer output tiles than resident blocks: the 4-token verify step and other small batches; prefill, the vector kernel (one-query draft passes) and the tile kernel keep the stock count",
+    "k is clamped to the call's KV tiles and to 4 waves of resident blocks; k = 1 is one block per output tile with no fixup",
+    "the partial results are combined in another order for k other than stock's, so the output is not bit-equal to stock: the label needs a quality gate, not a reply match",
+    "logs each output-tile count once (up to 16) with the stock and chosen block counts"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the launch runs the stock kernel and stock fixups with another block count; the result is the same sum in another order, which a bit-compare against stock would flag by design. Quality rests on the session gate (stage-1 top-1 agreement) and reply comparison"
+    }
+   ]
   },
   {
    "name": "idx-pooled",
@@ -1949,7 +2000,7 @@
    "id": "modules-eng-night",
    "path": "storage-tmp/eng-night/tree",
    "what": "base + the 6 module patches at this commit (git apply on a copy of the base; its git history: the b8ac2b1 modules, then each change). Not built yet: no compiler run on the dev box while a timing run held the GPU (2026-11-21); the build, identity and paired timing are boltbeam-runs/eng-night-20261121",
-   "contains": "the 6 modules on the base (master b8ac2b1's) with rbudget-backend in host",
+   "contains": "the 6 modules on the base (master b8ac2b1's) with rbudget-backend in host and fattn-kv-splits in kv",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",
