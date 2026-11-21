@@ -1,5 +1,5 @@
 diff --git a/ggml/src/ggml-cuda/CMakeLists.txt b/ggml/src/ggml-cuda/CMakeLists.txt
-index 211a8dac7..3ab3adef7 100644
+index 211a8dac..3ab3adef 100644
 --- a/ggml/src/ggml-cuda/CMakeLists.txt
 +++ b/ggml/src/ggml-cuda/CMakeLists.txt
 @@ -127,12 +127,14 @@ if (CUDAToolkit_FOUND)
@@ -17,8 +17,27 @@ index 211a8dac7..3ab3adef7 100644
      if (GGML_CUDA_GRAPHS)
          add_compile_definitions(GGML_CUDA_USE_GRAPHS)
      endif()
+diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
+index bfbd6b62..b3856084 100644
+--- a/ggml/src/ggml-cuda/common.cuh
++++ b/ggml/src/ggml-cuda/common.cuh
+@@ -30,13 +30,7 @@
+ #include <utility>
+ #include <vector>
+ 
+-#if defined(GGML_USE_HIP)
+-#include "vendors/hip.h"
+-#elif defined(GGML_USE_MUSA)
+-#include "vendors/musa.h"
+-#else
+-#include "vendors/cuda.h"
+-#endif // defined(GGML_USE_HIP)
++#include "vendors/vendor.h"
+ 
+ #include "ggml-common.h"
+ 
 diff --git a/ggml/src/ggml-cuda/concat.cu b/ggml/src/ggml-cuda/concat.cu
-index f8dcd95ab..663fe3e90 100644
+index f8dcd95a..663fe3e9 100644
 --- a/ggml/src/ggml-cuda/concat.cu
 +++ b/ggml/src/ggml-cuda/concat.cu
 @@ -1,6 +1,7 @@
@@ -161,10 +180,10 @@ index f1f1bf2da..f8b87904e 100644
      } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F8_E4M3) {
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
-index 000000000..32287d79f
+index 00000000..cef2b063
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -0,0 +1,566 @@
+@@ -0,0 +1,564 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
 +// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N.
@@ -174,7 +193,7 @@ index 000000000..32287d79f
 +// entry's tolerance.
 +#include "ggml-impl.h"
 +
-+#include <cuda.h>
++#include "vendors/vendor.h"
 +#include <nlohmann/json.hpp>
 +extern "C" {
 +#include <sha256/sha256.h>
@@ -395,7 +414,7 @@ index 000000000..32287d79f
 +    const json & k = j.at("kernel");
 +    std::ifstream f(dir + k.at("file").get<std::string>(), std::ios::binary);
 +    std::string   blob((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-+    if (!f || k.at("format") == "hsaco" || ext_sha256(blob) != k.at("sha256")) {
++    if (!f || !ggml_cuda_kernel_format_ok(k.at("format").get<std::string>()) || ext_sha256(blob) != k.at("sha256")) {
 +        throw std::runtime_error("kernel file missing, wrong format or wrong sha256");
 +    }
 +    CUmodule mod;
@@ -451,12 +470,11 @@ index 000000000..32287d79f
 +        if (!build_ok) {
 +            throw std::runtime_error("this build (" + commit + ") is not one the manifest was checked on");
 +        }
-+        CUdevice dev;
-+        int      major = 0, minor = 0;
-+        ext_ok(cuCtxGetDevice(&dev), "cuCtxGetDevice");
-+        ext_ok(cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev), "cuDeviceGetAttribute");
-+        ext_ok(cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev), "cuDeviceGetAttribute");
-+        const std::string chip = "nvidia_sm" + std::to_string(10*major + minor);
++        int dev = 0;
++        if (cudaGetDevice(&dev) != cudaSuccess) {
++            throw std::runtime_error("no current GPU device");
++        }
++        const std::string chip = ggml_cuda_chip_name(dev);
 +        const std::string dir  = path.substr(0, path.find_last_of('/') + 1);
 +        for (const json & j : m.at("entries")) {
 +            try {
@@ -669,8 +687,7 @@ index 000000000..32287d79f
 +            }
 +        }
 +        CUlaunchAttribute attr;
-+        attr.id                                         = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
-+        attr.value.programmaticStreamSerializationAllowed = 1;
++        const unsigned    n_pdl = ggml_cuda_pdl_attribute(&attr);
 +        CUlaunchConfig cfg = {};
 +        cfg.gridDimX       = e.grid[0];
 +        cfg.gridDimY       = e.grid[1];
@@ -681,7 +698,7 @@ index 000000000..32287d79f
 +        cfg.sharedMemBytes = e.shmem;
 +        cfg.hStream        = (CUstream) stream;
 +        cfg.attrs          = &attr;
-+        cfg.numAttrs       = e.pdl && pdl_on ? 1 : 0;
++        cfg.numAttrs       = e.pdl && pdl_on ? n_pdl : 0;
 +        if (const CUresult r = cuLaunchKernelEx(&cfg, e.fn, params.data(), nullptr); r != CUDA_SUCCESS) {
 +            GGML_LOG_WARN("%s: %s launch failed (%d), the engine's own kernel runs\n", __func__, e.id.c_str(), (int) r);
 +            return 0;
@@ -732,7 +749,7 @@ index 000000000..32287d79f
 +    return 0;
 +}
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 3d8d30d81..810feb22c 100644
+index 3d8d30d8..719de0b6 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -805,6 +805,10 @@ ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_
@@ -853,22 +870,16 @@ index 3d8d30d81..810feb22c 100644
  #ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
          graph->instances[idx].clusters = ggml_cuda_graph_get_clusters(cuda_graph, cuda_ctx->device);
  #endif // USE_CUDA_GRAPH_CLUSTER_CHECK
-@@ -4371,6 +4464,14 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
+@@ -4371,6 +4464,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
      return false;
  }
  
-+#if defined(GGML_USE_HIP)
-+// the hook loads CUDA cubins through the driver API (ext-kernels.cpp); not ported to hipModule yet: on HIP no manifest
-+// entry runs, so every node takes the stock path, as with GGML_CUDA_EXT_KERNELS unset
-+static int ggml_cuda_ext_kernels_run(void *, ggml_cgraph *, int, bool (*)(void *, ggml_tensor *), void *) { return 0; }
-+#else
 +int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx);
-+#endif
 +
  // try and fuse nodes and return the number of nodes to skip
  static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
  
-@@ -5372,6 +5473,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+@@ -5372,6 +5467,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                      continue;
                  }
  
@@ -889,17 +900,112 @@ index 3d8d30d81..810feb22c 100644
                  int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
  
                  if (nodes_to_skip != 0) {
+diff --git a/ggml/src/ggml-cuda/vendors/cuda.h b/ggml/src/ggml-cuda/vendors/cuda.h
+index 8253061c..33647dd2 100644
+--- a/ggml/src/ggml-cuda/vendors/cuda.h
++++ b/ggml/src/ggml-cuda/vendors/cuda.h
+@@ -10,6 +10,19 @@
+ 
+ typedef uint32_t ggml_cuda_thread_mask_t;
+ 
++#include <string>
++// loaded kernels (ext-kernels.cpp): the chip a kernel list names, the binaries this runtime loads, the PDL attribute
++static inline std::string ggml_cuda_chip_name(int device) {
++    cudaDeviceProp p;
++    return cudaGetDeviceProperties(&p, device) == cudaSuccess ? "nvidia_sm" + std::to_string(10*p.major + p.minor) : "";
++}
++static inline bool ggml_cuda_kernel_format_ok(const std::string & format) { return format == "cubin" || format == "ptx"; }
++static inline unsigned ggml_cuda_pdl_attribute(CUlaunchAttribute * a) {
++    a->id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
++    a->value.programmaticStreamSerializationAllowed = 1;
++    return 1;
++}
++
+ #ifdef GGML_USE_NCCL
+ #include <nccl.h>
+ #endif // GGML_USE_NCCL
 diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
-index a43814799..ac3ff797b 100644
+index a4381479..8b5b923b 100644
 --- a/ggml/src/ggml-cuda/vendors/hip.h
 +++ b/ggml/src/ggml-cuda/vendors/hip.h
-@@ -145,6 +145,9 @@ typedef uint64_t ggml_cuda_thread_mask_t;
+@@ -145,6 +145,27 @@ typedef uint64_t ggml_cuda_thread_mask_t;
  #define cudaGraphGetNodes hipGraphGetNodes
  #define cudaGraphExecUpdate hipGraphExecUpdate
  #define cudaStreamCaptureModeRelaxed hipStreamCaptureModeRelaxed
++// the driver API loaded kernels use (ext-kernels.cpp)
++#define CUDA_SUCCESS hipSuccess
++#define CUdeviceptr hipDeviceptr_t
++#define CUfunction hipFunction_t
++#define CUmodule hipModule_t
++#define CUstream hipStream_t
++#define CUstreamCaptureStatus hipStreamCaptureStatus
++#define CU_STREAM_CAPTURE_STATUS_NONE hipStreamCaptureStatusNone
++#define CUlaunchAttribute hipLaunchAttribute
++#define CUlaunchConfig HIP_LAUNCH_CONFIG
++#define cuLaunchKernelEx hipDrvLaunchKernelEx
++#define cuMemcpyDtoHAsync hipMemcpyDtoHAsync
++#define cuMemcpyHtoD hipMemcpyHtoD
++#define cuMemcpyHtoDAsync hipMemcpyHtoDAsync
++#define cuModuleGetFunction hipModuleGetFunction
++#define cuModuleLoadData hipModuleLoadData
++#define cuStreamIsCapturing hipStreamIsCapturing
++#define cuStreamSynchronize hipStreamSynchronize
 +#define cudaStreamCaptureStatus hipStreamCaptureStatus
 +#define cudaStreamCaptureStatusNone hipStreamCaptureStatusNone
 +#define cudaStreamIsCapturing hipStreamIsCapturing
  #define cudaStreamBeginCapture hipStreamBeginCapture
  #define cudaGraph_t hipGraph_t
  #define cudaStream_t hipStream_t
+@@ -333,3 +354,16 @@ static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, cons
+     return __builtin_amdgcn_perm(hi, lo, sel);
+ #endif // __has_builtin(__builtin_amdgcn_is_invocable)
+ }
++
++#include <string>
++// loaded kernels (ext-kernels.cpp): the chip a kernel list names, the binaries this runtime loads; HIP has no PDL
++static inline std::string ggml_cuda_chip_name(int device) {
++    hipDeviceProp_t p;
++    if (hipGetDeviceProperties(&p, device) != hipSuccess) {
++        return "";
++    }
++    const std::string arch = p.gcnArchName;   // e.g. gfx1201:sramecc-:xnack-
++    return "amd_" + arch.substr(0, arch.find(':'));
++}
++static inline bool ggml_cuda_kernel_format_ok(const std::string & format) { return format == "hsaco"; }
++static inline unsigned ggml_cuda_pdl_attribute(hipLaunchAttribute *) { return 0; }
+diff --git a/ggml/src/ggml-cuda/vendors/vendor.h b/ggml/src/ggml-cuda/vendors/vendor.h
+new file mode 100644
+index 00000000..7d4f85e2
+--- /dev/null
++++ b/ggml/src/ggml-cuda/vendors/vendor.h
+@@ -0,0 +1,10 @@
++#pragma once
++// the GPU runtime this backend is built for: one header per vendor maps the CUDA names onto it
++
++#if defined(GGML_USE_HIP)
++#include "hip.h"
++#elif defined(GGML_USE_MUSA)
++#include "musa.h"
++#else
++#include "cuda.h"
++#endif // defined(GGML_USE_HIP)
+diff --git a/ggml/src/ggml-hip/CMakeLists.txt b/ggml/src/ggml-hip/CMakeLists.txt
+index 35a898e2..3a127b8e 100644
+--- a/ggml/src/ggml-hip/CMakeLists.txt
++++ b/ggml/src/ggml-hip/CMakeLists.txt
+@@ -61,6 +61,7 @@ file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
+ list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
+ 
+ file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
++list(APPEND GGML_SOURCES_ROCM ../ggml-cuda/ext-kernels.cpp ../../../vendor/hash/sha256/sha256.c)  # opt-in mod GGML_CUDA_EXT_KERNELS
+ file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
+ list(APPEND GGML_SOURCES_ROCM ${SRCS})
+ file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
+@@ -77,6 +78,7 @@ ggml_add_backend_library(ggml-hip
+                          ${GGML_HEADERS_ROCM}
+                          ${GGML_SOURCES_ROCM}
+                         )
++target_include_directories(ggml-hip PRIVATE ../../../vendor ../../../vendor/hash)  # the ext-kernels hook: nlohmann json, sha256
+ 
+ # TODO: do not use CUDA definitions for HIP
+ if (NOT GGML_BACKEND_DL)

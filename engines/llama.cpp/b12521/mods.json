@@ -165,22 +165,26 @@
    "patch": "patches/kernels.patch",
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/common.cuh",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/vendors/hip.h"
+    "ggml/src/ggml-cuda/vendors/cuda.h",
+    "ggml/src/ggml-cuda/vendors/hip.h",
+    "ggml/src/ggml-cuda/vendors/vendor.h",
+    "ggml/src/ggml-hip/CMakeLists.txt"
    ],
    "lines": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "budget": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "static": {
-    "hunks_removing_stock_lines": 4
+    "hunks_removing_stock_lines": 5
    },
    "budget_raised": [
     {
@@ -254,6 +258,18 @@
      },
      "why": "kernels/graph-cpy-kernel (+18 -1 lines in cpy.cu): while the stream captures a CUDA graph, a same-type strided F32/F16/BF16/I32 copy takes the stock scalar copy kernel instead of cudaMemcpy2DAsync (a 2-D memcpy node cannot take new operands in cudaGraphExecUpdate), behind GGML_CUDA_GRAPH_CPY_KERNEL; the removed line is the 2-D branch's condition, rewritten to add the switch test (boltbeam-runs/graph-fix-20261121). The budget is the measured lines (owner rule: raise by the measured remainder after review)",
      "date": "2026-11-21"
+    },
+    {
+     "from": {
+      "added": 741,
+      "removed": 10
+     },
+     "to": {
+      "added": 790,
+      "removed": 17
+     },
+     "why": "the hook loads kernels on HIP: the driver calls go through ggml's vendor headers (vendors/hip.h maps the CUDA driver names; vendors/vendor.h is the one vendor selection, read by common.cuh and the hook); each vendor header names its chip (nvidia_sm120 / amd_gfx1201), the binary formats it loads (cubin, ptx / hsaco) and its PDL attribute (none on HIP); the HIP stub in ggml-cuda.cu is gone; ggml-hip builds ext-kernels.cpp. budget_rule ceil_105_10 of the new lines; removed lines measured",
+     "date": "2026-11-20"
     }
    ]
   },

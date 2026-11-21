@@ -2399,22 +2399,26 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "8082249b83f5fcd82e9eebd8282fa2dbee60e401a46c34c4630fa84b37b17407",
    "lines": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "budget": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/common.cuh",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/vendors/hip.h"
+    "ggml/src/ggml-cuda/vendors/cuda.h",
+    "ggml/src/ggml-cuda/vendors/hip.h",
+    "ggml/src/ggml-cuda/vendors/vendor.h",
+    "ggml/src/ggml-hip/CMakeLists.txt"
    ],
    "depends_on": {
     "apply": [],
@@ -2448,22 +2452,26 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "8082249b83f5fcd82e9eebd8282fa2dbee60e401a46c34c4630fa84b37b17407",
    "lines": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "budget": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/common.cuh",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/vendors/hip.h"
+    "ggml/src/ggml-cuda/vendors/cuda.h",
+    "ggml/src/ggml-cuda/vendors/hip.h",
+    "ggml/src/ggml-cuda/vendors/vendor.h",
+    "ggml/src/ggml-hip/CMakeLists.txt"
    ],
    "depends_on": {
     "apply": [],
@@ -2506,22 +2514,26 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "8082249b83f5fcd82e9eebd8282fa2dbee60e401a46c34c4630fa84b37b17407",
    "lines": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "budget": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/common.cuh",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/vendors/hip.h"
+    "ggml/src/ggml-cuda/vendors/cuda.h",
+    "ggml/src/ggml-cuda/vendors/hip.h",
+    "ggml/src/ggml-cuda/vendors/vendor.h",
+    "ggml/src/ggml-hip/CMakeLists.txt"
    ],
    "depends_on": {
     "apply": [],
@@ -2562,22 +2574,26 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "8082249b83f5fcd82e9eebd8282fa2dbee60e401a46c34c4630fa84b37b17407",
    "lines": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "budget": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/common.cuh",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/vendors/hip.h"
+    "ggml/src/ggml-cuda/vendors/cuda.h",
+    "ggml/src/ggml-cuda/vendors/hip.h",
+    "ggml/src/ggml-cuda/vendors/vendor.h",
+    "ggml/src/ggml-hip/CMakeLists.txt"
    ],
    "depends_on": {
     "apply": [],
@@ -2614,22 +2630,26 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "1ff23b6574633b2c2bf85e7878e7b8c7044240960efc0211aa26a586983e1a6c",
+   "sha256": "8082249b83f5fcd82e9eebd8282fa2dbee60e401a46c34c4630fa84b37b17407",
    "lines": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "budget": {
-    "added": 741,
-    "removed": 10
+    "added": 790,
+    "removed": 17
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/common.cuh",
     "ggml/src/ggml-cuda/concat.cu",
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/vendors/hip.h"
+    "ggml/src/ggml-cuda/vendors/cuda.h",
+    "ggml/src/ggml-cuda/vendors/hip.h",
+    "ggml/src/ggml-cuda/vendors/vendor.h",
+    "ggml/src/ggml-hip/CMakeLists.txt"
    ],
    "depends_on": {
     "apply": [],
