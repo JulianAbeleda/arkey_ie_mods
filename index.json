@@ -3565,15 +3565,15 @@
    "hook": "llama.cpp/b12521/ext-kernels",
    "dir": "engines/llama.cpp/b12521/kernels/bf16-smallm-gemv-k10240/",
    "files": {
-    "manifest.json": "4fc9a6a092ea680187737f8c9d093ee0356efd88988468c4cd4034b6e9998de8",
+    "manifest.json": "9006ae7cb164fc2103ec11fe1ca64df404565d303ab5a142b043147a7efd0b62",
     "ark_inject_c1u1.cu": "1653e02baeeb79fcb59d088e87df7ae294d171ac9bdf9c036f7d40fab19e035e",
     "ark_inject_c1u1.cubin": "d3a4bd684df58d05eecd25b20657fae7a1a5d4f615edfe8edc2a4e03d64c5959",
-    "ark_down_c4u1.cu": "5c6641fa9e0a73c0b584e377a6bc28207d2879d4dc6871c75978502988fe233f",
-    "ark_down_c4u1.cubin": "4e0049985bb45e151a975b49bd06f693bbc1d4e905bf80fec74ade5d059b7ebf"
+    "ark_down_c2r4u5.cu": "de74f06b438233dfcdf69b8e81a5f9a23ba532d4f1c8d1750a17bfe5f036377b",
+    "ark_down_c2r4u5.cubin": "16cb49e906488f4ca7d3c4be7a064e42402d041f7da77537c892ca28ee507aaf"
    },
    "output": "untested",
-   "lines": 108,
-   "budget": 120
+   "lines": 221,
+   "budget": 240
   },
   {
    "id": "llama.cpp/b12521/kernels/region-chain-k2560-k10240",
@@ -3582,7 +3582,7 @@
    "hook": "llama.cpp/b12521/ext-kernels-window",
    "dir": "engines/llama.cpp/b12521/kernels/region-chain-k2560-k10240/",
    "files": {
-    "manifest.json": "abfcc9ab3f9fbd1bca52cb614fdc90ba51e08822b627936f6cf32a368b420ebb",
+    "manifest.json": "ae1b3ca5f08a3eb69fb568b87c08ecd4c3bcee13af2909a90def8be0ad7a0083",
     "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
     "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
     "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
@@ -3606,10 +3606,16 @@
     "sparse_q8_exact2_t3_h24_2_d256_l2051_r14.cu": "a84fad3f14974b08cc6bab2134b98ae9c2023a52eff0ee888a34d4020d8398d5",
     "sparse_q8_exact2_t3_h24_2_d256_l2051_r14.cubin": "f59ca3fc8798ac9c7e2b9d848094909944897d54a1b3a3c626c482f09712a3d9",
     "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cu": "54d351e0afdc3cf21f61f7a7455bb166acec018908f14afab5d933468d32ed11",
-    "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cubin": "80c576ba88a6864026ec02e4c511129736543b51b86e182417c36a19829b1bce"
+    "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cubin": "80c576ba88a6864026ec02e4c511129736543b51b86e182417c36a19829b1bce",
+    "region_abf27ac5588f.cu": "79414334810a0c7a57e074ce89cf895ffba99d924b08af17eac47282bab38448",
+    "region_abf27ac5588f.cubin": "34630aa8ef796a30e1870e7c35f426e71ab664984cf1c54825ccdb8642498ae3",
+    "region_ff96d2ea18a8.cu": "4a71b1ce06a5a23e49cee482713130dd48a18ad2cb8947b802f9b71b6d042d47",
+    "region_ff96d2ea18a8.cubin": "5d59f3a058ce0f5346b67e2164a4e7ddcd0b16af2798e3f7c343fec7054f2bcf",
+    "region_7fc28e3641f8.cu": "e85d9d481bc8e83349322520e36cbbdd0e83a13856ba6fbf2890ad05671066b7",
+    "region_7fc28e3641f8.cubin": "0dd7193b3f55be99625f9cf98ef567f056a4808982a6f27af41d48fa496c9cd6"
    },
    "output": "identical",
-   "lines": 3576,
+   "lines": 3641,
    "budget": 3760
   },
   {
@@ -3619,7 +3625,7 @@
    "hook": "llama.cpp/b12521/ext-kernels-window",
    "dir": "engines/llama.cpp/b12521/kernels/region-state-copy-k10240/",
    "files": {
-    "manifest.json": "dca73ca0db699b6b2305e55dea2174cdb0085fd6ba052de149b54a12f2c46648",
+    "manifest.json": "bcbe77f411aa362f96c3200353bbd1d936aa28a97fde03123304d664f2ec88ac",
     "region_state_copy_front.cu": "b2e3abfb4c040ecce761f0ffd3739677e2795183bb59462ecd6ca8ed83507609",
     "region_state_copy_front.cubin": "6a25ed2f0174257339df8a8b05ee41367828146033f13deae6dc52feb5be6f51"
    },

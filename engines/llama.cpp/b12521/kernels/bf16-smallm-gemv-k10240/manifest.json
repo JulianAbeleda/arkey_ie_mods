@@ -93,7 +93,7 @@
    "tolerance": 0
   },
   {
-   "id": "ark_down_c4u1",
+   "id": "ark_down_c2r4u5",
    "target": "nvidia_sm120",
    "sm_count_min": 54,
    "match": {
@@ -127,15 +127,15 @@
     ]
    },
    "kernel": {
-    "file": "ark_down_c4u1.cubin",
-    "sha256": "4e0049985bb45e151a975b49bd06f693bbc1d4e905bf80fec74ade5d059b7ebf",
-    "symbol": "ark_down_c4u1",
+    "file": "ark_down_c2r4u5.cubin",
+    "sha256": "16cb49e906488f4ca7d3c4be7a064e42402d041f7da77537c892ca28ee507aaf",
+    "symbol": "ark_down_c2r4u5",
     "format": "cubin"
    },
    "launch": {
     "grid": [
-     320,
-     1,
+     80,
+     2,
      1
     ],
     "block": [
@@ -162,18 +162,38 @@
    ],
    "evidence": {
     "author": "scheduler",
-    "family": "small_m_gemv.v1",
-    "candidate_hash": "8fd8a2a44ee7045e2667cc94d83d116f41535bb3218d4a65b995eff5a42692b7",
+    "family": "region_chain.v1",
+    "region_id": "703f02fd797d592653d31eb144233c75676c06c072db52a2d966edf8c9b2637c",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)",
+     "Opt(op=OptOps.UPCAST, axis=0, arg=2)",
+     "Opt(op=OptOps.UPCAST, axis=1, arg=4)",
+     "Opt(op=OptOps.UNROLL, axis=1, arg=5)"
+    ],
     "compile_flags": [
      "-O3",
-     "-ftz=true",
-     "-fmad=true"
+     "-use_fast_math",
+     "-fmad=false"
     ],
-    "correctness": "reduction order llama.cpp.mmvf.bf16_f32.b256: SASS dependency tree verified (32 FFMA, 20 SHFL, 4 outputs)",
+    "checks": {
+     "outputs": 8,
+     "shared_values": 8,
+     "loops": 1,
+     "fmul": 0,
+     "mma": 0,
+     "ffma": 80,
+     "shfl": 40,
+     "ok": true,
+     "why": [],
+     "gate": false
+    },
+    "candidate_hash": "8c03ddc56863b1842964305edb0c0f472639223a780e4d01f747e58106c2ac5f",
     "generator": {
-     "repo": "tinygrad-arkey",
-     "commit": "cbd4ca8e3b2c508745055996984256cfe5da0b32",
-     "script": "arkey-pdl-20261115/gen_v2.py"
+     "repo": "diwa-gen",
+     "commit": "1727a3fa3e8aec1436a566be61e75baa10702f45",
+     "recipe": "tests/fixtures/region_chain/shipped_windows.json:ark_down (launch_shape columns_per_block 2, rows_per_block 4, unroll 5)"
     }
    },
    "tolerance": 0
