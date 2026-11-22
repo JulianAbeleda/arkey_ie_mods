@@ -3777,7 +3777,7 @@
    "engine": "llama.cpp",
    "version": "b12521",
    "path": "engines/llama.cpp/b12521/tools/match_gate/cudastub.cpp",
-   "sha256": "84e47dcc1388690bc25a374ad7e2e43682301f29d2cf46dfc1049d2fa2e274fe",
+   "sha256": "b8c17ef0705d0b49947e47996032126b381a9ea174345d4a46025265ceba1dd9",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
@@ -3825,7 +3825,7 @@
    "engine": "llama.cpp",
    "version": "b12521",
    "path": "engines/llama.cpp/b12521/tools/match_gate/hook_gate.cpp",
-   "sha256": "1f4ef2211ffa8fc48660a099e994f2d9dd6c071b57c27b834c537b6e4c2aa513",
+   "sha256": "0f01f0faf9b11da08e460df835c55f639d55017d55c2d57ccd27c6c3b9271fe8",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
@@ -3837,7 +3837,7 @@
    "engine": "llama.cpp",
    "version": "b12521",
    "path": "engines/llama.cpp/b12521/tools/match_gate/hookspy.cpp",
-   "sha256": "1cbb00b3aba02c08bef1ccc8ebc13e083aaf334ce950a2a7033f1850ead974c9",
+   "sha256": "9156b827d6df53bcff527fafbaa54ef007177911106b2a55cae9e2cd9752a954",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
