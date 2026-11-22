@@ -142,7 +142,7 @@ int main(int argc, char ** argv) {
         catch (const std::exception & err) { printf("  entry %s DROPPED at load: %s\n", j.value("id", "?").c_str(), err.what()); }
     }
     // pass records: every evaluation of the run, by graph kind; what the engine's own matcher took (and, in a dry run, which kernel)
-    std::map<long, std::vector<std::pair<int, int>>> engine_hits; std::map<std::string, long> evals; std::map<std::string, std::map<std::string, long>> engine_by;
+    std::map<long, std::vector<std::pair<int, int>>> engine_hits, engine_gaps; std::map<std::string, long> evals; std::map<std::string, std::map<std::string, long>> engine_by;
     std::map<std::string, std::map<std::string, std::pair<long, long>>> engine_minmax; bool have_by = false;
     std::map<std::string, long> dec_evals; std::map<std::string, int> dec_nodes; std::map<std::string, std::map<std::string, long>> dec_by;
     {
@@ -163,6 +163,8 @@ int main(int argc, char ** argv) {
             }
             std::vector<std::pair<int, int>> h; for (const json & x : p.at("hits")) h.emplace_back(x[0].get<int>(), x[1].get<int>());
             engine_hits[gid] = h;
+            std::vector<std::pair<int, int>> gp; for (const json & x : p.value("gaps", json::array())) gp.emplace_back(x[0].get<int>(), x[1].get<int>());
+            engine_gaps[gid] = gp;   // a spy before gaps: none (every node tried)
         }
     }
     std::map<std::string, std::vector<entry_stats>> stats;   // graph kind -> per entry
@@ -174,11 +176,13 @@ int main(int argc, char ** argv) {
         n_graphs++; graphs_by_size[g.kind]++;
         std::vector<entry_stats> & st = stats[g.kind]; st.resize(entries.size());
         std::vector<std::pair<int, int>> hits;
+        std::vector<char> skipped(g.n_nodes, 0);   // nodes the engine's hook never saw (a stock fusion took them, ggml_cuda_try_fuse): the replay does not try them either
+        for (auto & [a, b] : engine_gaps[g.gid]) for (int x = std::max(a, 0); x < std::min(b, g.n_nodes); ++x) skipped[x] = 1;
         std::vector<int> last_read(g.T.size(), -1);    // per tensor: the last node that reads it (itself or through a view chain)
         for (int i = 0; i < g.n_nodes; ++i) for (int s = 0; s < GGML_MAX_SRC && g.T[i].src[s]; ++s) for (const ggml_tensor * x = g.T[i].src[s]; x; x = x->view_src) last_read[x - g.T.data()] = i;
         for (int i = 0; i < g.n_nodes; ++i) {
             ggml_tensor * node = g.gf->nodes[i];
-            if (is_view_or_noop(node) || (node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) continue;
+            if (is_view_or_noop(node) || (node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 || skipped[i]) continue;
             for (size_t q = 0; q < entries.size(); ++q) {
                 ext_entry & e = entries[q]; const int n = (int) e.ops.size();
                 bool seq = i + n <= g.n_nodes, shape = seq; int kdiff = -1;

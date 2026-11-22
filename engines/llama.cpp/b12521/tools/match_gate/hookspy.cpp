@@ -27,7 +27,7 @@
 typedef int (*run_fn)(void *, ggml_cgraph *, int, bool (*)(void *, ggml_tensor *), void *);
 static std::mutex g_mu;
 static FILE *     g_out = nullptr;
-struct pass_state { int last_i = 1 << 30; long gid = -1; long calls = 0; int n_nodes = 0; int64_t last_ne[4] = {0, 0, 0, 0}; std::vector<std::pair<int, int>> hits; std::map<std::string, long> by; std::string pending; };
+struct pass_state { int last_i = 1 << 30; long gid = -1; long calls = 0; int n_nodes = 0; int64_t last_ne[4] = {0, 0, 0, 0}; std::vector<std::pair<int, int>> hits, gaps; int prev = -1; std::map<std::string, long> by; std::string pending; };
 static std::map<const ggml_cgraph *, pass_state> g_pass;
 static std::unordered_map<uint64_t, long> g_seen;   // graph signature -> gid
 static long g_n_pass = 0;
@@ -54,8 +54,11 @@ static void flush_pass(const ggml_cgraph * g, pass_state & p) {
     { bool first = true; for (auto & [sym, c] : p.by) { fprintf(g_out, "%s\"%s\": %ld", first ? "" : ", ", esc(sym.c_str()).c_str(), c); first = false; } }
     fprintf(g_out, "}, \"hits\": [");
     for (size_t k = 0; k < p.hits.size(); ++k) fprintf(g_out, "%s[%d, %d]", k ? ", " : "", p.hits[k].first, p.hits[k].second);
+    if (p.prev + 1 < p.n_nodes) p.gaps.emplace_back(p.prev + 1, p.n_nodes);   // the tail the engine never called the hook on
+    fprintf(g_out, "], \"gaps\": [");   // node ranges [a, b) the hook was not called on: views, a window taken, or a stock fusion that took them
+    for (size_t k = 0; k < p.gaps.size(); ++k) fprintf(g_out, "%s[%d, %d]", k ? ", " : "", p.gaps[k].first, p.gaps[k].second);
     fprintf(g_out, "]}\n"); fflush(g_out);
-    p.calls = 0; p.hits.clear(); p.by.clear(); p.pending.clear();
+    p.calls = 0; p.hits.clear(); p.gaps.clear(); p.prev = -1; p.by.clear(); p.pending.clear();
 }
 static long dump_graph(const ggml_cgraph * g, std::string & text) {
     std::unordered_map<const ggml_tensor *, int> id;
@@ -118,7 +121,8 @@ int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (
             p.gid = dump_graph(cgraph, p.pending); p.n_nodes = cgraph->n_nodes;
             if (cgraph->n_nodes > 0) memcpy(p.last_ne, cgraph->nodes[cgraph->n_nodes - 1]->ne, sizeof(p.last_ne));
         }
-        p.last_i = i; p.calls++;
+        if (i > p.prev + 1) p.gaps.emplace_back(p.prev + 1, i);
+        p.last_i = p.prev = i; p.calls++;
     }
     const int n = real(stream, cgraph, i, stock, stock_ctx);
     if (n != 0) {
