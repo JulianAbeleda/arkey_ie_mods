@@ -307,10 +307,10 @@ index b40eb5535..f1d1926e6 100644
                  if (dp.result_q) {
                      dp.result_q->emplace_back(cur_p->data, cur_p->data + cur_p->size);
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index 2e2f9c036..df0865045 100644
+index 2e2f9c036..514467d24 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
-@@ -1255,6 +1255,16 @@ struct ggml_backend_sched {
+@@ -1255,6 +1255,22 @@ struct ggml_backend_sched {
      int n_prefetched;
      int prefetch_split;     // the split that reads the prefetched inputs
      int prefetch_backend_id; // the backend that copies them
@@ -324,10 +324,16 @@ index 2e2f9c036..df0865045 100644
 +    int    stage_chunk;
 +    size_t stage_off;
 +    size_t stage_checked, stage_differ;
++    // GGML_SCHED_PACK_INPUTS: a split's staged copies wait here and go as one packed copy + one scatter, see ggml_backend_sched_stage_flush
++    bool   stage_pack;
++    bool (*pack_fn)(ggml_backend_t, const void *, size_t, int, void * const *, const size_t *, const size_t *);
++    int    pack_n;
++    struct ggml_tensor * pack_t  [32];
++    size_t               pack_off[32];
  };
  
  #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
-@@ -2097,6 +2107,64 @@ static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
+@@ -2097,6 +2113,101 @@ static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
          ggml_backend_buffer_is_host(t->buffer);
  }
  
@@ -337,6 +343,30 @@ index 2e2f9c036..df0865045 100644
 +// needed; the snapshot keeps the "copied immediately" contract for the source. A ring chunk is reused only after an
 +// event recorded behind its last copy has completed. =2 also reads every copy back after a sync and compares it.
 +#define GGML_SCHED_STAGE_CHUNK (1u << 20)
++// sched-pack-inputs: the pending staged copies of the current ring chunk as one packed host -> device copy and one scatter
++// (the backend's ggml_backend_cuda_pack_scatter); each is still read from its ring snapshot, so the bytes are the same
++static void ggml_backend_sched_stage_flush(ggml_backend_sched_t sched) {
++    if (sched->pack_n == 0) {
++        return;
++    }
++    const char * base = (const char *) ggml_backend_buffer_get_base(sched->stage_buf) + (size_t) sched->stage_chunk * GGML_SCHED_STAGE_CHUNK;
++    const size_t lo   = sched->pack_off[0];
++    void * dst[32];
++    size_t off[32], len[32];
++    for (int i = 0; i < sched->pack_n; i++) {
++        dst[i] = sched->pack_t[i]->data;
++        off[i] = sched->pack_off[i] - lo;
++        len[i] = ggml_nbytes(sched->pack_t[i]);
++    }
++    const size_t size = off[sched->pack_n - 1] + len[sched->pack_n - 1];
++    if (!sched->pack_fn(sched->stage_backend, base + lo, size, sched->pack_n, dst, off, len)) {
++        for (int i = 0; i < sched->pack_n; i++) {
++            ggml_backend_tensor_set_async(sched->stage_backend, sched->pack_t[i], base + sched->pack_off[i], 0, len[i]);
++        }
++    }
++    sched->pack_n = 0;
++}
++
 +static bool ggml_backend_sched_stage_copy(ggml_backend_sched_t sched, ggml_backend_t backend, ggml_backend_t input_backend,
 +        struct ggml_tensor * input, struct ggml_tensor * input_cpy) {
 +    ggml_backend_buffer_t src_buf = input->view_src ? input->view_src->buffer : input->buffer;
@@ -365,8 +395,13 @@ index 2e2f9c036..df0865045 100644
 +            sched->stage_mode = 0;
 +            return false;
 +        }
++        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : NULL;
++        sched->pack_fn = reg ? (bool (*)(ggml_backend_t, const void *, size_t, int, void * const *, const size_t *, const size_t *))
++            ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_pack_scatter") : NULL;
++        sched->stage_pack = sched->stage_pack && sched->pack_fn != NULL;
 +    }
 +    if (sched->stage_off + n > GGML_SCHED_STAGE_CHUNK) { // next chunk: wait until the copies that last read it are done
++        ggml_backend_sched_stage_flush(sched);
 +        ggml_backend_event_record(sched->stage_events[sched->stage_chunk], backend);
 +        sched->stage_chunk = (sched->stage_chunk + 1) % 4;
 +        ggml_backend_event_synchronize(sched->stage_events[sched->stage_chunk]);
@@ -374,8 +409,16 @@ index 2e2f9c036..df0865045 100644
 +    }
 +    char * stage = (char *) ggml_backend_buffer_get_base(sched->stage_buf) + (size_t) sched->stage_chunk * GGML_SCHED_STAGE_CHUNK + sched->stage_off;
 +    memcpy(stage, input->data, n);
++    if (sched->stage_pack) {
++        sched->pack_t  [sched->pack_n] = input_cpy;
++        sched->pack_off[sched->pack_n] = sched->stage_off;
++        if (++sched->pack_n == 32 || sched->stage_mode == 2) {
++            ggml_backend_sched_stage_flush(sched);
++        }
++    } else {
++        ggml_backend_tensor_set_async(backend, input_cpy, stage, 0, n);
++    }
 +    sched->stage_off += GGML_PAD(n, 256);
-+    ggml_backend_tensor_set_async(backend, input_cpy, stage, 0, n);
 +    if (sched->stage_mode == 2) {
 +        std::vector<char> back(n);
 +        ggml_backend_synchronize(backend);
@@ -392,7 +435,7 @@ index 2e2f9c036..df0865045 100644
  static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
      const int split_backend_id = split->backend_id;
      ggml_backend_t split_backend = sched->backends[split_backend_id];
-@@ -2115,6 +2183,9 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
+@@ -2115,6 +2226,9 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
  
      if (input->flags & GGML_TENSOR_FLAG_INPUT) {
          // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
@@ -402,7 +445,7 @@ index 2e2f9c036..df0865045 100644
          if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
              ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
          } else {
-@@ -2124,6 +2195,10 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
+@@ -2124,6 +2238,10 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
          return;
      }
  
@@ -413,16 +456,27 @@ index 2e2f9c036..df0865045 100644
      // wait for the split backend to finish using the input before overwriting it
      if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
          ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
-@@ -2314,6 +2389,8 @@ ggml_backend_sched_t ggml_backend_sched_new(
+@@ -2239,6 +2357,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+                 ggml_backend_sched_copy_input(sched, split, input);
+             }
+         }
++        ggml_backend_sched_stage_flush(sched);
+         // after the copies above, which may read host memory reused by the copies of the next split
+         // before the weights, whose copy callback may queue large uploads
+         ggml_backend_sched_prefetch_inputs(sched, split_id);
+@@ -2314,6 +2433,11 @@ ggml_backend_sched_t ggml_backend_sched_new(
  
      const char * GGML_SCHED_DEBUG = getenv("GGML_SCHED_DEBUG");
      sched->debug = GGML_SCHED_DEBUG ? atoi(GGML_SCHED_DEBUG) : 0;
 +    const char * GGML_SCHED_ASYNC_INPUTS = getenv("GGML_SCHED_ASYNC_INPUTS");
 +    sched->stage_mode = GGML_SCHED_ASYNC_INPUTS && atoi(GGML_SCHED_ASYNC_INPUTS) > 0 ? (getenv("GGML_SCHED_ASYNC_INPUTS_CHECK") ? 2 : 1) : 0;
++    const char * GGML_SCHED_PACK_INPUTS = getenv("GGML_SCHED_PACK_INPUTS");
++    sched->stage_pack = sched->stage_mode > 0 && GGML_SCHED_PACK_INPUTS && atoi(GGML_SCHED_PACK_INPUTS) > 0;
++    sched->pack_n     = 0;
  
      sched->debug_realloc = 0;
  #ifdef GGML_SCHED_NO_REALLOC
-@@ -2382,6 +2459,11 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
+@@ -2382,6 +2506,11 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
          }
          ggml_backend_event_free(sched->prefetch_events[b]);
      }
@@ -754,7 +808,7 @@ index eb5781e74..bf0a25a5d 100644
  
      return prompt_tokens;
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 0cdc02284..2678bbfda 100644
+index 0cdc02284..bb7ad594a 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -2652,6 +2652,64 @@ private:
@@ -835,7 +889,35 @@ index 0cdc02284..2678bbfda 100644
          // stash the draft's speculative state with the checkpoint
          common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
  
-@@ -4215,6 +4277,10 @@ private:
+@@ -3843,7 +3905,17 @@ private:
+                             slot.spec_ckpt.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                         }
+ 
+-                        slot.spec_prompt = slot.prompt.tokens.get_text_tokens();
++                        // spec-prompt-ref (LLAMA_SPEC_PROMPT_REF=1): without media the slot's tokens are the text tokens
++                        // (only media chunks push LLAMA_TOKEN_NULL), so the draft reads them in place, no O(context) copy
++                        static const bool spec_prompt_ref = [] { const char * e = getenv("LLAMA_SPEC_PROMPT_REF"); return e != nullptr && atoi(e) != 0; }();
++                        static const bool spec_prompt_chk = getenv("LLAMA_SPEC_PROMPT_REF_CHECK") != nullptr;
++                        const bool use_ref = spec_prompt_ref && !slot.prompt.tokens.has_mtmd;
++                        if (use_ref && spec_prompt_chk && slot.prompt.tokens.get_text_tokens() != slot.prompt.tokens.get_tokens()) {
++                            GGML_ABORT("LLAMA_SPEC_PROMPT_REF_CHECK: the slot's tokens differ from its text tokens");
++                        }
++                        if (!use_ref) {
++                            slot.spec_prompt = slot.prompt.tokens.get_text_tokens();
++                        }
+ 
+                         const bool spec_reject = slot.use_spec_rejection();
+ 
+@@ -3852,7 +3924,7 @@ private:
+                             /* .n_max    = */ n_draft_max,
+                             /* .pos0     = */ slot.prompt.tokens.pos_next(),
+                             /* .id_last  = */ slot.sampled,
+-                            /* .prompt   = */ &slot.spec_prompt,
++                            /* .prompt   = */ use_ref ? &slot.prompt.tokens.get_tokens() : &slot.spec_prompt,
+                             /* .result   = */ &slot.spec_draft,
+                             /* .result_q = */ spec_reject ? &slot.spec_draft_q : nullptr,
+                             /* .temp     = */ slot.task->params.sampling.temp,
+@@ -4215,6 +4287,10 @@ private:
                                          SLT_WRN(slot, "%s", "failed to load context checkpoint restored from a slot file\n");
                                          reuse = {};
                                      } else {
@@ -846,7 +928,7 @@ index 0cdc02284..2678bbfda 100644
                                          // restore the draft's speculative state
                                          common_speculative_set_state(spec.get(), slot.id, cur.data_spec);
  
-@@ -4259,6 +4325,17 @@ private:
+@@ -4259,6 +4335,17 @@ private:
  
                          slot.prompt.tokens.keep_first(n_past);
  

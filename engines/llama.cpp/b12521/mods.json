@@ -28,19 +28,20 @@
     "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
+    "src/llama-kv-cache.h",
     "src/llama-kv-stream.cpp",
     "src/llama-kv-stream.h"
    ],
    "lines": {
-    "added": 1346,
-    "removed": 28
+    "added": 1368,
+    "removed": 34
    },
    "budget": {
     "added": 1380,
-    "removed": 28
+    "removed": 34
    },
    "static": {
-    "hunks_removing_stock_lines": 19
+    "hunks_removing_stock_lines": 23
    },
    "budget_raised": [
     {
@@ -102,6 +103,18 @@
      },
      "why": "HIP port (gfx1201): fattn-vec-skip gives a whole warp to each K row on HIP too (the skip decision is per row; RDNA used 2 threads, other HIP 4), a rewrite of the two stock nthreads_KQ_q lines; raw 32-bit shfl/any masks become ggml_cuda_shfl_*/ggml_cuda_any (HIP needs 64-bit masks); cudaMemcpyDefault gets its HIP name. Removed lines are measured (+2), added stays within budget",
      "date": "2026-11-20"
+    },
+    {
+     "from": {
+      "added": 1380,
+      "removed": 28
+     },
+     "to": {
+      "added": 1380,
+      "removed": 34
+     },
+     "why": "kv-pad-pow2 (host-idle track 1: n_kv pads to a power of two for 1-8 token ubatches; +22 lines, 6 rewritten stock lines in get_n_kv / get_n_kv_rows / apply)",
+     "date": "2026-11-22"
     }
    ]
   },
@@ -115,21 +128,22 @@
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
     "ggml/src/ggml.c",
+    "src/llama-context.cpp",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
     "src/models/qwen4exp.cpp"
    ],
    "lines": {
-    "added": 1358,
-    "removed": 74
+    "added": 1426,
+    "removed": 78
    },
    "budget": {
     "added": 1430,
-    "removed": 74
+    "removed": 78
    },
    "static": {
-    "hunks_removing_stock_lines": 30
+    "hunks_removing_stock_lines": 33
    },
    "budget_raised": [
     {
@@ -155,6 +169,18 @@
      },
      "why": "kpool-mask-range joins the indexer module (its extension point: the indexer's graph inputs and scorer; the op's mask type check in ggml.c and the CPU op read the new I32 form)",
      "date": "2026-11-19"
+    },
+    {
+     "from": {
+      "added": 1430,
+      "removed": 74
+     },
+     "to": {
+      "added": 1430,
+      "removed": 78
+     },
+     "why": "kpool-pad-pow2 + kpool-async-upload (host-idle track 1; +68 lines: the pool-list padding, the pinned-stage async upload and the context hand-over of its backends)",
+     "date": "2026-11-22"
     }
    ]
   },
@@ -169,18 +195,19 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "lines": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "budget": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "static": {
-    "hunks_removing_stock_lines": 4
+    "hunks_removing_stock_lines": 5
    },
    "budget_raised": [
     {
@@ -302,6 +329,18 @@
      },
      "why": "kernels/ext-kernels-window sm_count_min / sm_count_max (+4 lines in ext-kernels.cpp): an entry may name the range of SM counts over which the engine runs the kernel its order reproduces; the hook drops it on a device outside the range. Needed for ark_down_c4u1: llama.cpp mmvf.cu ggml_cuda_should_use_mmvf takes MMVF for the 320 x 10240 BF16 gemv at 4 columns only when 320*4*256 <= nsm*6144 (>= 54 SMs on Blackwell); below that the engine runs MMF (tensor cores, another order), so the entry is exact only from 54 SMs (gate-1 audit, boltbeam-runs/gate1-audit-20261122); owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-22"
+    },
+    {
+     "from": {
+      "added": 1021,
+      "removed": 10
+     },
+     "to": {
+      "added": 1085,
+      "removed": 11
+     },
+     "why": "graph-capture-on-change + pack-scatter (host-idle track 1; +64 lines: capture at once on a property change of a warm graph, and the packed upload + scatter proc sched-pack-inputs calls)",
+     "date": "2026-11-22"
     }
    ]
   },
@@ -402,15 +441,15 @@
     "tools/server/server-context.cpp"
    ],
    "lines": {
-    "added": 555,
-    "removed": 3
+    "added": 614,
+    "removed": 5
    },
    "budget": {
-    "added": 590,
-    "removed": 3
+    "added": 615,
+    "removed": 5
    },
    "static": {
-    "hunks_removing_stock_lines": 3
+    "hunks_removing_stock_lines": 5
    },
    "budget_raised": [
     {
@@ -436,6 +475,18 @@
      },
      "why": "rbudget-backend joins the host module (its extension point: host-side work around a decode step; here the sampler's reasoning-budget hand-off, common/sampling.cpp and reasoning-budget.{h,cpp}): +37 added, 2 stock lines rewritten (the condition that turns backend sampling off under a budget, and its assert); budget_rule ceil_105_10 of 555 = 590",
      "date": "2026-11-21"
+    },
+    {
+     "from": {
+      "added": 590,
+      "removed": 3
+     },
+     "to": {
+      "added": 615,
+      "removed": 5
+     },
+     "why": "sched-pack-inputs + spec-prompt-ref (host-idle track 1; +59 lines: deferred staged copies flushed as one packed copy, and the drafter reading the slot tokens in place)",
+     "date": "2026-11-22"
     }
    ]
   }
@@ -640,6 +691,52 @@
     "the compaction becomes two launches (count, write); its chunk counts take n_lists x ceil(n_kv / 4,096) extra int32 in the pooled index buffer"
    ],
    "rule_exceptions": []
+  },
+  {
+   "name": "kv-pad-pow2",
+   "title": "decode ubatches pad n_kv to a power of two (graph changes every 2,048 cells)",
+   "module": "kv",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KV_PAD_POW2",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_KV_PAD_POW2",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "kpool-pad-pow2"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/hostidle-patches-20261122",
+     "numbers": "on b12521, the tested tree storage-tmp/hostidle/tree (the 6 modules with the host-idle rows; build-hi), 256k shipped plan (hostidle-20261122 server line, 11 kernel entries loaded, 0 dropped in every log): check mode (GGML_CUDA_EXT_KERNELS_CHECK, GGML_SCHED_ASYNC_INPUTS_CHECK, LLAMA_KPOOL_INPUT_CHECK, LLAMA_SPEC_PROMPT_REF_CHECK; graphs off), released switches (R) vs + LLAMA_KV_PAD_POW2 LLAMA_KPOOL_PAD_POW2 GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE GGML_SCHED_PACK_INPUTS LLAMA_KPOOL_ASYNC_UPLOAD LLAMA_SPEC_PROMPT_REF (N), turns 1-6 and 106-107, K/V streamed and K/V in VRAM (-ncmoe 8): replies 6/6, 2/2, 6/6, 2/2 equal; ext entries 0 differ, staged copies 0 differ, k-pool rows 0 differ, 0 faults. ident (graphs on, turns 1-116, recorded history): reply sha256 116/116 R vs N, and 116/116 against the hostidle-20261122/ab S run of the released build (build-sm)",
+     "match": {
+      "what": "reply sha256 per turn, N vs R on the tested tree (ident, turns 1-116) and vs the released build-sm (hostidle-20261122/ab S)",
+      "equal": 116,
+      "of": 116
+     }
+    }
+   },
+   "exercised_by": "every ubatch of 1-8 tokens (the speculative verify, the MTP catch-up and drafts, plain decode): n_kv and n_kv_rows pad to max(256, the largest power of 2 <= used cells / 64): 256 below 32k, 2,048 from 131k",
+   "limits": [
+    "ubatches above 8 tokens (prefill, the MTP prompt ubatch) keep the stock 256",
+    "the flash-attention sparse/dense choice is unchanged only while 16 x n_kv_max <= 33,024 (n_kv_max <= 2,064; this model 2,051): the padding differs from stock only above 32,768 used cells, where the stock value is already >= 33,024",
+    "the graph changes shape less often only together with kpool-pad-pow2 (the k-pool list pads every 64 pools = 256 cells otherwise)",
+    "attention and the indexer scan up to pad-1 more masked cells (<= 0.8% at 256k)"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the extra cells are masked (-inf in the mask, never selected); identity rests on the reply pairs and the dispatch proof in the run README"
+    }
+   ]
   },
   {
    "name": "idx-pooled",
@@ -985,6 +1082,94 @@
    "rule_exceptions": []
   },
   {
+   "name": "kpool-pad-pow2",
+   "title": "decode ubatches pad the k-pool list like kv-pad-pow2 pads n_kv",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_PAD_POW2",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_KPOOL_PAD_POW2",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "kv-pad-pow2"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/hostidle-patches-20261122",
+     "numbers": "on b12521, the tested tree storage-tmp/hostidle/tree (the 6 modules with the host-idle rows; build-hi), 256k shipped plan (hostidle-20261122 server line, 11 kernel entries loaded, 0 dropped in every log): check mode (GGML_CUDA_EXT_KERNELS_CHECK, GGML_SCHED_ASYNC_INPUTS_CHECK, LLAMA_KPOOL_INPUT_CHECK, LLAMA_SPEC_PROMPT_REF_CHECK; graphs off), released switches (R) vs + LLAMA_KV_PAD_POW2 LLAMA_KPOOL_PAD_POW2 GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE GGML_SCHED_PACK_INPUTS LLAMA_KPOOL_ASYNC_UPLOAD LLAMA_SPEC_PROMPT_REF (N), turns 1-6 and 106-107, K/V streamed and K/V in VRAM (-ncmoe 8): replies 6/6, 2/2, 6/6, 2/2 equal; ext entries 0 differ, staged copies 0 differ, k-pool rows 0 differ, 0 faults. ident (graphs on, turns 1-116, recorded history): reply sha256 116/116 R vs N, and 116/116 against the hostidle-20261122/ab S run of the released build (build-sm)",
+     "match": {
+      "what": "reply sha256 per turn, N vs R on the tested tree (ident, turns 1-116) and vs the released build-sm (hostidle-20261122/ab S)",
+      "equal": 116,
+      "of": 116
+     }
+    }
+   },
+   "exercised_by": "the QSA k-pool inputs (pool_cells / pool_idxs / pool_mask) of every ubatch of 1-8 tokens: max(64, the largest power of 2 <= n_pool / 64) pools, never past the reserved list",
+   "limits": [
+    "ubatches above 8 tokens keep the stock 64",
+    "the padded pools are masked like the stock padding; their rows are filled and (kpool-input-device) uploaded every forward: up to 1,023 extra rows at 256k"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode of its own: LLAMA_KPOOL_INPUT_CHECK (kpool-input-device) compares every padded row too; identity rests on the reply pairs"
+    }
+   ]
+  },
+  {
+   "name": "kpool-async-upload",
+   "title": "k-pool device rows upload on the compute stream, no host sync",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_ASYNC_UPLOAD",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_KPOOL_ASYNC_UPLOAD",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "kpool-input-device"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/hostidle-patches-20261122",
+     "numbers": "on b12521, the tested tree storage-tmp/hostidle/tree (the 6 modules with the host-idle rows; build-hi), 256k shipped plan (hostidle-20261122 server line, 11 kernel entries loaded, 0 dropped in every log): check mode (GGML_CUDA_EXT_KERNELS_CHECK, GGML_SCHED_ASYNC_INPUTS_CHECK, LLAMA_KPOOL_INPUT_CHECK, LLAMA_SPEC_PROMPT_REF_CHECK; graphs off), released switches (R) vs + LLAMA_KV_PAD_POW2 LLAMA_KPOOL_PAD_POW2 GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE GGML_SCHED_PACK_INPUTS LLAMA_KPOOL_ASYNC_UPLOAD LLAMA_SPEC_PROMPT_REF (N), turns 1-6 and 106-107, K/V streamed and K/V in VRAM (-ncmoe 8): replies 6/6, 2/2, 6/6, 2/2 equal; ext entries 0 differ, staged copies 0 differ, k-pool rows 0 differ, 0 faults. ident (graphs on, turns 1-116, recorded history): reply sha256 116/116 R vs N, and 116/116 against the hostidle-20261122/ab S run of the released build (build-sm)",
+     "match": {
+      "what": "reply sha256 per turn, N vs R on the tested tree (ident, turns 1-116) and vs the released build-sm (hostidle-20261122/ab S)",
+      "equal": 116,
+      "of": 116
+     }
+    }
+   },
+   "exercised_by": "kpool-input-device's per-forward upload of rows [lo, n_pool) (2 pageable ggml_backend_tensor_set + 2 syncs each forward): 2 set_tensor_async from a pinned stage, an event guards the stage",
+   "limits": [
+    "needs LLAMA_KPOOL_INPUT_DEVICE; a memory shared by two contexts keeps the sync copy",
+    "LLAMA_KPOOL_INPUT_CHECK syncs the stream before its read-back"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode of its own: LLAMA_KPOOL_INPUT_CHECK reads back every uploaded row (device vs host) and aborts on a difference"
+    }
+   ]
+  },
+  {
    "name": "ext-kernels",
    "title": "external kernel hook",
    "module": "kernels",
@@ -1237,6 +1422,91 @@
     "conditions": "RTX 5090 at 450 W, one request at a time, 116-turn session to 256k context, MoE model on the engine's qwen4exp graph, the 0.3.32 release 256k command (tune's command with --reasoning-budget 32768, LLAMA_KV_STREAM=52848, LLAMA_RS_ONE_COPY=1, the region-chain-k2560-k10240 manifest), binary = the tested tree plus a failure-only diagnostic log line (GRAPHFIX_DIAG) in both arms; both GGUF files evicted before every arm; 3 alternating pairs",
     "run": "boltbeam-runs/graph-fix-20261121/time256k"
    }
+  },
+  {
+   "name": "graph-capture-on-change",
+   "title": "a warm CUDA graph is captured at once on a property change",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/hostidle-patches-20261122",
+     "numbers": "on b12521, the tested tree storage-tmp/hostidle/tree (the 6 modules with the host-idle rows; build-hi), 256k shipped plan (hostidle-20261122 server line, 11 kernel entries loaded, 0 dropped in every log): check mode (GGML_CUDA_EXT_KERNELS_CHECK, GGML_SCHED_ASYNC_INPUTS_CHECK, LLAMA_KPOOL_INPUT_CHECK, LLAMA_SPEC_PROMPT_REF_CHECK; graphs off), released switches (R) vs + LLAMA_KV_PAD_POW2 LLAMA_KPOOL_PAD_POW2 GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE GGML_SCHED_PACK_INPUTS LLAMA_KPOOL_ASYNC_UPLOAD LLAMA_SPEC_PROMPT_REF (N), turns 1-6 and 106-107, K/V streamed and K/V in VRAM (-ncmoe 8): replies 6/6, 2/2, 6/6, 2/2 equal; ext entries 0 differ, staged copies 0 differ, k-pool rows 0 differ, 0 faults. ident (graphs on, turns 1-116, recorded history): reply sha256 116/116 R vs N, and 116/116 against the hostidle-20261122/ab S run of the released build (build-sm)",
+     "match": {
+      "what": "reply sha256 per turn, N vs R on the tested tree (ident, turns 1-116) and vs the released build-sm (hostidle-20261122/ab S)",
+      "equal": 116,
+      "of": 116
+     }
+    }
+   },
+   "exercised_by": "every property change (n_kv step, turn start) of a graph that replayed at least twice since its last capture: on the measured plan the verify, catch-up and draft graphs",
+   "limits": [
+    "a graph that changes again within 2 replays (prefill ubatches) keeps the stock warm-up reset",
+    "anything a kernel allocates on its first call with a new shape (pool growth, an ext-kernels entry's first scratch) happens inside the capture (relaxed capture mode)",
+    "ext-kernels check mode only runs uncaptured, so with graphs on it sees fewer forwards"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: the capture records the same launches the eager forward runs; identity rests on the reply pairs"
+    }
+   ]
+  },
+  {
+   "name": "pack-scatter",
+   "title": "CUDA proc: one packed upload scattered to several tensors by one kernel",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": null,
+   "check": null,
+   "reads": [],
+   "marker": "ggml_backend_cuda_pack_scatter",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/hostidle-patches-20261122",
+     "numbers": "on b12521, the tested tree storage-tmp/hostidle/tree (the 6 modules with the host-idle rows; build-hi), 256k shipped plan (hostidle-20261122 server line, 11 kernel entries loaded, 0 dropped in every log): check mode (GGML_CUDA_EXT_KERNELS_CHECK, GGML_SCHED_ASYNC_INPUTS_CHECK, LLAMA_KPOOL_INPUT_CHECK, LLAMA_SPEC_PROMPT_REF_CHECK; graphs off), released switches (R) vs + LLAMA_KV_PAD_POW2 LLAMA_KPOOL_PAD_POW2 GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE GGML_SCHED_PACK_INPUTS LLAMA_KPOOL_ASYNC_UPLOAD LLAMA_SPEC_PROMPT_REF (N), turns 1-6 and 106-107, K/V streamed and K/V in VRAM (-ncmoe 8): replies 6/6, 2/2, 6/6, 2/2 equal; ext entries 0 differ, staged copies 0 differ, k-pool rows 0 differ, 0 faults. ident (graphs on, turns 1-116, recorded history): reply sha256 116/116 R vs N, and 116/116 against the hostidle-20261122/ab S run of the released build (build-sm)",
+     "match": {
+      "what": "reply sha256 per turn, N vs R on the tested tree (ident, turns 1-116) and vs the released build-sm (hostidle-20261122/ab S)",
+      "equal": 116,
+      "of": 116
+     }
+    }
+   },
+   "exercised_by": "called by sched-pack-inputs only (ggml_backend_cuda_pack_scatter through the registry's proc address)",
+   "limits": [
+    "up to 32 items and < 4 GiB a call; 16-byte vector copies when source and destination are aligned, bytes otherwise"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "switch",
+     "why": "no switch: an inert proc until sched-pack-inputs (GGML_SCHED_PACK_INPUTS) calls it"
+    },
+    {
+     "rule": "check",
+     "why": "checked through GGML_SCHED_ASYNC_INPUTS_CHECK, which reads back every packed copy"
+    }
+   ],
+   "switch_null_why": "an inert proc: unused unless GGML_SCHED_PACK_INPUTS=1 (sched-pack-inputs) calls it"
   },
   {
    "name": "moe-inplace",
@@ -1802,6 +2072,96 @@
     "conditions": "RTX 5090 at 450 W, one request at a time, the 0.3.32 256k release command (-bs, --reasoning-budget 32768, LLAMA_KV_STREAM=52848, MTP draft head k=3, q8_0 KV); 3 alternating pairs; the cap's own cost measured before was 225.7 -> 209.5 (release-0332-20261120 cap-ab-256k): the switch wins it back",
     "run": "boltbeam-runs/eng-night-20261121/ab-rb-256k"
    }
+  },
+  {
+   "name": "sched-pack-inputs",
+   "title": "a split's staged host inputs go as one packed copy + one scatter kernel",
+   "module": "host",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_SCHED_PACK_INPUTS",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "GGML_SCHED_ASYNC_INPUTS_CHECK",
+    "needs": [
+     "GGML_SCHED_ASYNC_INPUTS",
+     "GGML_SCHED_PACK_INPUTS"
+    ]
+   },
+   "reads": [],
+   "marker": "GGML_SCHED_PACK_INPUTS",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "sched-async-inputs",
+     "pack-scatter"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/hostidle-patches-20261122",
+     "numbers": "on b12521, the tested tree storage-tmp/hostidle/tree (the 6 modules with the host-idle rows; build-hi), 256k shipped plan (hostidle-20261122 server line, 11 kernel entries loaded, 0 dropped in every log): check mode (GGML_CUDA_EXT_KERNELS_CHECK, GGML_SCHED_ASYNC_INPUTS_CHECK, LLAMA_KPOOL_INPUT_CHECK, LLAMA_SPEC_PROMPT_REF_CHECK; graphs off), released switches (R) vs + LLAMA_KV_PAD_POW2 LLAMA_KPOOL_PAD_POW2 GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE GGML_SCHED_PACK_INPUTS LLAMA_KPOOL_ASYNC_UPLOAD LLAMA_SPEC_PROMPT_REF (N), turns 1-6 and 106-107, K/V streamed and K/V in VRAM (-ncmoe 8): replies 6/6, 2/2, 6/6, 2/2 equal; ext entries 0 differ, staged copies 0 differ, k-pool rows 0 differ, 0 faults. ident (graphs on, turns 1-116, recorded history): reply sha256 116/116 R vs N, and 116/116 against the hostidle-20261122/ab S run of the released build (build-sm)",
+     "match": {
+      "what": "reply sha256 per turn, N vs R on the tested tree (ident, turns 1-116) and vs the released build-sm (hostidle-20261122/ab S)",
+      "equal": 116,
+      "of": 116
+     }
+    }
+   },
+   "exercised_by": "every split whose host inputs sched-async-inputs stages (13-15 per forward on the measured plan): one H2D copy of the packed ring range + one scatter launch instead of one cudaMemcpyAsync each",
+   "limits": [
+    "needs GGML_SCHED_ASYNC_INPUTS and a backend with ggml_backend_cuda_pack_scatter (else the per-input copies stay)",
+    "with GGML_SCHED_ASYNC_INPUTS_CHECK each input is flushed and read back alone"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "spec-prompt-ref",
+   "title": "the drafter reads the slot tokens in place, no per-step prompt copy",
+   "module": "host",
+   "engine": "llama.cpp",
+   "base": "b12521",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_SPEC_PROMPT_REF",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_SPEC_PROMPT_REF_CHECK",
+    "needs": [
+     "LLAMA_SPEC_PROMPT_REF"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_SPEC_PROMPT_REF",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/hostidle-patches-20261122",
+     "numbers": "on b12521, the tested tree storage-tmp/hostidle/tree (the 6 modules with the host-idle rows; build-hi), 256k shipped plan (hostidle-20261122 server line, 11 kernel entries loaded, 0 dropped in every log): check mode (GGML_CUDA_EXT_KERNELS_CHECK, GGML_SCHED_ASYNC_INPUTS_CHECK, LLAMA_KPOOL_INPUT_CHECK, LLAMA_SPEC_PROMPT_REF_CHECK; graphs off), released switches (R) vs + LLAMA_KV_PAD_POW2 LLAMA_KPOOL_PAD_POW2 GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE GGML_SCHED_PACK_INPUTS LLAMA_KPOOL_ASYNC_UPLOAD LLAMA_SPEC_PROMPT_REF (N), turns 1-6 and 106-107, K/V streamed and K/V in VRAM (-ncmoe 8): replies 6/6, 2/2, 6/6, 2/2 equal; ext entries 0 differ, staged copies 0 differ, k-pool rows 0 differ, 0 faults. ident (graphs on, turns 1-116, recorded history): reply sha256 116/116 R vs N, and 116/116 against the hostidle-20261122/ab S run of the released build (build-sm)",
+     "match": {
+      "what": "reply sha256 per turn, N vs R on the tested tree (ident, turns 1-116) and vs the released build-sm (hostidle-20261122/ab S)",
+      "equal": 116,
+      "of": 116
+     }
+    }
+   },
+   "exercised_by": "every speculative step of a slot without media: the server copied slot.prompt.tokens.get_text_tokens() (O(context), 0.10-0.21 ms a step at 100k-240k) into the draft params",
+   "limits": [
+    "a slot with media (has_mtmd) keeps the copy",
+    "LLAMA_SPEC_PROMPT_REF_CHECK compares the tokens with get_text_tokens() every step (an O(context) compare) and aborts on a difference"
+   ],
+   "rule_exceptions": []
   }
  ],
  "parked": [

@@ -1614,7 +1614,7 @@ index 426c48741..cbe1d9c79 100644
      llama-kv-cache-dsa.cpp
      llama-kv-cache-dsa-iswa.cpp
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 5dd0e5f02..32edbffb7 100644
+index 5dd0e5f02..be17aae34 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1,4 +1,5 @@
@@ -1675,6 +1675,72 @@ index 5dd0e5f02..32edbffb7 100644
      {
          const size_t memory_size_k = size_k_bytes();
          const size_t memory_size_v = size_v_bytes();
+@@ -1297,15 +1314,30 @@ uint32_t llama_kv_cache::get_stream(llama_seq_id seq_id) const {
+     return seq_to_stream[seq_id];
+ }
+ 
+-uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
++// kv-pad-pow2 (LLAMA_KV_PAD_POW2=1): the padding of n_kv (cells) for a ubatch of n_tokens with n used cells: stock 256,
++// with the switch a ubatch of 1-8 tokens pads to max(256, the largest power of 2 <= n/64).
++// Only ubatches of 1-8 tokens (decode, verify, drafts), whose flash-attention sparse/dense choice
++// (fattn.cu shall_use_sparse, K->ne[1] >= max(4096, 2*min(T,8)*n_kv_max)) is the same as with the stock 256: the padding
++// differs only once n > 32768, where the stock padding is already >= 33024 >= 16*n_kv_max for n_kv_max <= 2064
++static uint32_t llama_kv_pad_cells(uint32_t n, uint32_t n_tokens) {
++    static const bool on = [] { const char * e = getenv("LLAMA_KV_PAD_POW2"); return e != nullptr && atoi(e) != 0; }();
++    uint32_t pad = 256;
++    if (on && n_tokens >= 1 && n_tokens <= 8) {
++        while (pad*2 <= n/64) {
++            pad *= 2;
++        }
++    }
++    return pad;
++}
++
++uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo, uint32_t n_tokens) const {
+     uint32_t result = 0;
+ 
+     // pad the n_kv value so that the graph remains constant across batches and can be reused
+     // note: this also helps some backends with performance (f.ex https://github.com/ggml-org/llama.cpp/pull/16812#issuecomment-3455112220)
+-    const uint32_t n_pad = 256;
+-
+     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+         const auto & cells = v_cells[sinfo.strm[s]];
++        const uint32_t n_pad = llama_kv_pad_cells(cells.used_max_p1(), n_tokens);
+ 
+         result = std::max(std::min(cells.size(), std::max(n_pad, GGML_PAD(cells.used_max_p1(), n_pad))), result);
+     }
+@@ -1385,7 +1417,7 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
+ 
+     const auto & cells = v_cells[0];
+ 
+-    const uint32_t n_pad_cur = 256;
++    const uint32_t n_pad_cur = llama_kv_pad_cells(cells.used_max_p1(), ubatch.n_tokens);
+ 
+     uint32_t n_max = 0;
+ 
+@@ -3035,7 +3067,7 @@ bool llama_kv_cache_context::apply() {
+     }
+ 
+     kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
+-    n_kv      = kv->get_n_kv(sinfos[i_cur]);
++    n_kv      = kv->get_n_kv(sinfos[i_cur], ubatches[i_cur].n_tokens);
+     n_kv_rows = kv->get_n_kv_rows(ubatches[i_cur]);
+ 
+     return true;
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 1b40f6fc4..5aa7815bb 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -192,7 +192,8 @@ public:
+     // graph_build API
+     //
+ 
+-    uint32_t get_n_kv(const slot_info & sinfo) const;
++    // kv-pad-pow2: n_tokens of the ubatch the n_kv is for (0 = stock 256 padding)
++    uint32_t get_n_kv(const slot_info & sinfo, uint32_t n_tokens = 0) const;
+ 
+     // attention over the cells of each sequence of the ubatch instead of the whole cache (see ggml_flash_attn_ext_rows)
+     // the ubatch splits into n_slices groups of tokens with one sequence each
 diff --git a/src/llama-kv-stream.cpp b/src/llama-kv-stream.cpp
 new file mode 100644
 index 000000000..82eac8345

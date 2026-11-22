@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5360,
+   "cap": 5586,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -160,6 +160,14 @@
      "to": 5360,
      "measured": 5360,
      "why": "kernels/ext-kernels-window sm_count_min / sm_count_max (+4 lines in ext-kernels.cpp): an entry may name the range of SM counts over which the engine runs the kernel its order reproduces; the hook drops it on a device outside the range. Needed for ark_down_c4u1: llama.cpp mmvf.cu ggml_cuda_should_use_mmvf takes MMVF for the 320 x 10240 BF16 gemv at 4 columns only when 320*4*256 <= nsm*6144 (>= 54 SMs on Blackwell); below that the engine runs MMF (tensor cores, another order), so the entry is exact only from 54 SMs (gate-1 audit, boltbeam-runs/gate1-audit-20261122); owner standing rule: raise by the measured remainder after review; Owner-approved (standing rule, 2026-11-21)",
+     "date": "2026-11-22",
+     "approved": "Owner-approved 2026-11-21"
+    },
+    {
+     "from": 5360,
+     "to": 5586,
+     "measured": 5586,
+     "why": "host-idle track 1 (+226 lines, 7 rows: kv/kv-pad-pow2, indexer/kpool-pad-pow2, indexer/kpool-async-upload, kernels/graph-capture-on-change, kernels/pack-scatter, host/sched-pack-inputs, host/spec-prompt-ref), measured on the 256k session (boltbeam-runs/hostidle-patches-20261122/ab, 3 pairs, replies 116/116 x12): decode <=66k +3.3 tok/s [+0.6, +6.0], <=262k +5.6 [-4.8, +16.0], warm +7.6 [-9.9, +25.2] (not resolved at depth); ablation (abl, turns 100-116, 2 pairs): the padding rows carry most of it, capture-on-change none; reviewed (adversarial review, no bug found); owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-22",
      "approved": "Owner-approved 2026-11-21"
     }

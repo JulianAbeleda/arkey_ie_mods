@@ -1755,14 +1755,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "8b3bc340e90ad9f2c31b2058eec9ec64552edc46113ed8ed80433d5e456f67f9",
+   "sha256": "a73a11cd4e98d3d6f3052b49cb9e4db6a93ae6e164635815b77ce3c68613495e",
    "lines": {
-    "added": 1346,
-    "removed": 28
+    "added": 1368,
+    "removed": 34
    },
    "budget": {
     "added": 1380,
-    "removed": 28
+    "removed": 34
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1776,6 +1776,7 @@
     "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
+    "src/llama-kv-cache.h",
     "src/llama-kv-stream.cpp",
     "src/llama-kv-stream.h"
    ],
@@ -1816,14 +1817,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "8b3bc340e90ad9f2c31b2058eec9ec64552edc46113ed8ed80433d5e456f67f9",
+   "sha256": "a73a11cd4e98d3d6f3052b49cb9e4db6a93ae6e164635815b77ce3c68613495e",
    "lines": {
-    "added": 1346,
-    "removed": 28
+    "added": 1368,
+    "removed": 34
    },
    "budget": {
     "added": 1380,
-    "removed": 28
+    "removed": 34
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1837,6 +1838,7 @@
     "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
+    "src/llama-kv-cache.h",
     "src/llama-kv-stream.cpp",
     "src/llama-kv-stream.h"
    ],
@@ -1877,14 +1879,14 @@
    ],
    "output": "quality-gated",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "8b3bc340e90ad9f2c31b2058eec9ec64552edc46113ed8ed80433d5e456f67f9",
+   "sha256": "a73a11cd4e98d3d6f3052b49cb9e4db6a93ae6e164635815b77ce3c68613495e",
    "lines": {
-    "added": 1346,
-    "removed": 28
+    "added": 1368,
+    "removed": 34
    },
    "budget": {
     "added": 1380,
-    "removed": 28
+    "removed": 34
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1898,6 +1900,7 @@
     "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
+    "src/llama-kv-cache.h",
     "src/llama-kv-stream.cpp",
     "src/llama-kv-stream.h"
    ],
@@ -1940,14 +1943,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kv.patch",
-   "sha256": "8b3bc340e90ad9f2c31b2058eec9ec64552edc46113ed8ed80433d5e456f67f9",
+   "sha256": "a73a11cd4e98d3d6f3052b49cb9e4db6a93ae6e164635815b77ce3c68613495e",
    "lines": {
-    "added": 1346,
-    "removed": 28
+    "added": 1368,
+    "removed": 34
    },
    "budget": {
     "added": 1380,
-    "removed": 28
+    "removed": 34
    },
    "files": [
     "ggml/src/ggml-cuda/fattn-common.cuh",
@@ -1961,6 +1964,7 @@
     "ggml/src/ggml-cuda/vendors/hip.h",
     "src/CMakeLists.txt",
     "src/llama-kv-cache.cpp",
+    "src/llama-kv-cache.h",
     "src/llama-kv-stream.cpp",
     "src/llama-kv-stream.h"
    ],
@@ -1972,13 +1976,77 @@
    "module": "kv"
   },
   {
+   "id": "llama.cpp/b12521/kv-pad-pow2",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "kv-pad-pow2",
+   "title": "decode ubatches pad n_kv to a power of two (graph changes every 2,048 cells)",
+   "state": "series",
+   "order": 5,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KV_PAD_POW2",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "LLAMA_KV_PAD_POW2",
+   "knobs": [
+    "LLAMA_KV_PAD_POW2"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/kv.patch",
+   "sha256": "a73a11cd4e98d3d6f3052b49cb9e4db6a93ae6e164635815b77ce3c68613495e",
+   "lines": {
+    "added": 1368,
+    "removed": 34
+   },
+   "budget": {
+    "added": 1380,
+    "removed": 34
+   },
+   "files": [
+    "ggml/src/ggml-cuda/fattn-common.cuh",
+    "ggml/src/ggml-cuda/fattn-mma-f16.cuh",
+    "ggml/src/ggml-cuda/fattn-vec.cuh",
+    "ggml/src/ggml-cuda/fattn.cu",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/kv-stream.cu",
+    "ggml/src/ggml-cuda/kv-stream.cuh",
+    "ggml/src/ggml-cuda/top-k-mask.cu",
+    "ggml/src/ggml-cuda/vendors/hip.h",
+    "src/CMakeLists.txt",
+    "src/llama-kv-cache.cpp",
+    "src/llama-kv-cache.h",
+    "src/llama-kv-stream.cpp",
+    "src/llama-kv-stream.h"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "kpool-pad-pow2"
+    ]
+   },
+   "rule_exceptions": [
+    "check"
+   ],
+   "module": "kv"
+  },
+  {
    "id": "llama.cpp/b12521/idx-pooled",
    "engine": "llama.cpp",
    "version": "b12521",
    "name": "idx-pooled",
    "title": "indexer cache keeps pooled keys only",
    "state": "series",
-   "order": 5,
+   "order": 6,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -1999,20 +2067,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
+   "sha256": "c74e093e03a71fc66e18b10dfd62be1b0ff4d73b6246c82e3fc1f98d43353e15",
    "lines": {
-    "added": 1358,
-    "removed": 74
+    "added": 1426,
+    "removed": 78
    },
    "budget": {
     "added": 1430,
-    "removed": 74
+    "removed": 78
    },
    "files": [
     "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
     "ggml/src/ggml.c",
+    "src/llama-context.cpp",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2032,7 +2101,7 @@
    "name": "kpool-input-device",
    "title": "k-pool inputs live on the device",
    "state": "series",
-   "order": 6,
+   "order": 7,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2053,20 +2122,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
+   "sha256": "c74e093e03a71fc66e18b10dfd62be1b0ff4d73b6246c82e3fc1f98d43353e15",
    "lines": {
-    "added": 1358,
-    "removed": 74
+    "added": 1426,
+    "removed": 78
    },
    "budget": {
     "added": 1430,
-    "removed": 74
+    "removed": 78
    },
    "files": [
     "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
     "ggml/src/ggml.c",
+    "src/llama-context.cpp",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2086,7 +2156,7 @@
    "name": "idx-inplace",
    "title": "indexer scores pooled q8_0 keys in place",
    "state": "series",
-   "order": 7,
+   "order": 8,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2109,20 +2179,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
+   "sha256": "c74e093e03a71fc66e18b10dfd62be1b0ff4d73b6246c82e3fc1f98d43353e15",
    "lines": {
-    "added": 1358,
-    "removed": 74
+    "added": 1426,
+    "removed": 78
    },
    "budget": {
     "added": 1430,
-    "removed": 74
+    "removed": 78
    },
    "files": [
     "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
     "ggml/src/ggml.c",
+    "src/llama-context.cpp",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2144,7 +2215,7 @@
    "name": "topk-fused",
    "title": "radix top-k of a few rows in one launch",
    "state": "series",
-   "order": 8,
+   "order": 9,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2168,20 +2239,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
+   "sha256": "c74e093e03a71fc66e18b10dfd62be1b0ff4d73b6246c82e3fc1f98d43353e15",
    "lines": {
-    "added": 1358,
-    "removed": 74
+    "added": 1426,
+    "removed": 78
    },
    "budget": {
     "added": 1430,
-    "removed": 74
+    "removed": 78
    },
    "files": [
     "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
     "ggml/src/ggml.c",
+    "src/llama-context.cpp",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2201,7 +2273,7 @@
    "name": "idx-keys",
    "title": "indexer scores one key a thread for every decode token",
    "state": "series",
-   "order": 9,
+   "order": 10,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2225,20 +2297,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
+   "sha256": "c74e093e03a71fc66e18b10dfd62be1b0ff4d73b6246c82e3fc1f98d43353e15",
    "lines": {
-    "added": 1358,
-    "removed": 74
+    "added": 1426,
+    "removed": 78
    },
    "budget": {
     "added": 1430,
-    "removed": 74
+    "removed": 78
    },
    "files": [
     "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
     "ggml/src/ggml.c",
+    "src/llama-context.cpp",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2260,7 +2333,7 @@
    "name": "topk-rowhist",
    "title": "fused radix top-k sums each pass's row histogram with atomics",
    "state": "series",
-   "order": 10,
+   "order": 11,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2284,20 +2357,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
+   "sha256": "c74e093e03a71fc66e18b10dfd62be1b0ff4d73b6246c82e3fc1f98d43353e15",
    "lines": {
-    "added": 1358,
-    "removed": 74
+    "added": 1426,
+    "removed": 78
    },
    "budget": {
     "added": 1430,
-    "removed": 74
+    "removed": 78
    },
    "files": [
     "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
     "ggml/src/ggml.c",
+    "src/llama-context.cpp",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2319,7 +2393,7 @@
    "name": "kpool-mask-range",
    "title": "indexer pool mask as each token's visible range, not a dense F16 mask",
    "state": "series",
-   "order": 11,
+   "order": 12,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2342,20 +2416,21 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
-   "sha256": "674352ea56b7a6d83d01de715799397edd352733f5b22340574950c1ea7b7592",
+   "sha256": "c74e093e03a71fc66e18b10dfd62be1b0ff4d73b6246c82e3fc1f98d43353e15",
    "lines": {
-    "added": 1358,
-    "removed": 74
+    "added": 1426,
+    "removed": 78
    },
    "budget": {
     "added": 1430,
-    "removed": 74
+    "removed": 78
    },
    "files": [
     "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
     "ggml/src/ggml.c",
+    "src/llama-context.cpp",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
@@ -2369,13 +2444,131 @@
    "module": "indexer"
   },
   {
+   "id": "llama.cpp/b12521/kpool-pad-pow2",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "kpool-pad-pow2",
+   "title": "decode ubatches pad the k-pool list like kv-pad-pow2 pads n_kv",
+   "state": "series",
+   "order": 13,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_PAD_POW2",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "LLAMA_KPOOL_PAD_POW2",
+   "knobs": [
+    "LLAMA_KPOOL_PAD_POW2"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
+   "sha256": "c74e093e03a71fc66e18b10dfd62be1b0ff4d73b6246c82e3fc1f98d43353e15",
+   "lines": {
+    "added": 1426,
+    "removed": 78
+   },
+   "budget": {
+    "added": 1430,
+    "removed": 78
+   },
+   "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
+    "ggml/src/ggml-cuda/lightning-indexer.cu",
+    "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
+    "src/llama-context.cpp",
+    "src/llama-memory-hybrid-idx.cpp",
+    "src/llama-memory-hybrid-idx.h",
+    "src/llama-model.cpp",
+    "src/models/qwen4exp.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "kv-pad-pow2"
+    ]
+   },
+   "rule_exceptions": [
+    "check"
+   ],
+   "module": "indexer"
+  },
+  {
+   "id": "llama.cpp/b12521/kpool-async-upload",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "kpool-async-upload",
+   "title": "k-pool device rows upload on the compute stream, no host sync",
+   "state": "series",
+   "order": 14,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_ASYNC_UPLOAD",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "LLAMA_KPOOL_ASYNC_UPLOAD",
+   "knobs": [
+    "LLAMA_KPOOL_ASYNC_UPLOAD"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/indexer.patch",
+   "sha256": "c74e093e03a71fc66e18b10dfd62be1b0ff4d73b6246c82e3fc1f98d43353e15",
+   "lines": {
+    "added": 1426,
+    "removed": 78
+   },
+   "budget": {
+    "added": 1430,
+    "removed": 78
+   },
+   "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
+    "ggml/src/ggml-cuda/lightning-indexer.cu",
+    "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
+    "src/llama-context.cpp",
+    "src/llama-memory-hybrid-idx.cpp",
+    "src/llama-memory-hybrid-idx.h",
+    "src/llama-model.cpp",
+    "src/models/qwen4exp.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "kpool-input-device"
+    ]
+   },
+   "rule_exceptions": [
+    "check"
+   ],
+   "module": "indexer"
+  },
+  {
    "id": "llama.cpp/b12521/ext-kernels",
    "engine": "llama.cpp",
    "version": "b12521",
    "name": "ext-kernels",
    "title": "external kernel hook",
    "state": "series",
-   "order": 12,
+   "order": 15,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2399,14 +2592,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
+   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
    "lines": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "budget": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2414,6 +2607,7 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2430,7 +2624,7 @@
    "name": "ext-kernels-window",
    "title": "kernel hook takes a window of nodes: one generated kernel for a region",
    "state": "series",
-   "order": 13,
+   "order": 16,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2448,14 +2642,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
+   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
    "lines": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "budget": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2463,6 +2657,7 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2484,7 +2679,7 @@
    "name": "graph-cap",
    "title": "a context keeps CUDA graph executables for at most K graphs",
    "state": "series",
-   "order": 14,
+   "order": 17,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2506,14 +2701,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
+   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
    "lines": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "budget": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2521,6 +2716,7 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2539,7 +2735,7 @@
    "name": "concat-rows",
    "title": "non-contiguous concat: a block takes as many whole rows as fit",
    "state": "series",
-   "order": 15,
+   "order": 18,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2562,14 +2758,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
+   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
    "lines": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "budget": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2577,6 +2773,7 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2593,7 +2790,7 @@
    "name": "graph-cpy-kernel",
    "title": "a captured strided copy is a kernel node, so its CUDA graph updates in place",
    "state": "series",
-   "order": 16,
+   "order": 19,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2614,14 +2811,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
+   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
    "lines": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "budget": {
-    "added": 1021,
-    "removed": 10
+    "added": 1085,
+    "removed": 11
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2629,6 +2826,7 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2641,13 +2839,118 @@
    "module": "kernels"
   },
   {
+   "id": "llama.cpp/b12521/graph-capture-on-change",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "graph-capture-on-change",
+   "title": "a warm CUDA graph is captured at once on a property change",
+   "state": "series",
+   "order": 20,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE",
+   "knobs": [
+    "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
+   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
+   "lines": {
+    "added": 1085,
+    "removed": 11
+   },
+   "budget": {
+    "added": 1085,
+    "removed": 11
+   },
+   "files": [
+    "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/concat.cu",
+    "ggml/src/ggml-cuda/cpy.cu",
+    "ggml/src/ggml-cuda/ext-kernels.cpp",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/graph.cuh",
+    "ggml/src/ggml-cuda/vendors/hip.h"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "check"
+   ],
+   "module": "kernels"
+  },
+  {
+   "id": "llama.cpp/b12521/pack-scatter",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "pack-scatter",
+   "title": "CUDA proc: one packed upload scattered to several tensors by one kernel",
+   "state": "series",
+   "order": 21,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": null,
+   "switch_null_why": "an inert proc: unused unless GGML_SCHED_PACK_INPUTS=1 (sched-pack-inputs) calls it",
+   "check": null,
+   "check_needs": [],
+   "marker": "ggml_backend_cuda_pack_scatter",
+   "knobs": [],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
+   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
+   "lines": {
+    "added": 1085,
+    "removed": 11
+   },
+   "budget": {
+    "added": 1085,
+    "removed": 11
+   },
+   "files": [
+    "ggml/src/ggml-cuda/CMakeLists.txt",
+    "ggml/src/ggml-cuda/concat.cu",
+    "ggml/src/ggml-cuda/cpy.cu",
+    "ggml/src/ggml-cuda/ext-kernels.cpp",
+    "ggml/src/ggml-cuda/ggml-cuda.cu",
+    "ggml/src/ggml-cuda/graph.cuh",
+    "ggml/src/ggml-cuda/vendors/hip.h"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "switch",
+    "check"
+   ],
+   "module": "kernels"
+  },
+  {
    "id": "llama.cpp/b12521/moe-inplace",
    "engine": "llama.cpp",
    "version": "b12521",
    "name": "moe-inplace",
    "title": "prefill reads cached experts in place",
    "state": "series",
-   "order": 17,
+   "order": 22,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2704,7 +3007,7 @@
    "name": "cublas-shared",
    "title": "one cuBLAS handle and workspace per device for every context",
    "state": "series",
-   "order": 18,
+   "order": 23,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2761,7 +3064,7 @@
    "name": "draft-route-count",
    "title": "diagnostic: count the experts the draft's router picks",
    "state": "series",
-   "order": 19,
+   "order": 24,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2818,7 +3121,7 @@
    "name": "mtp-share-head",
    "title": "draft head reads the target's output projection",
    "state": "series",
-   "order": 20,
+   "order": 25,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2878,7 +3181,7 @@
    "name": "graph-slots",
    "title": "draft context keeps a graph per small ubatch size",
    "state": "series",
-   "order": 21,
+   "order": 26,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2939,7 +3242,7 @@
    "name": "rs-one-copy",
    "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
    "state": "series",
-   "order": 22,
+   "order": 27,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3000,7 +3303,7 @@
    "name": "ckpt-pinned",
    "title": "context checkpoints in a pinned pool",
    "state": "series",
-   "order": 23,
+   "order": 28,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3021,14 +3324,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
+   "sha256": "dffdc259bbca5377341bf1635d12bf94b41c322e0f268835aa7e90334f3d5290",
    "lines": {
-    "added": 555,
-    "removed": 3
+    "added": 614,
+    "removed": 5
    },
    "budget": {
-    "added": 590,
-    "removed": 3
+    "added": 615,
+    "removed": 5
    },
    "files": [
     "common/common.cpp",
@@ -3062,7 +3365,7 @@
    "name": "tokenize-incr",
    "title": "server tokenizes only the prompt's new part",
    "state": "series",
-   "order": 24,
+   "order": 29,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3085,14 +3388,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
+   "sha256": "dffdc259bbca5377341bf1635d12bf94b41c322e0f268835aa7e90334f3d5290",
    "lines": {
-    "added": 555,
-    "removed": 3
+    "added": 614,
+    "removed": 5
    },
    "budget": {
-    "added": 590,
-    "removed": 3
+    "added": 615,
+    "removed": 5
    },
    "files": [
     "common/common.cpp",
@@ -3126,7 +3429,7 @@
    "name": "ple-prefetch",
    "title": "per-layer embedding rows read ahead on a thread",
    "state": "series",
-   "order": 25,
+   "order": 30,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3147,14 +3450,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
+   "sha256": "dffdc259bbca5377341bf1635d12bf94b41c322e0f268835aa7e90334f3d5290",
    "lines": {
-    "added": 555,
-    "removed": 3
+    "added": 614,
+    "removed": 5
    },
    "budget": {
-    "added": 590,
-    "removed": 3
+    "added": 615,
+    "removed": 5
    },
    "files": [
     "common/common.cpp",
@@ -3190,7 +3493,7 @@
    "name": "ple-prefetch-step",
    "title": "per-layer embedding rows read ahead as each draft token is known",
    "state": "series",
-   "order": 26,
+   "order": 31,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3211,14 +3514,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
+   "sha256": "dffdc259bbca5377341bf1635d12bf94b41c322e0f268835aa7e90334f3d5290",
    "lines": {
-    "added": 555,
-    "removed": 3
+    "added": 614,
+    "removed": 5
    },
    "budget": {
-    "added": 590,
-    "removed": 3
+    "added": 615,
+    "removed": 5
    },
    "files": [
     "common/common.cpp",
@@ -3254,7 +3557,7 @@
    "name": "sched-async-inputs",
    "title": "scheduler uploads host inputs on the split's stream, no host sync",
    "state": "series",
-   "order": 27,
+   "order": 32,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3277,14 +3580,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
+   "sha256": "dffdc259bbca5377341bf1635d12bf94b41c322e0f268835aa7e90334f3d5290",
    "lines": {
-    "added": 555,
-    "removed": 3
+    "added": 614,
+    "removed": 5
    },
    "budget": {
-    "added": 590,
-    "removed": 3
+    "added": 615,
+    "removed": 5
    },
    "files": [
     "common/common.cpp",
@@ -3318,7 +3621,7 @@
    "name": "rbudget-backend",
    "title": "a reasoning budget keeps backend (GPU) sampling on",
    "state": "series",
-   "order": 28,
+   "order": 33,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3339,14 +3642,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/host.patch",
-   "sha256": "3b204db13fccb78cd78626b91a34b6ff68e13ca7d5bf991255d93d14008a473e",
+   "sha256": "dffdc259bbca5377341bf1635d12bf94b41c322e0f268835aa7e90334f3d5290",
    "lines": {
-    "added": 555,
-    "removed": 3
+    "added": 614,
+    "removed": 5
    },
    "budget": {
-    "added": 590,
-    "removed": 3
+    "added": 615,
+    "removed": 5
    },
    "files": [
     "common/common.cpp",
@@ -3373,6 +3676,138 @@
    "rule_exceptions": [
     "check"
    ],
+   "module": "host"
+  },
+  {
+   "id": "llama.cpp/b12521/sched-pack-inputs",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "sched-pack-inputs",
+   "title": "a split's staged host inputs go as one packed copy + one scatter kernel",
+   "state": "series",
+   "order": 34,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "GGML_SCHED_PACK_INPUTS",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "GGML_SCHED_ASYNC_INPUTS_CHECK",
+   "check_needs": [
+    "GGML_SCHED_ASYNC_INPUTS",
+    "GGML_SCHED_PACK_INPUTS"
+   ],
+   "marker": "GGML_SCHED_PACK_INPUTS",
+   "knobs": [
+    "GGML_SCHED_PACK_INPUTS"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/host.patch",
+   "sha256": "dffdc259bbca5377341bf1635d12bf94b41c322e0f268835aa7e90334f3d5290",
+   "lines": {
+    "added": 614,
+    "removed": 5
+   },
+   "budget": {
+    "added": 615,
+    "removed": 5
+   },
+   "files": [
+    "common/common.cpp",
+    "common/common.h",
+    "common/reasoning-budget.cpp",
+    "common/reasoning-budget.h",
+    "common/sampling.cpp",
+    "common/speculative.cpp",
+    "ggml/src/ggml-backend.cpp",
+    "include/llama.h",
+    "src/llama-mmap.cpp",
+    "src/llama-mmap.h",
+    "src/llama-model.cpp",
+    "src/llama-model.h",
+    "src/models/models.h",
+    "src/models/qwen4exp-prefetch.cpp",
+    "tools/server/server-common.cpp",
+    "tools/server/server-context.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "sched-async-inputs",
+     "pack-scatter"
+    ]
+   },
+   "rule_exceptions": [],
+   "module": "host"
+  },
+  {
+   "id": "llama.cpp/b12521/spec-prompt-ref",
+   "engine": "llama.cpp",
+   "version": "b12521",
+   "name": "spec-prompt-ref",
+   "title": "the drafter reads the slot tokens in place, no per-step prompt copy",
+   "state": "series",
+   "order": 35,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
+    "tag": "b12521"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_SPEC_PROMPT_REF",
+    "on": "1"
+   },
+   "switch_null_why": null,
+   "check": "LLAMA_SPEC_PROMPT_REF_CHECK",
+   "check_needs": [
+    "LLAMA_SPEC_PROMPT_REF"
+   ],
+   "marker": "LLAMA_SPEC_PROMPT_REF",
+   "knobs": [
+    "LLAMA_SPEC_PROMPT_REF"
+   ],
+   "output": "identical",
+   "patch": "engines/llama.cpp/b12521/patches/host.patch",
+   "sha256": "dffdc259bbca5377341bf1635d12bf94b41c322e0f268835aa7e90334f3d5290",
+   "lines": {
+    "added": 614,
+    "removed": 5
+   },
+   "budget": {
+    "added": 615,
+    "removed": 5
+   },
+   "files": [
+    "common/common.cpp",
+    "common/common.h",
+    "common/reasoning-budget.cpp",
+    "common/reasoning-budget.h",
+    "common/sampling.cpp",
+    "common/speculative.cpp",
+    "ggml/src/ggml-backend.cpp",
+    "include/llama.h",
+    "src/llama-mmap.cpp",
+    "src/llama-mmap.h",
+    "src/llama-model.cpp",
+    "src/llama-model.h",
+    "src/models/models.h",
+    "src/models/qwen4exp-prefetch.cpp",
+    "tools/server/server-common.cpp",
+    "tools/server/server-context.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [],
    "module": "host"
   },
   {

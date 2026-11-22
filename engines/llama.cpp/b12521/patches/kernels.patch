@@ -1012,7 +1012,7 @@ index 000000000..2ee075118
 +    return 0;
 +}
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 3d8d30d81..810feb22c 100644
+index 3d8d30d81..0b8981007 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -805,6 +805,10 @@ ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_
@@ -1026,7 +1026,60 @@ index 3d8d30d81..810feb22c 100644
                  it = cuda_graphs.erase(it);
              } else {
                  ++it;
-@@ -3384,17 +3388,106 @@ static int ggml_cuda_graph_chunk_size() {
+@@ -3103,6 +3107,52 @@ static void ggml_backend_cuda_free(ggml_backend_t backend) {
+     delete backend;
+ }
+ 
++// sched-pack-inputs (GGML_SCHED_PACK_INPUTS=1): the scheduler's staged host inputs of one split arrive as one packed
++// host -> device copy into pool scratch and one kernel that scatters each input to its tensor: 2 stream calls, not one per input
++#define GGML_CUDA_PACK_MAX 32
++struct ggml_cuda_pack_items {
++    char *   dst[GGML_CUDA_PACK_MAX];
++    uint32_t off[GGML_CUDA_PACK_MAX];
++    uint32_t n  [GGML_CUDA_PACK_MAX];
++};
++
++static __global__ void k_pack_scatter(const char * __restrict__ src, const ggml_cuda_pack_items it) {
++    const char *   s = src + it.off[blockIdx.x];
++    char *         d = it.dst[blockIdx.x];
++    const uint32_t n = it.n[blockIdx.x];
++    uint32_t i0 = 0;
++    if ((((uintptr_t) d | (uintptr_t) s) & 15) == 0) {
++        for (uint32_t i = threadIdx.x; i < n/16; i += blockDim.x) {
++            ((int4 *) d)[i] = ((const int4 *) s)[i];
++        }
++        i0 = n/16*16;
++    }
++    for (uint32_t i = i0 + threadIdx.x; i < n; i += blockDim.x) {
++        d[i] = s[i];
++    }
++}
++
++static bool ggml_backend_cuda_pack_scatter(ggml_backend_t backend, const void * host, size_t size, int count,
++        void * const * dst, const size_t * off, const size_t * n) {
++    if (count <= 0 || count > GGML_CUDA_PACK_MAX || size >= UINT32_MAX) {
++        return false;
++    }
++    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
++    ggml_cuda_set_device(cuda_ctx->device);
++    ggml_cuda_pack_items it;
++    for (int i = 0; i < count; ++i) {
++        it.dst[i] = (char *) dst[i];
++        it.off[i] = (uint32_t) off[i];
++        it.n[i]   = (uint32_t) n[i];
++    }
++    // stream ordered: the scratch is free again once the kernel ran, like every pool temporary
++    ggml_cuda_pool_alloc<char> buf(cuda_ctx->pool(), size);
++    CUDA_CHECK(cudaMemcpyAsync(buf.get(), host, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
++    k_pack_scatter<<<count, 128, 0, cuda_ctx->stream()>>>(buf.get(), it);
++    CUDA_CHECK(cudaGetLastError());
++    return true;
++}
++
+ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+@@ -3384,17 +3434,106 @@ static int ggml_cuda_graph_chunk_size() {
      return chunk_size;
  }
  
@@ -1133,7 +1186,7 @@ index 3d8d30d81..810feb22c 100644
  #ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
          graph->instances[idx].clusters = ggml_cuda_graph_get_clusters(cuda_graph, cuda_ctx->device);
  #endif // USE_CUDA_GRAPH_CLUSTER_CHECK
-@@ -4371,6 +4464,14 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
+@@ -4371,6 +4510,14 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
      return false;
  }
  
@@ -1148,7 +1201,7 @@ index 3d8d30d81..810feb22c 100644
  // try and fuse nodes and return the number of nodes to skip
  static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
  
-@@ -5372,6 +5473,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+@@ -5372,6 +5519,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                      continue;
                  }
  
@@ -1169,6 +1222,58 @@ index 3d8d30d81..810feb22c 100644
                  int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
  
                  if (nodes_to_skip != 0) {
+@@ -5497,15 +5658,28 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
+                 // else: properties changed or first call - execute directly (use_cuda_graph stays false)
+             } else {
+                 // Post-warmup: normal CUDA graph operation
+-                if (properties_changed) {
++                // capture-on-change: a warm graph that replayed at least twice since its last capture is captured at once
++                // on a property change (an n_kv step, a turn start) instead of one eager forward first; a graph that
++                // changes again before two replays (a prefill) takes the stock warm-up reset
++                static const bool capture_on_change = [] {
++                    const char * e = getenv("GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE");
++                    return e != nullptr && atoi(e) != 0;
++                }();
++                if (properties_changed && capture_on_change && graph->n_stable >= 2 && !graph->instances.empty()) {
++                    use_cuda_graph = true;
++                    cuda_graph_update_required = true;
++                    graph->n_stable = 0;
++                } else if (properties_changed) {
+                     // Properties changed - reset warmup, execute directly until stable again
+                     graph->warmup_complete = false;
++                    graph->n_stable = 0;
+                     if (ggml_cuda_graph_debug_enabled()) {
+                         GGML_LOG_DEBUG("%s: CUDA graph warmup reset\n", __func__);
+                     }
+                 } else {
+                     use_cuda_graph = true;
+                     cuda_graph_update_required = graph->instances.empty();
++                    graph->n_stable += !cuda_graph_update_required;
+                 }
+             }
+         }
+@@ -6917,6 +7091,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+         return (void *)ggml_backend_cuda_comm_init_rank;
+     }
+ #endif // GGML_USE_NCCL
++    if (strcmp(name, "ggml_backend_cuda_pack_scatter") == 0) {
++        return (void *)ggml_backend_cuda_pack_scatter;
++    }
+     if (strcmp(name, "ggml_backend_register_host_buffer") == 0) {
+         return (void *)ggml_backend_cuda_register_host_buffer;
+     }
+diff --git a/ggml/src/ggml-cuda/graph.cuh b/ggml/src/ggml-cuda/graph.cuh
+index 7b9c27789..6816605bf 100644
+--- a/ggml/src/ggml-cuda/graph.cuh
++++ b/ggml/src/ggml-cuda/graph.cuh
+@@ -52,6 +52,7 @@ struct ggml_cuda_graph {
+     std::vector<cudaGraphNode_t> nodes;
+     bool disable_due_to_gpu_arch = false;
+     bool warmup_complete = false;
++    int  n_stable = 0; // capture-on-change (GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE): replays since the last capture
+     uint64_t uid = 0;
+     int64_t last_used_time = 0;
+     struct node_properties {
 diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
 index a43814799..ac3ff797b 100644
 --- a/ggml/src/ggml-cuda/vendors/hip.h
