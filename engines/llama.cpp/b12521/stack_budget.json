@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5351,
+   "cap": 5356,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -146,6 +146,14 @@
      "why": "kernels/ext-kernels-window src_ne_min (+6 lines in ext-kernels.cpp): per-src lower bound for -1 extents so generated exact attention stays above the engine's sparse-dispatch threshold; owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-21",
      "approved": "Owner-approved 2026-11-21"
+    },
+    {
+     "from": 5351,
+     "to": 5356,
+     "measured": 5356,
+     "why": "kernels/ext-kernels-window sm_count (+5 lines in ext-kernels.cpp): an entry may name the SM count its order was derived for; the hook loads it only on a device with that many SMs. Needed so the exact attention entries (the RTX 5090's 170-SM stream-K split) never load on another sm_120 card (review of 0.3.34, owner's coordinator 2026-11-22: an exact entry running in another order is a lossy kernel without its gate); owner standing rule: raise by the measured remainder after review",
+     "date": "2026-11-22",
+     "approved": "Owner-approved 2026-11-22"
     }
    ]
   },

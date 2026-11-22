@@ -161,10 +161,10 @@ index f1f1bf2da..f8b87904e 100644
      } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F8_E4M3) {
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
-index 000000000..275174bab
+index 000000000..5ffd1be39
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -0,0 +1,837 @@
+@@ -0,0 +1,842 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
 +// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N, or a
@@ -343,11 +343,14 @@ index 000000000..275174bab
 +    }
 +}
 +
-+ext_entry ext_load_entry(const json & j, const std::string & dir, const std::string & chip, bool v2) {
++ext_entry ext_load_entry(const json & j, const std::string & dir, const std::string & chip, bool v2, int nsm) {
 +    ext_entry e;
 +    e.id = j.at("id").get<std::string>();
 +    if (j.at("target") != chip) {
 +        throw std::runtime_error("built for " + j.at("target").get<std::string>() + ", this device is " + chip);
++    }
++    if (j.contains("sm_count") && j.at("sm_count").get<int>() != nsm) {   // an order derived from the SM count (a stream-K split)
++        throw std::runtime_error("made for " + std::to_string(j.at("sm_count").get<int>()) + " SMs, this device has " + std::to_string(nsm));
 +    }
 +    const json & ops   = j.at("match").at("ops");
 +    const bool   multi = j.contains("launches");
@@ -649,10 +652,12 @@ index 000000000..275174bab
 +        ext_ok(cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev), "cuDeviceGetAttribute");
 +        ext_ok(cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev), "cuDeviceGetAttribute");
 +        const std::string chip = "nvidia_sm" + std::to_string(10*major + minor);
++        int nsm = 0;
++        ext_ok(cuDeviceGetAttribute(&nsm, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, dev), "cuDeviceGetAttribute");
 +        const std::string dir  = path.substr(0, path.find_last_of('/') + 1);
 +        for (const json & j : m.at("entries")) {
 +            try {
-+                entries.push_back(ext_load_entry(j, dir, chip, v2));
++                entries.push_back(ext_load_entry(j, dir, chip, v2, nsm));
 +                GGML_LOG_WARN("%s: loaded %s (%zu ops)\n", __func__, entries.back().id.c_str(), entries.back().ops.size());
 +            } catch (const std::exception & err) {
 +                GGML_LOG_WARN("%s: entry %s dropped, the engine's own kernel runs: %s\n", __func__, j.value("id", "?").c_str(), err.what());

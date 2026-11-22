@@ -246,6 +246,16 @@ the next one does not start early. Run-time extents (`{"ne": [node, src, dim]}`)
 check mode takes a relative tolerance (`tolerance_mode: rel_max`). Format: boltbeam-runs/hook-r5-20261121/FORMAT.md. Single-launch
 lists give identical text (30/30 turns, every shipped entry 0 differ in check mode); a 3-launch entry from two generated kernels
 runs bit-identical (2,049+ checked windows, 0 differ, 30/30 turns).
+kernels/region-chain-k2560-k10240, exact attention (b12521 only, in the shipped dir: on with the kernel list): two generated launch
+sequences (`gen_attn_sparse_q8_exact2_t4` / `_t3`) replace the verify step's sparse flash attention (q8_0 K/V, head dim 256, 3 or 4
+query tokens, lists of 2,051 cells): the list compaction, the kv-stream step, the tile and the combine. The tile computes in the
+engine's own floating-point order (its stream-K split, per-warp online softmax, the same two tensor-core instructions on the same
+operand slots, the block combine and the cross-block fixup), so its output is bit-equal to stock: check mode at tolerance 0 shows
+0 differences in every checked call from 4.6k to ~240k context (6,147 checks), and a 116-turn 256k session gives identical replies
+(116/116 turns in 6 runs). It matches only where the engine itself takes the sparse kernel (`src_ne_min`: 16,408 cells for 4 query
+tokens, 12,306 for 3); below that stock runs its dense kernel. The split it reproduces is the RTX 5090's (170 SMs), so each entry
+says `sm_count: 170` and the hook loads it only on a card with exactly that many SMs (on any other card it is dropped with its
+reason and the engine's own attention runs). Needs the hook with `src_ne_min` and `sm_count` (this repo from this commit).
 state/mtp-share-head, pending row (b12521 only, part of `LLAMA_MTP_SHARE_HEAD=1`): the draft pairs the first token of a batch with the
 target's last hidden row of the batch before. Stock llama.cpp zeroes that row only when the server starts, so the first token of a
 new prompt is paired with the last row of the previous request. With the shared head that made a reply depend on the request before
