@@ -172,11 +172,11 @@
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "lines": {
-    "added": 1006,
+    "added": 1012,
     "removed": 10
    },
    "budget": {
-    "added": 1006,
+    "added": 1012,
     "removed": 10
    },
    "static": {
@@ -265,6 +265,18 @@
       "removed": 10
      },
      "why": "ext-kernels-window launch sequences (hook R5, +265 lines in ext-kernels.cpp): a kernel-list entry may be a sequence of launches with scratch slots (all loaded before any runs; a cut value that is a live output goes to the node's tensor, others to scratch; read-after-write held rules; PDL off after an outside-state write; relative check tolerance), run-time extent args, bounded -1 wildcards, op_params bytes and a kv-stream step (the engine's own ggml_cuda_kvs_attn through weak references) for the generated sparse attention: 0.51x the stock op's busy time in the engine (39.0 vs 77.1 us, nsys, boltbeam-runs/gen-attention-gpu-20261121 F6, screen); single-launch entries identical (boltbeam-runs/hook-r5-20261121). The budget is the measured lines (owner rule: raise by the measured remainder after review)",
+     "date": "2026-11-21"
+    },
+    {
+     "from": {
+      "added": 1006,
+      "removed": 10
+     },
+     "to": {
+      "added": 1012,
+      "removed": 10
+     },
+     "why": "kernels/ext-kernels-window src_ne_min (+6 lines in ext-kernels.cpp): a per-src lower bound for -1 extents, so a generated exact attention entry does not match below the engine's own sparse-dispatch threshold (fattn.cu ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse), where stock runs the dense kernel in another order; absent key = no bound (manifests without it match as before); the budget is the measured lines (owner rule: raise by the measured remainder after review)",
      "date": "2026-11-21"
     }
    ]
@@ -1035,7 +1047,7 @@
     "GGML_CUDA_EXT_KERNELS_DUMP=<file> appends each graph shape the hook sees (JSON lines) for the region finder; off when unset",
     "launches entries (boltbeam-runs/hook-r5-20261121/FORMAT.md): every launch loads before any runs; a cut value is a live output's tensor or a scratch slot; a launch reads only what an earlier one wrote; PDL off after an outside-state write; a failure after an outside-state write aborts (no stock fallback on damaged inputs)",
     "scratch: cuMemAlloc once per (entry, engine stream), never freed, outside the engine's VRAM plan",
-    "-1 wildcards only in launches entries, ne bounded by ne_max / src_ne_max, nb -1 = dense; block-quantized strided views need 16-byte alignment",
+    "-1 wildcards only in launches entries, ne bounded by ne_max / src_ne_max and from below by src_ne_min (per src, absent = none), nb -1 = dense; block-quantized strided views need 16-byte alignment",
     "kv-stream step: calls the kv module's ggml_cuda_kvs_attn through weak references with a redeclared ggml_cuda_kvs_mask (same layout, static_assert); a no-op without the kv module or with LLAMA_KV_STREAM unset",
     "generated attention entries are not bit-equal (their own rel_max tolerance): at 256k, K/V streamed, check mode: attention v3 (v10ls21) 1 of 3,841 windows over rel 1e-3 (worst 1.09e-3; K/V in VRAM 2, 1.08e-3), v5 287 (worst 4.9e-3; the same with K/V in VRAM: the tile's own envelope, not the kv step)"
    ],

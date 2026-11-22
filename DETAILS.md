@@ -242,7 +242,7 @@ kernels/ext-kernels-window, launch sequences (b12521 only, off unless a kernel l
 attention (compaction, kv-stream step, tile, combine). Every launch loads before any runs; a value cut between launches is a live
 output's own tensor or a scratch slot, and a launch may read only what an earlier one wrote; after a launch that writes outside state
 the next one does not start early. Run-time extents (`{"ne": [node, src, dim]}`), -1 wildcards bounded by the kernel's limit
-(`ne_max`), `op_params_hex` and a kv-stream step (the engine's own page resolve for a streamed K/V cache) serve the attention entry;
+(`ne_max`) and, per src, from below (`src_ne_min`: where the engine's own path changes, e.g. its sparse-attention threshold), `op_params_hex` and a kv-stream step (the engine's own page resolve for a streamed K/V cache) serve the attention entry;
 check mode takes a relative tolerance (`tolerance_mode: rel_max`). Format: boltbeam-runs/hook-r5-20261121/FORMAT.md. Single-launch
 lists give identical text (30/30 turns, every shipped entry 0 differ in check mode); a 3-launch entry from two generated kernels
 runs bit-identical (2,049+ checked windows, 0 differ, 30/30 turns).

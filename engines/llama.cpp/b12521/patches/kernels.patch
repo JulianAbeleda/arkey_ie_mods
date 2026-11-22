@@ -161,10 +161,10 @@ index f1f1bf2da..f8b87904e 100644
      } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F8_E4M3) {
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
-index 000000000..03faefaa5
+index 000000000..275174bab
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -0,0 +1,831 @@
+@@ -0,0 +1,837 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
 +// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N, or a
@@ -229,6 +229,7 @@ index 000000000..03faefaa5
 +    ext_ne                 ne, ne_max = {};   // ne -1 (launches entries only): any extent up to ne_max (the kernel's bound)
 +    std::vector<ggml_type> src_types;
 +    std::vector<ext_ne>    src_ne, src_ne_max;
++    std::vector<ext_ne>    src_ne_min;     // per src: a -1 extent's lower bound (0: none), e.g. where the engine's own path changes
 +    std::vector<int>       src_node;       // per src: the window node it is (0..), or -1 = a tensor from outside
 +    std::vector<std::string> src_ext;      // per outside src: its manifest name; one name = one tensor across the window
 +    int                    uses = 0;       // in-window uses (filled at load)
@@ -392,6 +393,10 @@ index 000000000..03faefaa5
 +        const json src_max = o.value("src_ne_max", json::array());
 +        for (size_t s = 0; s < op.src_types.size(); ++s) {
 +            op.src_ne_max.push_back(ext_shape(s < src_max.size() ? src_max[s] : json::array()));
++        }
++        const json src_min = o.value("src_ne_min", json::array());
++        for (size_t s = 0; s < op.src_types.size(); ++s) {
++            op.src_ne_min.push_back(ext_shape(s < src_min.size() ? src_min[s] : json::array()));
 +        }
 +
 +        bool nb_ok = op.src_nb.size() == op.src_types.size() && (op.nb.empty() || op.nb.size() == GGML_MAX_DIMS);
@@ -662,11 +667,12 @@ index 000000000..03faefaa5
 +    return entries;
 +}
 +
-+bool ext_same(const ggml_tensor * t, ggml_type type, const ext_ne & ne, const std::vector<int64_t> & nb = {}, const ext_ne & ne_max = {}) {
++bool ext_same(const ggml_tensor * t, ggml_type type, const ext_ne & ne, const std::vector<int64_t> & nb = {}, const ext_ne & ne_max = {},
++              const ext_ne & ne_min = {}) {
 +    bool same = t != nullptr && t->type == type;
 +    for (int d = 0; same && d < GGML_MAX_DIMS; ++d) {   // -1: an extent up to its bound / a dense stride (the kernel's ne args)
 +        const bool dense = t->ne[d] == 1 || (int64_t) t->nb[d] == (d == 0 ? (int64_t) ggml_type_size(type) : (int64_t) (t->nb[d - 1] * t->ne[d - 1]));
-+        same = (ne[d] == -1 ? t->ne[d] <= ne_max[d] : t->ne[d] == ne[d]) && (nb.empty() || (nb[d] == -1 ? dense : (int64_t) t->nb[d] == nb[d]));
++        same = (ne[d] == -1 ? t->ne[d] <= ne_max[d] && t->ne[d] >= ne_min[d] : t->ne[d] == ne[d]) && (nb.empty() || (nb[d] == -1 ? dense : (int64_t) t->nb[d] == nb[d]));
 +    }
 +    // strided: the strides exact; a block-quantized view 16-byte aligned (vector row loads), else element-aligned
 +    return same && (nb.empty() ? ggml_is_contiguous(t) && (uintptr_t) t->data % 16 == 0
@@ -716,7 +722,7 @@ index 000000000..03faefaa5
 +        }
 +        w[k] = node;
 +        for (size_t s = 0; s < op.src_types.size(); ++s) {
-+            if (op.src_node[s] >= 0 ? node->src[s] != w[op.src_node[s]] : !ext_same(node->src[s], op.src_types[s], op.src_ne[s], op.src_nb[s], op.src_ne_max[s])) {
++            if (op.src_node[s] >= 0 ? node->src[s] != w[op.src_node[s]] : !ext_same(node->src[s], op.src_types[s], op.src_ne[s], op.src_nb[s], op.src_ne_max[s], op.src_ne_min[s])) {
 +                return {};
 +            }
 +        }

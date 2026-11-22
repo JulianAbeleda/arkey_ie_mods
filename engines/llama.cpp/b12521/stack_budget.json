@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5345,
+   "cap": 5351,
    "set": {
     "measured": 3244,
     "mods": 18,
@@ -136,6 +136,14 @@
      "to": 5345,
      "measured": 5345,
      "why": "kernels/ext-kernels-window launch sequences (hook R5, +265 lines in ext-kernels.cpp): launch sequences + scratch, run-time extents, bounded wildcards, op_params bytes and a kv-stream step, needed by the generated sparse attention (0.51x the stock op's busy time in the engine, 39.0 vs 77.1 us, boltbeam-runs/gen-attention-gpu-20261121 F6, screen) and by multi-reduction regions; single-launch entries identical (boltbeam-runs/hook-r5-20261121); owner standing rule: raise by the measured remainder after review (the owner rule, not a separate sign-off: confirm)",
+     "date": "2026-11-21",
+     "approved": "Owner-approved 2026-11-21"
+    },
+    {
+     "from": 5345,
+     "to": 5351,
+     "measured": 5351,
+     "why": "kernels/ext-kernels-window src_ne_min (+6 lines in ext-kernels.cpp): per-src lower bound for -1 extents so generated exact attention stays above the engine's sparse-dispatch threshold; owner standing rule: raise by the measured remainder after review",
      "date": "2026-11-21",
      "approved": "Owner-approved 2026-11-21"
     }
