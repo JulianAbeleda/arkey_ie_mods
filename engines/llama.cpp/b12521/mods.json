@@ -195,19 +195,18 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "lines": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "budget": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "static": {
-    "hunks_removing_stock_lines": 5
+    "hunks_removing_stock_lines": 4
    },
    "budget_raised": [
     {
@@ -340,6 +339,18 @@
       "removed": 11
      },
      "why": "graph-capture-on-change + pack-scatter (host-idle track 1; +64 lines: capture at once on a property change of a warm graph, and the packed upload + scatter proc sched-pack-inputs calls)",
+     "date": "2026-11-22"
+    },
+    {
+     "from": {
+      "added": 1085,
+      "removed": 11
+     },
+     "to": {
+      "added": 1070,
+      "removed": 10
+     },
+     "why": "graph-capture-on-change dropped (measured no gain: abl, +0.8 tok/s [-9.4, +11.0]); budget lowered to the measured size",
      "date": "2026-11-22"
     }
    ]
@@ -1422,49 +1433,6 @@
     "conditions": "RTX 5090 at 450 W, one request at a time, 116-turn session to 256k context, MoE model on the engine's qwen4exp graph, the 0.3.32 release 256k command (tune's command with --reasoning-budget 32768, LLAMA_KV_STREAM=52848, LLAMA_RS_ONE_COPY=1, the region-chain-k2560-k10240 manifest), binary = the tested tree plus a failure-only diagnostic log line (GRAPHFIX_DIAG) in both arms; both GGUF files evicted before every arm; 3 alternating pairs",
     "run": "boltbeam-runs/graph-fix-20261121/time256k"
    }
-  },
-  {
-   "name": "graph-capture-on-change",
-   "title": "a warm CUDA graph is captured at once on a property change",
-   "module": "kernels",
-   "engine": "llama.cpp",
-   "base": "b12521",
-   "switch": {
-    "kind": "env",
-    "name": "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE",
-    "on": "1"
-   },
-   "check": null,
-   "reads": [],
-   "marker": "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE",
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "output": {
-    "label": "identical",
-    "evidence": {
-     "run": "boltbeam-runs/hostidle-patches-20261122",
-     "numbers": "on b12521, the tested tree storage-tmp/hostidle/tree (the 6 modules with the host-idle rows; build-hi), 256k shipped plan (hostidle-20261122 server line, 11 kernel entries loaded, 0 dropped in every log): check mode (GGML_CUDA_EXT_KERNELS_CHECK, GGML_SCHED_ASYNC_INPUTS_CHECK, LLAMA_KPOOL_INPUT_CHECK, LLAMA_SPEC_PROMPT_REF_CHECK; graphs off), released switches (R) vs + LLAMA_KV_PAD_POW2 LLAMA_KPOOL_PAD_POW2 GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE GGML_SCHED_PACK_INPUTS LLAMA_KPOOL_ASYNC_UPLOAD LLAMA_SPEC_PROMPT_REF (N), turns 1-6 and 106-107, K/V streamed and K/V in VRAM (-ncmoe 8): replies 6/6, 2/2, 6/6, 2/2 equal; ext entries 0 differ, staged copies 0 differ, k-pool rows 0 differ, 0 faults. ident (graphs on, turns 1-116, recorded history): reply sha256 116/116 R vs N, and 116/116 against the hostidle-20261122/ab S run of the released build (build-sm)",
-     "match": {
-      "what": "reply sha256 per turn, N vs R on the tested tree (ident, turns 1-116) and vs the released build-sm (hostidle-20261122/ab S)",
-      "equal": 116,
-      "of": 116
-     }
-    }
-   },
-   "exercised_by": "every property change (n_kv step, turn start) of a graph that replayed at least twice since its last capture: on the measured plan the verify, catch-up and draft graphs",
-   "limits": [
-    "a graph that changes again within 2 replays (prefill ubatches) keeps the stock warm-up reset",
-    "anything a kernel allocates on its first call with a new shape (pool growth, an ext-kernels entry's first scratch) happens inside the capture (relaxed capture mode)",
-    "ext-kernels check mode only runs uncaptured, so with graphs on it sees fewer forwards"
-   ],
-   "rule_exceptions": [
-    {
-     "rule": "check",
-     "why": "no check mode: the capture records the same launches the eager forward runs; identity rests on the reply pairs"
-    }
-   ]
   },
   {
    "name": "pack-scatter",

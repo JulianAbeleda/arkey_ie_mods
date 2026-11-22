@@ -1012,7 +1012,7 @@ index 000000000..2ee075118
 +    return 0;
 +}
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 3d8d30d81..0b8981007 100644
+index 3d8d30d81..1967bdeab 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -805,6 +805,10 @@ ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_
@@ -1222,37 +1222,7 @@ index 3d8d30d81..0b8981007 100644
                  int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
  
                  if (nodes_to_skip != 0) {
-@@ -5497,15 +5658,28 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
-                 // else: properties changed or first call - execute directly (use_cuda_graph stays false)
-             } else {
-                 // Post-warmup: normal CUDA graph operation
--                if (properties_changed) {
-+                // capture-on-change: a warm graph that replayed at least twice since its last capture is captured at once
-+                // on a property change (an n_kv step, a turn start) instead of one eager forward first; a graph that
-+                // changes again before two replays (a prefill) takes the stock warm-up reset
-+                static const bool capture_on_change = [] {
-+                    const char * e = getenv("GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE");
-+                    return e != nullptr && atoi(e) != 0;
-+                }();
-+                if (properties_changed && capture_on_change && graph->n_stable >= 2 && !graph->instances.empty()) {
-+                    use_cuda_graph = true;
-+                    cuda_graph_update_required = true;
-+                    graph->n_stable = 0;
-+                } else if (properties_changed) {
-                     // Properties changed - reset warmup, execute directly until stable again
-                     graph->warmup_complete = false;
-+                    graph->n_stable = 0;
-                     if (ggml_cuda_graph_debug_enabled()) {
-                         GGML_LOG_DEBUG("%s: CUDA graph warmup reset\n", __func__);
-                     }
-                 } else {
-                     use_cuda_graph = true;
-                     cuda_graph_update_required = graph->instances.empty();
-+                    graph->n_stable += !cuda_graph_update_required;
-                 }
-             }
-         }
-@@ -6917,6 +7091,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -6917,6 +7078,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
          return (void *)ggml_backend_cuda_comm_init_rank;
      }
  #endif // GGML_USE_NCCL
@@ -1262,18 +1232,6 @@ index 3d8d30d81..0b8981007 100644
      if (strcmp(name, "ggml_backend_register_host_buffer") == 0) {
          return (void *)ggml_backend_cuda_register_host_buffer;
      }
-diff --git a/ggml/src/ggml-cuda/graph.cuh b/ggml/src/ggml-cuda/graph.cuh
-index 7b9c27789..6816605bf 100644
---- a/ggml/src/ggml-cuda/graph.cuh
-+++ b/ggml/src/ggml-cuda/graph.cuh
-@@ -52,6 +52,7 @@ struct ggml_cuda_graph {
-     std::vector<cudaGraphNode_t> nodes;
-     bool disable_due_to_gpu_arch = false;
-     bool warmup_complete = false;
-+    int  n_stable = 0; // capture-on-change (GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE): replays since the last capture
-     uint64_t uid = 0;
-     int64_t last_used_time = 0;
-     struct node_properties {
 diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
 index a43814799..ac3ff797b 100644
 --- a/ggml/src/ggml-cuda/vendors/hip.h

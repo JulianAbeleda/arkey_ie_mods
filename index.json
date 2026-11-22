@@ -2592,14 +2592,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
+   "sha256": "8e6ea718ddc02b6437e751726b1532a4ab080bb66a19ed5b764fc0e5034926c3",
    "lines": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "budget": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2607,7 +2607,6 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2642,14 +2641,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
+   "sha256": "8e6ea718ddc02b6437e751726b1532a4ab080bb66a19ed5b764fc0e5034926c3",
    "lines": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "budget": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2657,7 +2656,6 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2701,14 +2699,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
+   "sha256": "8e6ea718ddc02b6437e751726b1532a4ab080bb66a19ed5b764fc0e5034926c3",
    "lines": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "budget": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2716,7 +2714,6 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2758,14 +2755,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
+   "sha256": "8e6ea718ddc02b6437e751726b1532a4ab080bb66a19ed5b764fc0e5034926c3",
    "lines": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "budget": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2773,7 +2770,6 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2811,14 +2807,14 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
+   "sha256": "8e6ea718ddc02b6437e751726b1532a4ab080bb66a19ed5b764fc0e5034926c3",
    "lines": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "budget": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2826,62 +2822,6 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/graph.cuh",
-    "ggml/src/ggml-cuda/vendors/hip.h"
-   ],
-   "depends_on": {
-    "apply": [],
-    "run": []
-   },
-   "rule_exceptions": [
-    "check"
-   ],
-   "module": "kernels"
-  },
-  {
-   "id": "llama.cpp/b12521/graph-capture-on-change",
-   "engine": "llama.cpp",
-   "version": "b12521",
-   "name": "graph-capture-on-change",
-   "title": "a warm CUDA graph is captured at once on a property change",
-   "state": "series",
-   "order": 20,
-   "applier": "git_apply",
-   "base": {
-    "kind": "git_commit",
-    "commit": "6f311d7ad63dce97a3ad1deaafb7cc044bb8c26c",
-    "tag": "b12521"
-   },
-   "switch": {
-    "kind": "env",
-    "name": "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE",
-    "on": "1"
-   },
-   "switch_null_why": null,
-   "check": null,
-   "check_needs": [],
-   "marker": "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE",
-   "knobs": [
-    "GGML_CUDA_GRAPH_CAPTURE_ON_CHANGE"
-   ],
-   "output": "identical",
-   "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
-   "lines": {
-    "added": 1085,
-    "removed": 11
-   },
-   "budget": {
-    "added": 1085,
-    "removed": 11
-   },
-   "files": [
-    "ggml/src/ggml-cuda/CMakeLists.txt",
-    "ggml/src/ggml-cuda/concat.cu",
-    "ggml/src/ggml-cuda/cpy.cu",
-    "ggml/src/ggml-cuda/ext-kernels.cpp",
-    "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2900,7 +2840,7 @@
    "name": "pack-scatter",
    "title": "CUDA proc: one packed upload scattered to several tensors by one kernel",
    "state": "series",
-   "order": 21,
+   "order": 20,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -2915,14 +2855,14 @@
    "knobs": [],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "bdc896117b5dbf6cae077f0f8dc28fcb49b2d4b874864898f0607899aee269fa",
+   "sha256": "8e6ea718ddc02b6437e751726b1532a4ab080bb66a19ed5b764fc0e5034926c3",
    "lines": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "budget": {
-    "added": 1085,
-    "removed": 11
+    "added": 1070,
+    "removed": 10
    },
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -2930,7 +2870,6 @@
     "ggml/src/ggml-cuda/cpy.cu",
     "ggml/src/ggml-cuda/ext-kernels.cpp",
     "ggml/src/ggml-cuda/ggml-cuda.cu",
-    "ggml/src/ggml-cuda/graph.cuh",
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "depends_on": {
@@ -2950,7 +2889,7 @@
    "name": "moe-inplace",
    "title": "prefill reads cached experts in place",
    "state": "series",
-   "order": 22,
+   "order": 21,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3007,7 +2946,7 @@
    "name": "cublas-shared",
    "title": "one cuBLAS handle and workspace per device for every context",
    "state": "series",
-   "order": 23,
+   "order": 22,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3064,7 +3003,7 @@
    "name": "draft-route-count",
    "title": "diagnostic: count the experts the draft's router picks",
    "state": "series",
-   "order": 24,
+   "order": 23,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3121,7 +3060,7 @@
    "name": "mtp-share-head",
    "title": "draft head reads the target's output projection",
    "state": "series",
-   "order": 25,
+   "order": 24,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3181,7 +3120,7 @@
    "name": "graph-slots",
    "title": "draft context keeps a graph per small ubatch size",
    "state": "series",
-   "order": 26,
+   "order": 25,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3242,7 +3181,7 @@
    "name": "rs-one-copy",
    "title": "one recurrent state plane; accepted draft tokens replayed in the next graph",
    "state": "series",
-   "order": 27,
+   "order": 26,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3303,7 +3242,7 @@
    "name": "ckpt-pinned",
    "title": "context checkpoints in a pinned pool",
    "state": "series",
-   "order": 28,
+   "order": 27,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3365,7 +3304,7 @@
    "name": "tokenize-incr",
    "title": "server tokenizes only the prompt's new part",
    "state": "series",
-   "order": 29,
+   "order": 28,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3429,7 +3368,7 @@
    "name": "ple-prefetch",
    "title": "per-layer embedding rows read ahead on a thread",
    "state": "series",
-   "order": 30,
+   "order": 29,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3493,7 +3432,7 @@
    "name": "ple-prefetch-step",
    "title": "per-layer embedding rows read ahead as each draft token is known",
    "state": "series",
-   "order": 31,
+   "order": 30,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3557,7 +3496,7 @@
    "name": "sched-async-inputs",
    "title": "scheduler uploads host inputs on the split's stream, no host sync",
    "state": "series",
-   "order": 32,
+   "order": 31,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3621,7 +3560,7 @@
    "name": "rbudget-backend",
    "title": "a reasoning budget keeps backend (GPU) sampling on",
    "state": "series",
-   "order": 33,
+   "order": 32,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3685,7 +3624,7 @@
    "name": "sched-pack-inputs",
    "title": "a split's staged host inputs go as one packed copy + one scatter kernel",
    "state": "series",
-   "order": 34,
+   "order": 33,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -3753,7 +3692,7 @@
    "name": "spec-prompt-ref",
    "title": "the drafter reads the slot tokens in place, no per-step prompt copy",
    "state": "series",
-   "order": 35,
+   "order": 34,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
