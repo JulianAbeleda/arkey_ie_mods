@@ -581,6 +581,7 @@
   {
    "id": "ark_down_c4u1",
    "target": "nvidia_sm120",
+   "sm_count_min": 54,
    "match": {
     "ops": [
      {

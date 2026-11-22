@@ -161,10 +161,10 @@ index f1f1bf2da..f8b87904e 100644
      } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F8_E4M3) {
 diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
 new file mode 100644
-index 000000000..5ffd1be39
+index 000000000..2ee075118
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/ext-kernels.cpp
-@@ -0,0 +1,842 @@
+@@ -0,0 +1,846 @@
 +// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
 +// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
 +// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N, or a
@@ -351,6 +351,10 @@ index 000000000..5ffd1be39
 +    }
 +    if (j.contains("sm_count") && j.at("sm_count").get<int>() != nsm) {   // an order derived from the SM count (a stream-K split)
 +        throw std::runtime_error("made for " + std::to_string(j.at("sm_count").get<int>()) + " SMs, this device has " + std::to_string(nsm));
++    }
++    const int sm_lo = j.value("sm_count_min", 1), sm_hi = j.value("sm_count_max", 1 << 30);   // the engine picks its kernel by SM count
++    if (nsm < sm_lo || nsm > sm_hi) {
++        throw std::runtime_error("made for " + std::to_string(sm_lo) + " to " + std::to_string(sm_hi) + " SMs, this device has " + std::to_string(nsm));
 +    }
 +    const json & ops   = j.at("match").at("ops");
 +    const bool   multi = j.contains("launches");

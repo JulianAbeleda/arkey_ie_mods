@@ -2399,13 +2399,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d00c2962c1bc30e2d00faaac54e9f8e34295c909cdae51c9752327f8606d58e",
+   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
    "lines": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "budget": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "files": [
@@ -2448,13 +2448,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d00c2962c1bc30e2d00faaac54e9f8e34295c909cdae51c9752327f8606d58e",
+   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
    "lines": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "budget": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "files": [
@@ -2506,13 +2506,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d00c2962c1bc30e2d00faaac54e9f8e34295c909cdae51c9752327f8606d58e",
+   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
    "lines": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "budget": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "files": [
@@ -2562,13 +2562,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d00c2962c1bc30e2d00faaac54e9f8e34295c909cdae51c9752327f8606d58e",
+   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
    "lines": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "budget": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "files": [
@@ -2614,13 +2614,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12521/patches/kernels.patch",
-   "sha256": "4d00c2962c1bc30e2d00faaac54e9f8e34295c909cdae51c9752327f8606d58e",
+   "sha256": "db54bc0ee94992b066fc0857088a74114c53daff4042434bc382ab4ec71d0df7",
    "lines": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "budget": {
-    "added": 1017,
+    "added": 1021,
     "removed": 10
    },
    "files": [
@@ -3565,7 +3565,7 @@
    "hook": "llama.cpp/b12521/ext-kernels",
    "dir": "engines/llama.cpp/b12521/kernels/bf16-smallm-gemv-k10240/",
    "files": {
-    "manifest.json": "c18ff61f089b2cb55c313397988aeb0979384a494a906a4ec89e8c1a7d876923",
+    "manifest.json": "4fc9a6a092ea680187737f8c9d093ee0356efd88988468c4cd4034b6e9998de8",
     "ark_inject_c1u1.cu": "1653e02baeeb79fcb59d088e87df7ae294d171ac9bdf9c036f7d40fab19e035e",
     "ark_inject_c1u1.cubin": "d3a4bd684df58d05eecd25b20657fae7a1a5d4f615edfe8edc2a4e03d64c5959",
     "ark_down_c4u1.cu": "5c6641fa9e0a73c0b584e377a6bc28207d2879d4dc6871c75978502988fe233f",
@@ -3582,7 +3582,7 @@
    "hook": "llama.cpp/b12521/ext-kernels-window",
    "dir": "engines/llama.cpp/b12521/kernels/region-chain-k2560-k10240/",
    "files": {
-    "manifest.json": "fb5956e6b71966051dd7fb7524ddf39a62d6317643bc340dab50a63cac48e5cf",
+    "manifest.json": "abfcc9ab3f9fbd1bca52cb614fdc90ba51e08822b627936f6cf32a368b420ebb",
     "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
     "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
     "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
@@ -3619,7 +3619,7 @@
    "hook": "llama.cpp/b12521/ext-kernels-window",
    "dir": "engines/llama.cpp/b12521/kernels/region-state-copy-k10240/",
    "files": {
-    "manifest.json": "154c3dad7804870c59b68b5c65b7ee9c05502a22460cfc90fe15e760a50f4eb1",
+    "manifest.json": "dca73ca0db699b6b2305e55dea2174cdb0085fd6ba052de149b54a12f2c46648",
     "region_state_copy_front.cu": "b2e3abfb4c040ecce761f0ffd3739677e2795183bb59462ecd6ca8ed83507609",
     "region_state_copy_front.cubin": "6a25ed2f0174257339df8a8b05ee41367828146033f13deae6dc52feb5be6f51"
    },
