@@ -59,15 +59,16 @@ static std::string rule_text(int line) {  // the if (...) that ends at this retu
 template <class F> static auto load_entry(F f, const json & j, const std::string & d, const std::string & c, bool v2, int nsm, int) -> decltype(f(j, d, c, v2, nsm)) { return f(j, d, c, v2, nsm); }
 template <class F> static auto load_entry(F f, const json & j, const std::string & d, const std::string & c, bool v2, int, long) -> decltype(f(j, d, c, v2)) { return f(j, d, c, v2); }
 // the shipped matcher's ext_op has no strides (every node contiguous); the next one has
-template <class O> static auto op_nb(const O & o, int) -> decltype(o.nb) { return o.nb; }
+template <class O> static auto op_nb(const O & o, int) -> decltype(o.nb.begin(), std::vector<size_t>()) { return std::vector<size_t>(o.nb.begin(), o.nb.end()); }   // int64 strides since 3e8d1e9 (-1: any)
 template <class O> static std::vector<size_t> op_nb(const O &, long) { return {}; }
+static bool nb_same(const size_t * nb, const std::vector<size_t> & o) { for (int d = 0; d < 4; ++d) if (d < (int) o.size() && o[d] != (size_t) -1 && o[d] != nb[d]) return false; return true; }   // -1: dense in that dim (any here)
 // which sub-test of the per-op rule failed (explanation only: the verdict is the matcher's)
 static std::string explain_op(const ext_op & op, const ggml_tensor * t, int k) {
     char b[512]; const std::vector<size_t> onb = op_nb(op, 0);
     if (t->op != op.op) { snprintf(b, sizeof(b), "op %d: graph has %s, entry %s", k, ggml_op_name(t->op), ggml_op_name(op.op)); return b; }
     if (t->type != op.type) { snprintf(b, sizeof(b), "op %d (%s): type %s, entry %s", k, ggml_op_name(t->op), ggml_type_name(t->type), ggml_type_name(op.type)); return b; }
     if (memcmp(t->ne, op.ne.data(), sizeof(t->ne)) != 0) { snprintf(b, sizeof(b), "op %d (%s): shape %s, entry %s", k, ggml_op_name(t->op), ne_str(t->ne).c_str(), ne_str(op.ne.data()).c_str()); return b; }
-    if (onb.empty() ? !ggml_is_contiguous(t) : memcmp(t->nb, onb.data(), sizeof(t->nb)) != 0) { snprintf(b, sizeof(b), "op %d (%s): strides %s, entry %s", k, ggml_op_name(t->op), nb_str(t->nb).c_str(), onb.empty() ? "contiguous" : nb_str(onb.data()).c_str()); return b; }
+    if (onb.empty() ? !ggml_is_contiguous(t) : !nb_same(t->nb, onb)) { snprintf(b, sizeof(b), "op %d (%s): strides %s, entry %s", k, ggml_op_name(t->op), nb_str(t->nb).c_str(), onb.empty() ? "contiguous" : nb_str(onb.data()).c_str()); return b; }
     if ((uintptr_t) t->data % (onb.empty() ? 16 : ggml_type_size(op.type)) != 0) { snprintf(b, sizeof(b), "op %d (%s): data address %p not aligned", k, ggml_op_name(t->op), t->data); return b; }
     if (op.unary >= 0 && (int) ggml_get_unary_op(t) != op.unary) { snprintf(b, sizeof(b), "op %d: another unary op", k); return b; }
     if (k > 0 && (t->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) { snprintf(b, sizeof(b), "op %d (%s): node not flagged COMPUTE", k, ggml_op_name(t->op)); return b; }
