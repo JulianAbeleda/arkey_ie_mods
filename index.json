@@ -3582,7 +3582,7 @@
    "hook": "llama.cpp/b12521/ext-kernels-window",
    "dir": "engines/llama.cpp/b12521/kernels/region-chain-k2560-k10240/",
    "files": {
-    "manifest.json": "9f09dbc9e9f3d87acd39a4107d2026325ddb92028e5a0e8c8bbc9d119044f08f",
+    "manifest.json": "98cbe436961c5c128f844664f80fd3d07767efea5df66c36964225c58e8a7be4",
     "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
     "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
     "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
@@ -3590,11 +3590,27 @@
     "region_shexp_gate.cu": "9431445de298fe847daa40aa2782c90d1a98122b318fdf99884c0948fb8cb1e8",
     "region_shexp_gate.cubin": "04710377a8db741ad3739758e243aeaf242e6e07da2c4de8b3527df49d6d3e56",
     "region_gdn_gate.cu": "0b8f21be17958e7921434653b8c24db6d0045fb9b37659defe30f8a860476c94",
-    "region_gdn_gate.cubin": "5ec83b3b0a89acbc34b649b401ebf803e74e8a2274fb632bc79f071a78e7fb3d"
+    "region_gdn_gate.cubin": "5ec83b3b0a89acbc34b649b401ebf803e74e8a2274fb632bc79f071a78e7fb3d",
+    "sparse_exact_combine_72_256_r14.cu": "4ac7955b2e7382c5f60120b10ca846e439cc410307fc75b58c866e01200cc5a2",
+    "sparse_exact_combine_72_256_r14.cubin": "06c39d84da984619645d99f3c63a3069392d2902a60b520fd6e101935335baaf",
+    "sparse_exact_combine_96_256_r10.cu": "4856efedd255066ed47205ee5dba761b2005749a86d76a3bc1a50bb4c08263c0",
+    "sparse_exact_combine_96_256_r10.cubin": "21fa81ea9a2c863a326c2d7ad6d6aaa2811b7aeb6471faa7d323f2a64ba1aed2",
+    "sparse_mask_count_t3.cu": "9e209440e58ab2e93cff95f54aefb6e2b1a82d17da97b3221c8b443d20447b6f",
+    "sparse_mask_count_t3.cubin": "253ee4f3571713482369e4a337a4e56aba8569b73e8df6821fc122761e9820ac",
+    "sparse_mask_count_t4.cu": "6e6a0085a37383433bb0caf84dbb4908406eb9be19fd7b3f643a1dc2becf3114",
+    "sparse_mask_count_t4.cubin": "1ba7660c0cfb806b35902ae2f7a6747d2db779f294a4bd6d18e8114fb04e74dc",
+    "sparse_mask_write_t3_l2051.cu": "6b33c95c2e52c79def2eb123d91299a4dc4e6135b15f3cd9214bf3441679653a",
+    "sparse_mask_write_t3_l2051.cubin": "82e636b7ff1295bcea0831e5402d1d9ab795b172f8d8f44bbddc463e665335b8",
+    "sparse_mask_write_t4_l2051.cu": "458e61ff0d62573eaceb21d8a406d22155062bb1cb09a0784fe55e19f9ae86fd",
+    "sparse_mask_write_t4_l2051.cubin": "a3c39732103a161247d3aeca016f3bf0479c1f180ed35f27faf8633bb80b4038",
+    "sparse_q8_exact2_t3_h24_2_d256_l2051_r14.cu": "a84fad3f14974b08cc6bab2134b98ae9c2023a52eff0ee888a34d4020d8398d5",
+    "sparse_q8_exact2_t3_h24_2_d256_l2051_r14.cubin": "f59ca3fc8798ac9c7e2b9d848094909944897d54a1b3a3c626c482f09712a3d9",
+    "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cu": "54d351e0afdc3cf21f61f7a7455bb166acec018908f14afab5d933468d32ed11",
+    "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cubin": "80c576ba88a6864026ec02e4c511129736543b51b86e182417c36a19829b1bce"
    },
    "output": "identical",
-   "lines": 185,
-   "budget": 200
+   "lines": 3576,
+   "budget": 3760
   },
   {
    "id": "llama.cpp/b12521/kernels/region-state-copy-k10240",
@@ -3603,7 +3619,7 @@
    "hook": "llama.cpp/b12521/ext-kernels-window",
    "dir": "engines/llama.cpp/b12521/kernels/region-state-copy-k10240/",
    "files": {
-    "manifest.json": "3b5b81f79701a3049923c1be9f043c649931f2854b0353c4f4e0eb09558fe78d",
+    "manifest.json": "36eed0d5a2c8511bf81a2dac236f3bf9d7f752e4848dea80ff64bdb341da667b",
     "region_state_copy_front.cu": "b2e3abfb4c040ecce761f0ffd3739677e2795183bb59462ecd6ca8ed83507609",
     "region_state_copy_front.cubin": "6a25ed2f0174257339df8a8b05ee41367828146033f13deae6dc52feb5be6f51"
    },
