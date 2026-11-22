@@ -107,7 +107,8 @@ void __cudaRegisterVar(void **, char *, char *, const char *, int, size_t, int, 
 CUresult cuDeviceGet(CUdevice * d, int) { *d = 0; return CUDA_SUCCESS; }
 CUresult cuCtxGetDevice(CUdevice * d) { *d = 0; return CUDA_SUCCESS; }
 CUresult cuDeviceGetAttribute(int * v, CUdevice_attribute a, CUdevice) {
-    *v = a == CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED ? 1 : a == CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR ? 12 : 0; return CUDA_SUCCESS;
+    *v = a == CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED ? 1 : a == CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR ? 12
+       : a == CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT ? 170 : 0; return CUDA_SUCCESS;   // the SM count cudaGetDeviceProperties states (the hook's sm_count key reads it)
 }
 CUresult cuGetErrorString(CUresult, const char ** s) { *s = "cudastub"; return CUDA_SUCCESS; }
 CUresult cuMemGetAllocationGranularity(size_t * g, const CUmemAllocationProp *, CUmemAllocationGranularity_flags) { *g = (size_t) 2 << 20; return CUDA_SUCCESS; }

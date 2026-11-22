@@ -55,6 +55,9 @@ static std::string rule_text(int line) {  // the if (...) that ends at this retu
     for (const char * junk : { " ext_gate_k = k; ext_gate_s = -1;", " ext_gate_s = (int) s;", " ext_gate_o = o;" }) for (size_t p; (p = t.find(junk)) != std::string::npos;) t.erase(p, strlen(junk));
     return t;
 }
+// the loader before the sm_count key takes (entry, dir, chip, v2); from it on, also the device's SM count (the stub's, as the engine reads it)
+template <class F> static auto load_entry(F f, const json & j, const std::string & d, const std::string & c, bool v2, int nsm, int) -> decltype(f(j, d, c, v2, nsm)) { return f(j, d, c, v2, nsm); }
+template <class F> static auto load_entry(F f, const json & j, const std::string & d, const std::string & c, bool v2, int, long) -> decltype(f(j, d, c, v2)) { return f(j, d, c, v2); }
 // the shipped matcher's ext_op has no strides (every node contiguous); the next one has
 template <class O> static auto op_nb(const O & o, int) -> decltype(o.nb) { return o.nb; }
 template <class O> static std::vector<size_t> op_nb(const O &, long) { return {}; }
@@ -130,9 +133,10 @@ int main(int argc, char ** argv) {
     json entries_json = json::array();
     const bool v2 = m.at("schema") == "boltbeam.kernel_manifest.v2";
     std::vector<ext_entry> entries;
+    int nsm = 0; cuDeviceGetAttribute(&nsm, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, 0);   // the stub runtime's device, the one the dry run's engine saw
     printf("hook_gate: matcher %s\nmanifest %s\n", GATE_SRC, man.c_str());
     for (const json & j : m.at("entries")) {
-        try { entries.push_back(ext_load_entry(j, mdir, j.at("target").get<std::string>(), v2));
+        try { entries.push_back(load_entry(ext_load_entry, j, mdir, j.at("target").get<std::string>(), v2, nsm, 0));
               entries_json.push_back({{"id", j.at("id")}, {"kernel_sha256", j.at("kernel").at("sha256")}, {"placeholder", j.at("kernel").value("placeholder", false)}, {"ops", j.at("match").at("ops").size()}}); }
         catch (const std::exception & err) { printf("  entry %s DROPPED at load: %s\n", j.value("id", "?").c_str(), err.what()); }
     }
