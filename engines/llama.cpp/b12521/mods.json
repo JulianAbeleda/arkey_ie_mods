@@ -1951,37 +1951,37 @@
    "dir": "kernels/bf16-smallm-gemv-k10240/",
    "hook": "ext-kernels",
    "files": {
-    "manifest.json": "9006ae7cb164fc2103ec11fe1ca64df404565d303ab5a142b043147a7efd0b62",
+    "manifest.json": "4fc9a6a092ea680187737f8c9d093ee0356efd88988468c4cd4034b6e9998de8",
     "ark_inject_c1u1.cu": "1653e02baeeb79fcb59d088e87df7ae294d171ac9bdf9c036f7d40fab19e035e",
     "ark_inject_c1u1.cubin": "d3a4bd684df58d05eecd25b20657fae7a1a5d4f615edfe8edc2a4e03d64c5959",
-    "ark_down_c2r4u5.cu": "de74f06b438233dfcdf69b8e81a5f9a23ba532d4f1c8d1750a17bfe5f036377b",
-    "ark_down_c2r4u5.cubin": "16cb49e906488f4ca7d3c4be7a064e42402d041f7da77537c892ca28ee507aaf"
+    "ark_down_c4u1.cu": "5c6641fa9e0a73c0b584e377a6bc28207d2879d4dc6871c75978502988fe233f",
+    "ark_down_c4u1.cubin": "4e0049985bb45e151a975b49bd06f693bbc1d4e905bf80fec74ade5d059b7ebf"
    },
    "source": [
     "ark_inject_c1u1.cu",
-    "ark_down_c2r4u5.cu"
+    "ark_down_c4u1.cu"
    ],
-   "lines": 221,
-   "budget": 240,
+   "lines": 108,
+   "budget": 120,
    "output": {
     "label": "untested",
     "evidence": {
      "run": "boltbeam-runs/arkey-pdl-20261115; boltbeam-runs/guardrails-20261118 (ab-xcheck)",
-     "numbers": "on b12521 not checked: in ab-xcheck the region manifest's inject window replaces ark_inject_c1u1 and ark_down_c4u1 made no check report; files byte-equal to 1.0.0's, the manifest differs only in engine.builds. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (identical): hook check mode on these files (graphs off, tolerance 0, turns past 98.6k context): inject 70,913 checks, down 71,425 checks, 0 differences, worst 0; switch on vs off: text and n identical 59/59 and draft counts 59/59 in every on arm; with -lv 5 every draft candidate (65,673 lines) and accepted line (7,259) identical (boltbeam-runs/bf16-hc-kernels-20261115); ark_down_c2r4u5 (diwa-gen 1727a3fa3, recipe tests/fixtures/region_chain/shipped_windows.json:ark_down, the region generator's launch-shape axis: 2 columns x 4 rows a block, unroll 5, order row llama.cpp.mmvf.bf16_f32.b256 as explicit FMAs, -use_fast_math -fmad=false) replaces ark_down_c4u1 on the 320 x 10240 BF16 gemv at 4 columns; sm_count_min 54 (the engine runs MMVF, the order the kernel reproduces, only from 54 SMs: mmvf.cu ggml_cuda_should_use_mmvf, boltbeam-runs/gate1-audit-20261122); region timer screen of 65 launch shapes then 3 fresh confirming re-times (beats ark_down_c4u1 in all three, differ 0), CPU region-check with mutants (reproduced, mutants caught); session A/B (boltbeam-runs/overnight-20261121 'ark_down confirm + A/B'): released list vs the same list with ark_down_c2r4u5, build-sm, 3 pairs, 8 loaded / 0 dropped every log, replies 116/116 x6; decode <=66k +2.1 [+1.7, +2.5], <=133k +2.1 [+1.4, +2.7], <=262k +2.0 [+1.7, +2.3] tok/s (234.5 -> 236.5); regenerates byte for byte (source + cubin, nvcc 13.2) from the pushed recipe (tools/reproduce_shipped.py)"
+     "numbers": "on b12521 not checked: in ab-xcheck the region manifest's inject window replaces ark_inject_c1u1 and ark_down_c4u1 made no check report; files byte-equal to 1.0.0's, the manifest differs only in engine.builds. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (identical): hook check mode on these files (graphs off, tolerance 0, turns past 98.6k context): inject 70,913 checks, down 71,425 checks, 0 differences, worst 0; switch on vs off: text and n identical 59/59 and draft counts 59/59 in every on arm; with -lv 5 every draft candidate (65,673 lines) and accepted line (7,259) identical (boltbeam-runs/bf16-hc-kernels-20261115)"
     }
    },
    "exercised_by": "decode graphs whose mul_mat has a BF16 weight of K 10240 by 4 or 320 rows and 4 fp32 activation columns (the hc inject / hc down rows); measured on one MoE model with an MTP draft head",
    "limits": [
-    "two shapes only (ark_inject_c1u1: 4 rows; ark_down_c2r4u5: 320 rows, from 54 SMs: sm_count_min), keyed in manifest.json by op, types and shape; sm_120 only (manifest target nvidia_sm120); one engine build (6f311d7a = b12521)",
+    "two shapes only, keyed in manifest.json by op, types and shape; sm_120 only (manifest target nvidia_sm120); one engine build (6f311d7a = b12521)",
     "the manifest loads only on a build whose ggml commit (GGML_COMMIT in build/ggml/src/ggml-version.h) matches engine.builds 6f311d7a; a tree without .git builds as unknown and the hook runs the engine's own kernels unless configured with -DLLAMA_BUILD_COMMIT=6f311d7a -DGGML_BUILD_COMMIT=6f311d7a -DGIT_EXE=OFF (README Apply and build)",
-    "ark_inject_c1u1: author arkey's scheduler (family small_m_gemv.v1, reduction order llama.cpp.mmvf.bf16_f32.b256, verified on SASS); generator tinygrad-arkey cbd4ca8e3, recorded in its manifest entry; regenerating gives these bytes. ark_down_c2r4u5: the region generator (diwa-gen 1727a3fa3, family region_chain.v1), recorded in its manifest entry; tools/reproduce_shipped.py regenerates it byte for byte",
+    "author: arkey's scheduler (family small_m_gemv.v1, reduction order llama.cpp.mmvf.bf16_f32.b256, verified on SASS); generator tinygrad-arkey cbd4ca8e3, recorded in each manifest entry; regenerating gives these bytes",
     "the PDL trigger fires at kernel end: firing it after the last global read restored full launch overlap but measured 0.089 ms/step slower (boltbeam-runs/arkey-pdl-20261115)"
    ],
    "budget_raised": [
     {
-     "from": 120,
-     "to": 240,
-     "why": "Owner-approved (standing rule, 2026-11-21; owner OK 2026-11-22 ~5 AM EST to ship it): ark_down_c2r4u5.cu (183 lines, generated) replaces ark_down_c4u1.cu (69); measured +2.0 tok/s at <=262k [+1.7, +2.3]; budget_rule ceil_105_10 of the lines",
+     "from": 240,
+     "to": 120,
+     "why": "Lowered: the kernels added on 2026-11-22 (ark_down_c2r4u5 and three generated fusion kernels) are withdrawn. Builds made with nvcc 13.2.78 on three other machines gave different text from ours; cause under investigation.",
      "date": "2026-11-22"
     }
    ]
@@ -1991,7 +1991,7 @@
    "dir": "kernels/region-chain-k2560-k10240/",
    "hook": "ext-kernels-window",
    "files": {
-    "manifest.json": "ae1b3ca5f08a3eb69fb568b87c08ecd4c3bcee13af2909a90def8be0ad7a0083",
+    "manifest.json": "abfcc9ab3f9fbd1bca52cb614fdc90ba51e08822b627936f6cf32a368b420ebb",
     "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
     "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
     "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
@@ -2015,13 +2015,7 @@
     "sparse_q8_exact2_t3_h24_2_d256_l2051_r14.cu": "a84fad3f14974b08cc6bab2134b98ae9c2023a52eff0ee888a34d4020d8398d5",
     "sparse_q8_exact2_t3_h24_2_d256_l2051_r14.cubin": "f59ca3fc8798ac9c7e2b9d848094909944897d54a1b3a3c626c482f09712a3d9",
     "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cu": "54d351e0afdc3cf21f61f7a7455bb166acec018908f14afab5d933468d32ed11",
-    "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cubin": "80c576ba88a6864026ec02e4c511129736543b51b86e182417c36a19829b1bce",
-    "region_abf27ac5588f.cu": "79414334810a0c7a57e074ce89cf895ffba99d924b08af17eac47282bab38448",
-    "region_abf27ac5588f.cubin": "34630aa8ef796a30e1870e7c35f426e71ab664984cf1c54825ccdb8642498ae3",
-    "region_ff96d2ea18a8.cu": "4a71b1ce06a5a23e49cee482713130dd48a18ad2cb8947b802f9b71b6d042d47",
-    "region_ff96d2ea18a8.cubin": "5d59f3a058ce0f5346b67e2164a4e7ddcd0b16af2798e3f7c343fec7054f2bcf",
-    "region_7fc28e3641f8.cu": "e85d9d481bc8e83349322520e36cbbdd0e83a13856ba6fbf2890ad05671066b7",
-    "region_7fc28e3641f8.cubin": "0dd7193b3f55be99625f9cf98ef567f056a4808982a6f27af41d48fa496c9cd6"
+    "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cubin": "80c576ba88a6864026ec02e4c511129736543b51b86e182417c36a19829b1bce"
    },
    "source": [
     "region_shexp_gate.cu",
@@ -2035,12 +2029,9 @@
     "sparse_mask_write_t3_l2051.cu",
     "sparse_mask_write_t4_l2051.cu",
     "sparse_q8_exact2_t3_h24_2_d256_l2051_r14.cu",
-    "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cu",
-    "region_abf27ac5588f.cu",
-    "region_ff96d2ea18a8.cu",
-    "region_7fc28e3641f8.cu"
+    "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cu"
    ],
-   "lines": 3641,
+   "lines": 3576,
    "budget": 3760,
    "budget_raised": [
     {
@@ -2058,7 +2049,7 @@
     {
      "from": 3760,
      "to": 3760,
-     "why": "Owner-approved 2026-11-22 (~5 AM EST, 'yes all'): +65 source lines (three generated fusion kernels: region_abf27ac5588f, region_7fc28e3641f8, region_ff96d2ea18a8); lines 3576 -> 3641, inside the budget 3760 (no raise)",
+     "why": "Lowered: the kernels added on 2026-11-22 (ark_down_c2r4u5 and three generated fusion kernels) are withdrawn. Builds made with nvcc 13.2.78 on three other machines gave different text from ours; cause under investigation.",
      "date": "2026-11-22"
     }
    ],
@@ -2066,7 +2057,7 @@
     "label": "identical",
     "evidence": {
      "run": "boltbeam-runs/guardrails-20261118 (ab-xcheck); boltbeam-runs/exact-attn-20261121 (check-v2-shallow, check-v2-deep, time-v2); boltbeam-runs/release-0334-20261121 (load-ship, load-k171, check-vram-shallow, check-vram-deep)",
-     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm; the kernel files are byte-equal to 1.0.0's, the manifest differs only in engine.builds. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm, bench-*.json)): hook check mode, real session (graphs off, turns 40-41, tolerance 0): shared gate 6,145, inject region 12,545, down tail 12,801 checks, 0 differences, worst 0; graph-replay bench against the engine's own nodes (real weights for the gate, 31,457,280 outputs; inject 24,576; down tail 1,966,080): 0 differ; switch on vs the shipped manifest: reply sha256 59/59 in all 6 confirm runs; region_gdn_gate on b12521 (boltbeam-runs/gdn-gate-live-20261119): hook check mode (graphs off, tolerance 0, 30 turns of the 256k session at 128k) 156,929 checks, 0 differ, worst 0; replies 30/30 in arms S (R1-R3 manifest), G (+ gdn gate), C (check); 256k 3-pair confirm turns 60-116: replies 57/57 in all 6 runs, decode +3.5 tok/s [+3.0, +4.0], session -2.6 s [-3.3, -2.0]; the gdn-gate-live build held the modules before host/ple-prefetch-step, indexer/idx-keys, indexer/topk-rowhist and indexer/kpool-mask-range (their switches unset in both arms): region_gdn_gate is not yet run together with those four. gen_attn_sparse_q8_exact2_t4 / _t3 on b12521 (this commit's hook: R5 + src_ne_min, tree storage-tmp/hook-r5/tree, libggml-cuda sha256 8915bc19; boltbeam-runs/exact-attn-20261121): check mode at tolerance 0 (abs, bitwise), graphs off, LLAMA_KV_STREAM_CHECK=1, the shipped 256k switch set with K/V streamed (N 52,848): turns 1-6 (4.6k-17.6k context) t4 2,305 checks and t3 1 check, 0 differ, worst 0; turns 106-107 (~240k) t4 3,841 checks, 0 differ, worst 0; below the engine's sparse-dispatch bound (n_kv < 16,408 for T 4, < 12,306 for T 3) src_ne_min keeps the entries off and stock runs (before src_ne_min every t4 check up to 15.5k context differed: the engine runs its dense kernel there, another order). CPU: the generated tile and combine against the engine-order reference (BoltBeam collectors/fattn_order) bit for bit for list counts 2051 / 2048 / 2000 / 1000 / 100 / 37, T 4 and 3; 7 reorder mutants caught. 256k session, turns 1-116, 3 alternating pairs, stock list vs the exact list: reply sha256 116/116 in all 6 runs (time-v2: that arm's list lacked ark_inject_c1u1 and ark_down_c4u1, their files not beside it). With the K/V cache wholly in VRAM (the default modded run's switches: no kv-stream, rs-one-copy or rbudget-backend; -ncmoe 8; this commit's hook built in storage-tmp/hook-r5/tree/build-sm, libggml-cuda sha256 b921a8a9): check mode at tolerance 0, graphs off: turns 1-6 t4 2,049 checks, turns 106-107 t4 3,841 checks, 0 differ, worst 0 (t3 did not fire in these turns); replies 6/6 and 2/2 equal to the unchecked arm; 8 entries loaded, 0 dropped. sm_count: the shipped list on the RTX 5090 (170 SMs) loads 8, drops 0; a copy whose exact entries say 171 drops both (made for 171 SMs, this device has 170) and loads the other 6; ark_down_c2r4u5 (diwa-gen 1727a3fa3, recipe tests/fixtures/region_chain/shipped_windows.json:ark_down, the region generator's launch-shape axis: 2 columns x 4 rows a block, unroll 5, order row llama.cpp.mmvf.bf16_f32.b256 as explicit FMAs, -use_fast_math -fmad=false) replaces ark_down_c4u1 on the 320 x 10240 BF16 gemv at 4 columns; sm_count_min 54 (the engine runs MMVF, the order the kernel reproduces, only from 54 SMs: mmvf.cu ggml_cuda_should_use_mmvf, boltbeam-runs/gate1-audit-20261122); region timer screen of 65 launch shapes then 3 fresh confirming re-times (beats ark_down_c4u1 in all three, differ 0), CPU region-check with mutants (reproduced, mutants caught); session A/B (boltbeam-runs/overnight-20261121 'ark_down confirm + A/B'): released list vs the same list with ark_down_c2r4u5, build-sm, 3 pairs, 8 loaded / 0 dropped every log, replies 116/116 x6; decode <=66k +2.1 [+1.7, +2.5], <=133k +2.1 [+1.4, +2.7], <=262k +2.0 [+1.7, +2.3] tok/s (234.5 -> 236.5); regenerates byte for byte (source + cubin, nvcc 13.2) from the pushed recipe (tools/reproduce_shipped.py); region_abf27ac5588f (CONCAT + VIEW + ARANGE + SCALE + CPY + SET_ROWS, the recurrent layers' 4-token conv-state front, 36 a step; the same kernel as region-state-copy-k10240's region_state_copy_front under another id), region_7fc28e3641f8 (the same chain at 13 columns), region_ff96d2ea18a8 (SCALE + SILU [320]): the 2026-11-22 small-kernel fusion screen's winners (boltbeam-runs/fusion-screen-20261122), diwa-gen 1727a3fa3 recipes tests/fixtures/region_chain/shipped_windows.json:fusion_abf27 / fusion_7fc28 / fusion_ff96 (byte for byte, source + cubin); check mode tolerance 0, two identical arms each, K/V streamed and in VRAM, turns 1-6 and 106-107: 0 differ for all 11 entries in 8 logs (abf27 up to 32,513 checks, 7fc28 769, ff96 8,449); session A/B, released list (8) vs + the three (11), build-sm, 3 pairs, every log 8 / 11 loaded, 0 dropped, replies 116/116 x6: warm decode 255.9 -> 258.0, +2.0 [+1.7, +2.4]; <=262k +1.8 [+0.9, +2.8]; session wall -1.9 s [-2.1, -1.6]",
+     "numbers": "on b12521 (ab-xcheck: full stack at -ncmoe 0, region manifest copy listing 6f311d7a, turns 1-4): GGML_CUDA_EXT_KERNELS_CHECK region_shexp_gate up to 26,881, region_inject_tail up to 54,017, region_down_tail up to 55,809 checks, 0 differ, worst 0; replies 4/4 equal to the unchecked arm; the kernel files are byte-equal to 1.0.0's, the manifest differs only in engine.builds. base-move gate on b12521 (boltbeam-runs/guardrails-20261118: gate-timed-stdlib, gate-timed-go, gate-q-stdlib, gate-q-go): the full series with the 0.3.29 switch set vs b12359 + 01-19, same flags; 3 pairs: session wall 147.0 -> 146.2 s (-0.8 [-1.6, +0.0]) on the 59-turn session and 156.5 -> 155.2 s (-1.2 [-7.1, +4.6]) on the held-out Go session (turns 1-56); stage-1 session-gate pass on both by the excess rule (top-1 agreement with the b12359 stack 0.9965, floor 0.9945; Go 0.9925, below its floor 0.9945, excess +0.0020 of 0.0023 allowed). Replies differ from the b12359 stack (17/59, 6/56 equal); on stock builds the difference is upstream #32407 (flash-attention K/V block order): reverting it alone gives b12359's replies 8/8 (ab-attr2, turns 40-47, -ncmoe 16, stock only). On 1.0.0 (boltbeam-runs/region-fusion-20261118 (ab-check, ab-confirm, bench-*.json)): hook check mode, real session (graphs off, turns 40-41, tolerance 0): shared gate 6,145, inject region 12,545, down tail 12,801 checks, 0 differences, worst 0; graph-replay bench against the engine's own nodes (real weights for the gate, 31,457,280 outputs; inject 24,576; down tail 1,966,080): 0 differ; switch on vs the shipped manifest: reply sha256 59/59 in all 6 confirm runs; region_gdn_gate on b12521 (boltbeam-runs/gdn-gate-live-20261119): hook check mode (graphs off, tolerance 0, 30 turns of the 256k session at 128k) 156,929 checks, 0 differ, worst 0; replies 30/30 in arms S (R1-R3 manifest), G (+ gdn gate), C (check); 256k 3-pair confirm turns 60-116: replies 57/57 in all 6 runs, decode +3.5 tok/s [+3.0, +4.0], session -2.6 s [-3.3, -2.0]; the gdn-gate-live build held the modules before host/ple-prefetch-step, indexer/idx-keys, indexer/topk-rowhist and indexer/kpool-mask-range (their switches unset in both arms): region_gdn_gate is not yet run together with those four. gen_attn_sparse_q8_exact2_t4 / _t3 on b12521 (this commit's hook: R5 + src_ne_min, tree storage-tmp/hook-r5/tree, libggml-cuda sha256 8915bc19; boltbeam-runs/exact-attn-20261121): check mode at tolerance 0 (abs, bitwise), graphs off, LLAMA_KV_STREAM_CHECK=1, the shipped 256k switch set with K/V streamed (N 52,848): turns 1-6 (4.6k-17.6k context) t4 2,305 checks and t3 1 check, 0 differ, worst 0; turns 106-107 (~240k) t4 3,841 checks, 0 differ, worst 0; below the engine's sparse-dispatch bound (n_kv < 16,408 for T 4, < 12,306 for T 3) src_ne_min keeps the entries off and stock runs (before src_ne_min every t4 check up to 15.5k context differed: the engine runs its dense kernel there, another order). CPU: the generated tile and combine against the engine-order reference (BoltBeam collectors/fattn_order) bit for bit for list counts 2051 / 2048 / 2000 / 1000 / 100 / 37, T 4 and 3; 7 reorder mutants caught. 256k session, turns 1-116, 3 alternating pairs, stock list vs the exact list: reply sha256 116/116 in all 6 runs (time-v2: that arm's list lacked ark_inject_c1u1 and ark_down_c4u1, their files not beside it). With the K/V cache wholly in VRAM (the default modded run's switches: no kv-stream, rs-one-copy or rbudget-backend; -ncmoe 8; this commit's hook built in storage-tmp/hook-r5/tree/build-sm, libggml-cuda sha256 b921a8a9): check mode at tolerance 0, graphs off: turns 1-6 t4 2,049 checks, turns 106-107 t4 3,841 checks, 0 differ, worst 0 (t3 did not fire in these turns); replies 6/6 and 2/2 equal to the unchecked arm; 8 entries loaded, 0 dropped. sm_count: the shipped list on the RTX 5090 (170 SMs) loads 8, drops 0; a copy whose exact entries say 171 drops both (made for 171 SMs, this device has 170) and loads the other 6",
      "match": {
       "what": "reply sha256 per turn, check mode on vs the unchecked arm, same build and manifest (ab-xcheck, turns 1-4)",
       "equal": 4,
@@ -2076,7 +2067,7 @@
    },
    "exercised_by": "verify-step decode graphs (4 activation columns) with these windows: the shared-expert gate (BF16 gemv K 2560 to 1 row, sigmoid, mul, add), the hc inject (BF16 gemv K 10240 to 4 rows, scale 0.25, sigmoid, scale 2) and the hc down tail (scale 0.25, silu on 320 x 4); measured on one MoE model with an MTP draft head; the GDN gating at the verify step (BF16 gemv K 2560 to 48 rows twice on one input, add, softplus, mul, sigmoid, with the engine's reshapes); the verify step's FLASH_ATTN_EXT on the sparse path (q8_0 K/V, head dim 256, 24 query heads on 2 K/V heads, 3 or 4 query tokens, n_kv_max 2,051 cells a list, K/V possibly streamed by kv/kv-stream)",
    "limits": [
-    "seven windows and two one-op kernels (the latter read from ../bf16-smallm-gemv-k10240/); shapes, op_params and wiring keyed in manifest.json; sm_120 only; one engine build (6f311d7a = b12521)",
+    "four windows and two one-op kernels (the latter read from ../bf16-smallm-gemv-k10240/); shapes, op_params and wiring keyed in manifest.json; sm_120 only; one engine build (6f311d7a = b12521)",
     "author: arkey's scheduler (family region_chain.v1: one kernel per region; the gemv keeps reduction order llama.cpp.mmvf.bf16_f32.b256 as explicit FMAs, compiled -use_fast_math -fmad=false so no fused multiply-add spans two engine nodes); generator tinygrad-arkey branch region-fusion-20261118 538c3728c, recorded in each manifest entry",
     "the inject window replaces the shipped ark_inject_c1u1 kernel on that node (region entries are listed first)",
     "region_gdn_gate (generator tinygrad-arkey branch region-fusion-20261118 f52660073) needs the hook at this commit or later: its window holds three RESHAPE nodes and reads one activation in two gemvs; an older hook refuses the window and the engine's own nodes run",
@@ -2084,9 +2075,7 @@
     "region_gdn_gate's softplus and sigmoid are written with exp2 where the engine's nodes call expf under fast math, and the engine's gemv relies on the compiler's multiply-add contraction: equal bytes were measured on one CUDA toolkit build; the manifest keys the engine commit, not the toolkit, so on another toolkit run GGML_CUDA_EXT_KERNELS_CHECK=1 before trusting it",
     "gen_attn_sparse_q8_exact2_t4 / _t3 reproduce the engine's own sparse flash-attention order (stream-K split, per-warp online softmax, the two tensor-core instructions on the same operand slots, the 4-warp combine, the cross-block fixup); the split is derived from the SM count, so each entry carries sm_count 170 (RTX 5090: 160 blocks for T 4, 168 for T 3) and the hook loads it only on a device with exactly that many SMs (from this commit: ext-kernels-window sm_count); on another sm_120 card the entry is dropped with its reason and the engine's own attention runs",
     "the exact entries match only at or above the engine's sparse-dispatch bound (src_ne_min: n_kv >= 16,408 for T 4, >= 12,306 for T 3, from fattn.cu ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse at n_kv_max 2,051); below it the engine's dense kernel runs. They need the hook at this commit or later (src_ne_min and sm_count): an R5 hook without sm_count ignores it, so BoltBeam refuses such a list for a build with an older hook; a hook before R5 drops them (no kernel key) and the engine's own attention runs",
-    "measured with the shipped 256k switch set (kv-stream N 52,848, sparse-direct, sparse-split, the indexer and kernels mods, MTP draft k=3, q8_0 KV); author: the region generator (tile exact2, order row llama.cpp.fattn_mma.sparse_q8.d256.c1x8, compiled nvcc 13.2 -O3 -use_fast_math), recorded in each manifest entry; regenerating gives these bytes",
-    "ark_down_c2r4u5 carries sm_count_min 54: the hook drops it below 54 SMs (made for 54 to 1073741824 SMs), where the engine runs MMF (tensor cores, another order) for its op; needs the hook at arkey_ie_mods 8104ce7's sm_count_min / sm_count_max or later (an older hook ignores the key: BoltBeam builds the hook and the list from one commit, mods apply)",
-    "region_abf27ac5588f / region_7fc28e3641f8 / region_ff96d2ea18a8: exact shapes only (the recorded [7, 10240] / [13, 10240] state fronts, the [320] SCALE + SILU); no SM-count dependence (elementwise, no reduction); need the hook's strided-view and state-write rules (3e8d1e9 or later); author: the region generator (diwa-gen 1727a3fa3), recorded in each manifest entry; tools/reproduce_shipped.py regenerates them byte for byte"
+    "measured with the shipped 256k switch set (kv-stream N 52,848, sparse-direct, sparse-split, the indexer and kernels mods, MTP draft k=3, q8_0 KV); author: the region generator (tile exact2, order row llama.cpp.fattn_mma.sparse_q8.d256.c1x8, compiled nvcc 13.2 -O3 -use_fast_math), recorded in each manifest entry; regenerating gives these bytes"
    ],
    "gain": {
     "value": "+10.0",
@@ -2101,7 +2090,7 @@
    "dir": "kernels/region-state-copy-k10240/",
    "hook": "ext-kernels-window",
    "files": {
-    "manifest.json": "bcbe77f411aa362f96c3200353bbd1d936aa28a97fde03123304d664f2ec88ac",
+    "manifest.json": "dca73ca0db699b6b2305e55dea2174cdb0085fd6ba052de149b54a12f2c46648",
     "region_state_copy_front.cu": "b2e3abfb4c040ecce761f0ffd3739677e2795183bb59462ecd6ca8ed83507609",
     "region_state_copy_front.cubin": "6a25ed2f0174257339df8a8b05ee41367828146033f13deae6dc52feb5be6f51"
    },
@@ -2131,7 +2120,7 @@
    },
    "exercised_by": "4-token decode steps of the qwen4exp graph: the recurrent layers' conv-state front (CONCAT [7, 10240] of the state [3, 10240] and a transposed [4, 10240], a strided window view, ARANGE / SCALE / CPY to i32 row indices, SET_ROWS of 4 windows of 3 columns into the state cache): 36 a step, 8 launches to 1",
    "limits": [
-    "OFF by default: the hook reads one manifest and has no per-entry switch, so this dir holds its own manifest (the shipped dir's 6 entries, their kernel files read from ../region-chain-k2560-k10240/ and ../bf16-smallm-gemv-k10240/, then region_state_copy_front, then the shipped dir's two exact attention entries and its three fusion entries; region_state_copy_front comes first, so it takes the window region_abf27ac5588f, the same kernel, would take); it runs only with GGML_CUDA_EXT_KERNELS pointed at this dir's manifest.json. A change to the shipped manifest must be copied here",
+    "OFF by default: the hook reads one manifest and has no per-entry switch, so this dir holds its own manifest (the shipped dir's 6 entries, their kernel files read from ../region-chain-k2560-k10240/ and ../bf16-smallm-gemv-k10240/, then region_state_copy_front, then the shipped dir's two exact attention entries); it runs only with GGML_CUDA_EXT_KERNELS pointed at this dir's manifest.json. A change to the shipped manifest must be copied here",
     "one shape: the 4-token decode step ([7, 10240], 4 windows); a pass of another token count does not match and runs the engine's nodes (the 10-token entry made earlier matched 0 decode steps)",
     "sm_120 only (target nvidia_sm120); one engine build (6f311d7a = b12521); needs the hook at this commit or later (strided views, state write); an older hook drops the entry and the engine's nodes run",
     "author: arkey's scheduler (family region_chain.v1), generator tinygrad-arkey branch region-fusion-20261118 4dc2de1; a pure copy (order null), so the generator's static order check does not apply; identity rests on check mode, the CPU emulation and the replies",
