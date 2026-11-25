@@ -497,7 +497,7 @@ index 078bfd984..2e47de5fb 100644
  llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
      llama_synchronize(ctx);
  
-@@ -626,6 +867,22 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
+@@ -626,6 +867,37 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
  
      gsmpl->set_logits(ctx, idx);
  
@@ -505,6 +505,21 @@ index 078bfd984..2e47de5fb 100644
 +    // not the backend picked a token (a chain the backend runs only in part hands the CPU a truncated candidate list)
 +    if (gsmpl->params.backend_sampling && gsmpl->rbudget && common_rbudget_backend()) {
 +        const llama_token forced = common_reasoning_budget_forced_token(gsmpl->rbudget);
++        if (forced != LLAMA_TOKEN_NULL && gsmpl->grmr && grammar_should_apply(gsmpl)) {
++            // LLAMA_GRAMMAR_BACKEND: a grammar applied while forcing (not lazy) tests the forced token as the CPU path does
++            static std::atomic<uint64_t> n_test{0}, n_rej{0};
++            llama_token_data       single_token_data       = { forced, 1.0f, 0.0f };
++            llama_token_data_array single_token_data_array = { &single_token_data, 1, -1, false };
++            llama_sampler_apply(grmr, &single_token_data_array);
++            const bool rej = single_token_data_array.data[0].logit == -INFINITY;
++            const uint64_t n = ++n_test, r = rej ? ++n_rej : n_rej.load();
++            if (rej || n % 32 == 0) {
++                LOG_WRN("%s: LLAMA_GRAMMAR_BACKEND forced tokens: %llu tested, %llu rejected\n", __func__, (unsigned long long) n, (unsigned long long) r);
++            }
++            if (rej) {
++                return common_gsamp_cpu(gsmpl, ctx, idx, grammar_first);
++            }
++        }
 +        if (forced != LLAMA_TOKEN_NULL) {
 +            gsmpl->cur.assign(1, llama_token_data{forced, 0.0f, 1.0f});
 +            cur_p = { gsmpl->cur.data(), 1, 0, false };
@@ -520,7 +535,7 @@ index 078bfd984..2e47de5fb 100644
      // Check if a backend sampler has already sampled a token in which case we
      // return that token id directly.
      {
-@@ -635,7 +892,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
+@@ -635,7 +907,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
              LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, id);
  
              GGML_ASSERT(!gsmpl->grmr    && "using grammar in combination with backend sampling is not supported");
