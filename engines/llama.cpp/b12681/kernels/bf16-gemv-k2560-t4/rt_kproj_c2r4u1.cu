@@ -1,0 +1,127 @@
+#define INFINITY (__int_as_float(0x7f800000))
+#define NAN (__int_as_float(0x7fffffff))
+template <class T, class F> __device__ __forceinline__ T tg_bitcast(F v) { union U { F f; T t; }; U u; u.f = v; return u.t; }
+#include <cuda_bf16.h>
+struct __align__(32) float8 { float x, y, z, w, a, b, c, d; }; __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { float8 r={x, y, z, w, a, b, c, d}; return r; }
+struct __align__(4) tg_bfloat162 { nv_bfloat16 x, y; }; __device__ tg_bfloat162 make_tg_bfloat162(nv_bfloat16 x, nv_bfloat16 y) { tg_bfloat162 r={x, y}; return r; }
+extern "C" __global__ void __launch_bounds__(256) rt_kproj_c2r4u1(float* data0_512, float* data1_10240, nv_bfloat16* data2_327680) {
+  asm volatile("griddepcontrol.wait;":::"memory");
+  int gidx0 = blockIdx.x; /* 32 */
+  int gidx1 = blockIdx.y; /* 2 */
+  int lidx0 = threadIdx.x; /* 256 */
+  float buf0[8];
+  (*(buf0+0)) = 0.0f;
+  (*(buf0+1)) = 0.0f;
+  (*(buf0+2)) = 0.0f;
+  (*(buf0+3)) = 0.0f;
+  (*(buf0+4)) = 0.0f;
+  (*(buf0+5)) = 0.0f;
+  (*(buf0+6)) = 0.0f;
+  (*(buf0+7)) = 0.0f;
+  for (int Ridx0 = 0; Ridx0 < 5; Ridx0++) {
+    int alu8 = ((lidx0<<1)+(Ridx0<<9));
+    int alu9 = (alu8+(gidx0*10240));
+    tg_bfloat162 val0 = (*((tg_bfloat162*)((data2_327680+(alu9+2560)))));
+    tg_bfloat162 val1 = (*((tg_bfloat162*)((data2_327680+(alu9+5120)))));
+    tg_bfloat162 val2 = (*((tg_bfloat162*)((data2_327680+(alu9+7680)))));
+    tg_bfloat162 val3 = (*((tg_bfloat162*)((data2_327680+alu9))));
+    int alu10 = (alu8+(gidx1*5120));
+    float2 val4 = (*((float2*)((data1_10240+(alu10+2560)))));
+    float2 val5 = (*((float2*)((data1_10240+alu10))));
+    float cast0 = ((float)(val0.x));
+    float cast1 = ((float)(val0.y));
+    float cast2 = ((float)(val1.x));
+    float cast3 = ((float)(val1.y));
+    float cast4 = ((float)(val2.x));
+    float cast5 = ((float)(val2.y));
+    float cast6 = ((float)(val3.x));
+    float cast7 = ((float)(val3.y));
+    (*(buf0+0)) = fmaf(val5.y,cast7,fmaf(val5.x,cast6,(*(buf0+0))));
+    (*(buf0+1)) = fmaf(val5.y,cast1,fmaf(val5.x,cast0,(*(buf0+1))));
+    (*(buf0+2)) = fmaf(val5.y,cast3,fmaf(val5.x,cast2,(*(buf0+2))));
+    (*(buf0+3)) = fmaf(val5.y,cast5,fmaf(val5.x,cast4,(*(buf0+3))));
+    (*(buf0+4)) = fmaf(val4.y,cast7,fmaf(val4.x,cast6,(*(buf0+4))));
+    (*(buf0+5)) = fmaf(val4.y,cast1,fmaf(val4.x,cast0,(*(buf0+5))));
+    (*(buf0+6)) = fmaf(val4.y,cast3,fmaf(val4.x,cast2,(*(buf0+6))));
+    (*(buf0+7)) = fmaf(val4.y,cast5,fmaf(val4.x,cast4,(*(buf0+7))));
+  }
+  __shared__ __align__(16) float buf1[2048];
+  float alu20 = ((*(buf0+0))+__shfl_xor_sync(0xffffffffu, (*(buf0+0)), 16));
+  float alu21 = ((*(buf0+1))+__shfl_xor_sync(0xffffffffu, (*(buf0+1)), 16));
+  float alu22 = ((*(buf0+2))+__shfl_xor_sync(0xffffffffu, (*(buf0+2)), 16));
+  float alu23 = ((*(buf0+3))+__shfl_xor_sync(0xffffffffu, (*(buf0+3)), 16));
+  float alu24 = (alu20+__shfl_xor_sync(0xffffffffu, alu20, 8));
+  float alu25 = (alu21+__shfl_xor_sync(0xffffffffu, alu21, 8));
+  float alu26 = (alu22+__shfl_xor_sync(0xffffffffu, alu22, 8));
+  float alu27 = (alu23+__shfl_xor_sync(0xffffffffu, alu23, 8));
+  float alu28 = (alu24+__shfl_xor_sync(0xffffffffu, alu24, 4));
+  float alu29 = (alu25+__shfl_xor_sync(0xffffffffu, alu25, 4));
+  float alu30 = (alu26+__shfl_xor_sync(0xffffffffu, alu26, 4));
+  float alu31 = (alu27+__shfl_xor_sync(0xffffffffu, alu27, 4));
+  float alu32 = (alu28+__shfl_xor_sync(0xffffffffu, alu28, 2));
+  float alu33 = (alu29+__shfl_xor_sync(0xffffffffu, alu29, 2));
+  float alu34 = (alu30+__shfl_xor_sync(0xffffffffu, alu30, 2));
+  float alu35 = (alu31+__shfl_xor_sync(0xffffffffu, alu31, 2));
+  float alu36 = ((*(buf0+4))+__shfl_xor_sync(0xffffffffu, (*(buf0+4)), 16));
+  float alu37 = ((*(buf0+5))+__shfl_xor_sync(0xffffffffu, (*(buf0+5)), 16));
+  float alu38 = ((*(buf0+6))+__shfl_xor_sync(0xffffffffu, (*(buf0+6)), 16));
+  float alu39 = ((*(buf0+7))+__shfl_xor_sync(0xffffffffu, (*(buf0+7)), 16));
+  float alu40 = (alu36+__shfl_xor_sync(0xffffffffu, alu36, 8));
+  float alu41 = (alu37+__shfl_xor_sync(0xffffffffu, alu37, 8));
+  float alu42 = (alu38+__shfl_xor_sync(0xffffffffu, alu38, 8));
+  float alu43 = (alu39+__shfl_xor_sync(0xffffffffu, alu39, 8));
+  float alu44 = (alu40+__shfl_xor_sync(0xffffffffu, alu40, 4));
+  float alu45 = (alu41+__shfl_xor_sync(0xffffffffu, alu41, 4));
+  float alu46 = (alu42+__shfl_xor_sync(0xffffffffu, alu42, 4));
+  float alu47 = (alu43+__shfl_xor_sync(0xffffffffu, alu43, 4));
+  float alu48 = (alu44+__shfl_xor_sync(0xffffffffu, alu44, 2));
+  float alu49 = (alu45+__shfl_xor_sync(0xffffffffu, alu45, 2));
+  float alu50 = (alu46+__shfl_xor_sync(0xffffffffu, alu46, 2));
+  float alu51 = (alu47+__shfl_xor_sync(0xffffffffu, alu47, 2));
+  int alu52 = (lidx0<<3);
+  *((float4*)((buf1+(alu52+4)))) = make_float4((alu48+__shfl_xor_sync(0xffffffffu, alu48, 1)),(alu49+__shfl_xor_sync(0xffffffffu, alu49, 1)),(alu50+__shfl_xor_sync(0xffffffffu, alu50, 1)),(alu51+__shfl_xor_sync(0xffffffffu, alu51, 1)));
+  *((float4*)((buf1+alu52))) = make_float4((alu32+__shfl_xor_sync(0xffffffffu, alu32, 1)),(alu33+__shfl_xor_sync(0xffffffffu, alu33, 1)),(alu34+__shfl_xor_sync(0xffffffffu, alu34, 1)),(alu35+__shfl_xor_sync(0xffffffffu, alu35, 1)));
+  __syncthreads();
+  float4 val6 = (*((float4*)((buf1+0))));
+  float4 val7 = (*((float4*)((buf1+4))));
+  float4 val8 = (*((float4*)((buf1+256))));
+  float4 val9 = (*((float4*)((buf1+260))));
+  float4 val10 = (*((float4*)((buf1+512))));
+  float4 val11 = (*((float4*)((buf1+516))));
+  float4 val12 = (*((float4*)((buf1+768))));
+  float4 val13 = (*((float4*)((buf1+772))));
+  float4 val14 = (*((float4*)((buf1+1024))));
+  float4 val15 = (*((float4*)((buf1+1028))));
+  float4 val16 = (*((float4*)((buf1+1280))));
+  float4 val17 = (*((float4*)((buf1+1284))));
+  float4 val18 = (*((float4*)((buf1+1536))));
+  float4 val19 = (*((float4*)((buf1+1540))));
+  float4 val20 = (*((float4*)((buf1+1792))));
+  float4 val21 = (*((float4*)((buf1+1796))));
+  int cast8 = ((int)(lidx0));
+  float alu56 = [](int) { volatile float z16 = 0.0f; return z16; }(cast8);
+  float alu57 = [](int) { volatile float z17 = 0.0f; return z17; }(cast8);
+  float alu58 = [](int) { volatile float z18 = 0.0f; return z18; }(cast8);
+  float alu59 = [](int) { volatile float z19 = 0.0f; return z19; }(cast8);
+  float alu60 = [](int) { volatile float z20 = 0.0f; return z20; }(cast8);
+  float alu61 = [](int) { volatile float z21 = 0.0f; return z21; }(cast8);
+  float alu62 = [](int) { volatile float z22 = 0.0f; return z22; }(cast8);
+  float alu63 = [](int) { volatile float z23 = 0.0f; return z23; }(cast8);
+  float alu64 = ([](int) { volatile float z8 = 0.0f; return z8; }(cast8)+[](int) { volatile float z24 = 0.0f; return z24; }(cast8));
+  float alu65 = ([](int) { volatile float z9 = 0.0f; return z9; }(cast8)+[](int) { volatile float z25 = 0.0f; return z25; }(cast8));
+  float alu66 = ([](int) { volatile float z10 = 0.0f; return z10; }(cast8)+[](int) { volatile float z26 = 0.0f; return z26; }(cast8));
+  float alu67 = ([](int) { volatile float z11 = 0.0f; return z11; }(cast8)+[](int) { volatile float z27 = 0.0f; return z27; }(cast8));
+  float alu68 = ([](int) { volatile float z12 = 0.0f; return z12; }(cast8)+[](int) { volatile float z28 = 0.0f; return z28; }(cast8));
+  float alu69 = ([](int) { volatile float z13 = 0.0f; return z13; }(cast8)+[](int) { volatile float z29 = 0.0f; return z29; }(cast8));
+  float alu70 = ([](int) { volatile float z14 = 0.0f; return z14; }(cast8)+[](int) { volatile float z30 = 0.0f; return z30; }(cast8));
+  float alu71 = ([](int) { volatile float z15 = 0.0f; return z15; }(cast8)+[](int) { volatile float z31 = 0.0f; return z31; }(cast8));
+  int alu72 = ((gidx0<<2)+(gidx1<<8));
+  bool alu73 = (lidx0==0);
+  if (alu73) {
+    *((float4*)((data0_512+(alu72+128)))) = make_float4((val7.x+alu56+alu64+(val15.x+alu60+alu68)+(val11.x+alu58+alu66+(val19.x+alu62+alu70))+(val9.x+alu57+alu65+(val17.x+alu61+alu69)+(val13.x+alu59+alu67+(val21.x+alu63+alu71)))),(val7.y+alu56+alu64+(val15.y+alu60+alu68)+(val11.y+alu58+alu66+(val19.y+alu62+alu70))+(val9.y+alu57+alu65+(val17.y+alu61+alu69)+(val13.y+alu59+alu67+(val21.y+alu63+alu71)))),(val7.z+alu56+alu64+(val15.z+alu60+alu68)+(val11.z+alu58+alu66+(val19.z+alu62+alu70))+(val9.z+alu57+alu65+(val17.z+alu61+alu69)+(val13.z+alu59+alu67+(val21.z+alu63+alu71)))),(val7.w+alu56+alu64+(val15.w+alu60+alu68)+(val11.w+alu58+alu66+(val19.w+alu62+alu70))+(val9.w+alu57+alu65+(val17.w+alu61+alu69)+(val13.w+alu59+alu67+(val21.w+alu63+alu71)))));
+  }
+  if (alu73) {
+    *((float4*)((data0_512+alu72))) = make_float4((val6.x+alu56+alu64+(val14.x+alu60+alu68)+(val10.x+alu58+alu66+(val18.x+alu62+alu70))+(val8.x+alu57+alu65+(val16.x+alu61+alu69)+(val12.x+alu59+alu67+(val20.x+alu63+alu71)))),(val6.y+alu56+alu64+(val14.y+alu60+alu68)+(val10.y+alu58+alu66+(val18.y+alu62+alu70))+(val8.y+alu57+alu65+(val16.y+alu61+alu69)+(val12.y+alu59+alu67+(val20.y+alu63+alu71)))),(val6.z+alu56+alu64+(val14.z+alu60+alu68)+(val10.z+alu58+alu66+(val18.z+alu62+alu70))+(val8.z+alu57+alu65+(val16.z+alu61+alu69)+(val12.z+alu59+alu67+(val20.z+alu63+alu71)))),(val6.w+alu56+alu64+(val14.w+alu60+alu68)+(val10.w+alu58+alu66+(val18.w+alu62+alu70))+(val8.w+alu57+alu65+(val16.w+alu61+alu69)+(val12.w+alu59+alu67+(val20.w+alu63+alu71)))));
+  }
+  asm volatile("griddepcontrol.launch_dependents;");
+}

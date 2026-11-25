@@ -89,7 +89,7 @@
   {
    "name": "kernels",
    "title": "kernel hook, CUDA graph cache bound, concat launch shape, captured strided copy",
-   "point": "the CUDA backend's graph execution: one hook that swaps a node or a window of nodes for a kernel a manifest names (ext-kernels), the cache of captured CUDA graphs it launches (graph-cap), and the launch shape of a backend kernel a graph node runs (concat-rows: the non-contiguous concat; graph-cpy-kernel: the node a same-type strided copy becomes inside a CUDA graph capture)",
+   "point": "the CUDA backend's graph execution: one hook that swaps a node or a window of nodes for a kernel a manifest names (ext-kernels), the cache of captured CUDA graphs it launches (graph-cap), and the launch shape of a backend kernel a graph node runs (concat-rows: the non-contiguous concat; graph-cpy-kernel: the node a same-type strided copy becomes inside a CUDA graph capture; mmq-few-ring2, mmvq-active-warps, mmvq-moe-row1: the few-row MMQ ring depth, the dense MMVQ warp count, the fused expert MMVQ rows a block)",
    "patch": "patches/kernels.patch",
    "files": [
     "ggml/src/ggml-cuda/CMakeLists.txt",
@@ -103,16 +103,30 @@
     "ggml/src/ggml-cuda/vendors/hip.h"
    ],
    "lines": {
-    "added": 1229,
-    "removed": 24
+    "added": 1394,
+    "removed": 37
    },
    "budget": {
-    "added": 1300,
-    "removed": 24
+    "added": 1470,
+    "removed": 37
    },
    "static": {
-    "hunks_removing_stock_lines": 7
-   }
+    "hunks_removing_stock_lines": 16
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 1300,
+      "removed": 24
+     },
+     "to": {
+      "added": 1470,
+      "removed": 37
+     },
+     "date": "2026-11-25",
+     "why": "three exact launch-shape mods (mmq-few-ring2, mmvq-active-warps, mmvq-moe-row1): measured +165 -13 (+1394 -37 against +1229 -24) lines (the three rows' hunks in mmq-few.cu and mmvq.cu), budget by the folder's rule; boltbeam-runs/exact-patches-20261124"
+    }
+   ]
   },
   {
    "name": "experts",
@@ -1207,6 +1221,167 @@
    "switch_null_why": "an inert proc: unused unless GGML_SCHED_PACK_INPUTS=1 (sched-pack-inputs) calls it"
   },
   {
+   "name": "mmq-few-ring2",
+   "title": "few-row MMQ: a 2-stage ring for Q6_K when the grid covers every SM",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12681",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_MMQ_FEW_RING2",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "GGML_CUDA_MMQ_FEW_RING2_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "GGML_CUDA_MMQ_FEW_RING2",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/exact-patches-20261124 (rta, ii-chk-t1-6, iii-offon-t1-57, iv-trace-*)",
+     "numbers": "On b12681 (boltbeam-runs/exact-patches-20261124, count-only, the dev session at -c 86016 -ncmoe 2, the PORT switch set and the port kernel list): (ii) turns 1-6 with every check mode of this module's three launch-shape rows and GGML_CUDA_EXT_KERNELS_CHECK on, graphs off (ii-chk-t1-6): GGML_CUDA_MMQ_FEW_RING2_CHECK >= 28,673 checks, 0 differ, no abort; (iii) turns 1-57, the three rows + the bf16-gemv-k2560-t4 entries on vs off (iii-offon-t1-57): replies 57/57 and draft schedules 57/57; GGML_CUDA_MMQ_FEW_RING2 ran >= 450,561 host launches. Region timer on the b12681 source (rta/): T=4 confirm x3, cold, gemv difference vs the stock code: [640] +0.67 us x 22, [384] +1.76..+1.98 x 14, [768] +1.27..+1.43 x 5 = 0.048 ms/step (= b12521's 0.048); [160] -0.42..-0.49 (outside the key); T 4-8 0 differ. test-backend-ops MUL_MAT 2724/2724 and MUL_MAT_ID 1077/1077 with every new switch and check on (tbo-*.txt). Gated timing (boltbeam-runs/overnight-pairs-20261125, the dev session turns 1-57, recorded history, the owner's 256k line, decode tok/s = 2.949 tok/step / ms/step): p2 PORTFIX (the k-pool indexer build, these four items absent) vs GAPEXACT (that build + mmq-few-ring2 + mmvq-active-warps + mmvq-moe-row1 + the two bf16-gemv-k2560-t4 entries, all on together): PORTFIX 242.8 / 243.0, GAPEXACT 247.9 / 251.0 tok/s (12.145 / 12.135 -> 11.898 / 11.751 ms/step); p3 LIVE (b12521, 5 runs) 242.0 vs GAPEXACT 247.9 / 251.1; replies identical in every run. 2 pairs each, both positive; a formal CI needs 3. The four items were timed together, not one by one. GAPEXACT reads 247.9 when it runs after another build and 251.1 after itself: unexplained. Dev session only, held-out sessions not yet timed. RTX 5090 sm_120 only. No timing against a stock b12681 build exists for these items: the comparison is stated as measured, not converted. Both timed arms also loaded two kernel entries that are not in this repo (region_down_silu_c2r4u5, region_src1q_hc_pre_t4), so the absolute tok/s are that machine's; the difference between the arms is what these rows add.",
+     "match": {
+      "what": "reply sha256 and draft schedule (draft_n, draft_accepted) per turn, switch on vs off, same build (iii-offon-t1-57, turns 1-57)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "gain": {
+    "value": "-0.032 ms/step (traced)",
+    "unit": "kernel time a verify step of the touched mul_mat_q_few Q6_K launches (grid >= 170): 1.048 -> 1.017 ms (turns 5-6, 504 verify steps) and 0.982 -> 0.950 (turns 22-23, 239 steps); untouched Q6_K grid < 170 group as control: -0.005 / -0.004",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, sm_120 (170 SMs), one request at a time, the dev session at -c 86016 -ncmoe 2, MTP draft k=3 (verify T=4); traced (nsys) kernel time, not a timed session: two traced windows of one OFF and one ON run. Gated timing (boltbeam-runs/overnight-pairs-20261125, the dev session turns 1-57, recorded history, the owner's 256k line, decode tok/s = 2.949 tok/step / ms/step): p2 PORTFIX (the k-pool indexer build, these four items absent) vs GAPEXACT (that build + mmq-few-ring2 + mmvq-active-warps + mmvq-moe-row1 + the two bf16-gemv-k2560-t4 entries, all on together): PORTFIX 242.8 / 243.0, GAPEXACT 247.9 / 251.0 tok/s (12.145 / 12.135 -> 11.898 / 11.751 ms/step); p3 LIVE (b12521, 5 runs) 242.0 vs GAPEXACT 247.9 / 251.1; replies identical in every run. 2 pairs each, both positive; a formal CI needs 3. The four items were timed together, not one by one. GAPEXACT reads 247.9 when it runs after another build and 251.1 after itself: unexplained. Dev session only, held-out sessions not yet timed. RTX 5090 sm_120 only. No timing against a stock b12681 build exists for these items: the comparison is stated as measured, not converted.",
+    "run": "boltbeam-runs/exact-patches-20261124 (iv-trace-off/on, iv-traceQ-off/on; iv-trace*-ms.txt); boltbeam-runs/overnight-pairs-20261125 (p2-portfix-vs-gapexact, p3-live-vs-gapexact)",
+    "basis": "traced kernel durations ON vs OFF (value); the end-to-end gated pairs (all four items together) are in conditions"
+   },
+   "exercised_by": "mul_mat_q_few for Q6_K with one column group (2-8 src1 columns), no ids, cc 1200, when ceil(rows / 16) >= the SM count: on the measured model the T=4 verify's attn_qkv [640 blocks], attn_gate [384] and attn_q [768] Q6_K tensors (41 launches a verify step); the 160-block ssm_out / attn_output launches keep 3 stages",
+   "limits": [
+    "sm_120 (cc 1200) only: residency (2 -> 3 blocks an SM: 46 KB -> 31 KB of ring) is the lever, measured on one GPU with 170 SMs",
+    "Q6_K, ncg 1 only (T 2-8): ncg 2-3 and other types keep the stock ring; on a grid below one block an SM it loses (region timer [160]: -0.42..-0.49 us a call), hence the key",
+    "a separate template instance (c_nstages 2); unset launches the stock instance; the switch is read once per process",
+    "check mode compares only launches outside a CUDA graph capture (GGML_CUDA_DISABLE_GRAPHS=1); it reruns the stock launch and keeps its result; aborts on any byte difference",
+    "Both timed arms also loaded two kernel entries that are not in this repo (region_down_silu_c2r4u5, region_src1q_hc_pre_t4), so the absolute tok/s are that machine's; the difference between the arms is what these rows add."
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "mmvq-active-warps",
+   "title": "dense MMVQ: launch only the warps that hold K blocks",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12681",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_MMVQ_ACTIVE_WARPS",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "GGML_CUDA_MMVQ_ACTIVE_WARPS_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "GGML_CUDA_MMVQ_ACTIVE_WARPS",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/exact-patches-20261124 (rta, ii-chk-t1-6, iii-offon-t1-57, iv-trace-*)",
+     "numbers": "On b12681 (boltbeam-runs/exact-patches-20261124, count-only, the dev session at -c 86016 -ncmoe 2, the PORT switch set and the port kernel list): (ii) turns 1-6 with every check mode of this module's three launch-shape rows and GGML_CUDA_EXT_KERNELS_CHECK on, graphs off (ii-chk-t1-6): GGML_CUDA_MMVQ_ACTIVE_WARPS_CHECK >= 32,769 checks, 0 differ, no abort; (iii) turns 1-57, the three rows + the bf16-gemv-k2560-t4 entries on vs off (iii-offon-t1-57): replies 57/57 and draft schedules 57/57; GGML_CUDA_MMVQ_ACTIVE_WARPS ran >= 454,657 host launches. Region timer on the b12681 source (rta/): T=4 confirm x3: IQ4_NL [1280] +0.48..+0.60 us x 47, IQ4_XS [3072] +0.62..+0.75 x 8, [320] -0.02..+0.10 x 28 = 0.031 ms/step (b12521: 0.030); T 2-4 0 differ. test-backend-ops MUL_MAT 2724/2724 and MUL_MAT_ID 1077/1077 with every new switch and check on (tbo-*.txt). Gated timing (boltbeam-runs/overnight-pairs-20261125, the dev session turns 1-57, recorded history, the owner's 256k line, decode tok/s = 2.949 tok/step / ms/step): p2 PORTFIX (the k-pool indexer build, these four items absent) vs GAPEXACT (that build + mmq-few-ring2 + mmvq-active-warps + mmvq-moe-row1 + the two bf16-gemv-k2560-t4 entries, all on together): PORTFIX 242.8 / 243.0, GAPEXACT 247.9 / 251.0 tok/s (12.145 / 12.135 -> 11.898 / 11.751 ms/step); p3 LIVE (b12521, 5 runs) 242.0 vs GAPEXACT 247.9 / 251.1; replies identical in every run. 2 pairs each, both positive; a formal CI needs 3. The four items were timed together, not one by one. GAPEXACT reads 247.9 when it runs after another build and 251.1 after itself: unexplained. Dev session only, held-out sessions not yet timed. RTX 5090 sm_120 only. No timing against a stock b12681 build exists for these items: the comparison is stated as measured, not converted. Both timed arms also loaded two kernel entries that are not in this repo (region_down_silu_c2r4u5, region_src1q_hc_pre_t4), so the absolute tok/s are that machine's; the difference between the arms is what these rows add.",
+     "match": {
+      "what": "reply sha256 and draft schedule (draft_n, draft_accepted) per turn, switch on vs off, same build (iii-offon-t1-57, turns 1-57)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "gain": {
+    "value": "-0.035 ms/step (traced)",
+    "unit": "kernel time a verify step of mul_mat_vec_q IQ4_NL + IQ4_XS at 2-4 columns: IQ4_NL 0.153 -> 0.126, IQ4_XS 0.213 -> 0.204 (turns 5-6); 0.152 -> 0.124, 0.211 -> 0.202 (turns 22-23); control group -0.005 / -0.004",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, sm_120 (170 SMs), one request at a time, the dev session at -c 86016 -ncmoe 2, MTP draft k=3 (verify T=4); traced (nsys) kernel time, not a timed session: two traced windows of one OFF and one ON run. Gated timing (boltbeam-runs/overnight-pairs-20261125, the dev session turns 1-57, recorded history, the owner's 256k line, decode tok/s = 2.949 tok/step / ms/step): p2 PORTFIX (the k-pool indexer build, these four items absent) vs GAPEXACT (that build + mmq-few-ring2 + mmvq-active-warps + mmvq-moe-row1 + the two bf16-gemv-k2560-t4 entries, all on together): PORTFIX 242.8 / 243.0, GAPEXACT 247.9 / 251.0 tok/s (12.145 / 12.135 -> 11.898 / 11.751 ms/step); p3 LIVE (b12521, 5 runs) 242.0 vs GAPEXACT 247.9 / 251.1; replies identical in every run. 2 pairs each, both positive; a formal CI needs 3. The four items were timed together, not one by one. GAPEXACT reads 247.9 when it runs after another build and 251.1 after itself: unexplained. Dev session only, held-out sessions not yet timed. RTX 5090 sm_120 only. No timing against a stock b12681 build exists for these items: the comparison is stated as measured, not converted.",
+    "run": "boltbeam-runs/exact-patches-20261124 (iv-trace-off/on, iv-traceQ-off/on; iv-trace*-ms.txt); boltbeam-runs/overnight-pairs-20261125 (p2-portfix-vs-gapexact, p3-live-vs-gapexact)",
+    "basis": "traced kernel durations ON vs OFF (value); the end-to-end gated pairs (all four items together) are in conditions"
+   },
+   "exercised_by": "mul_mat_vec_q for IQ4_NL / IQ4_XS, 2-4 src1 columns, no ids, cc 1200, when one pass of the K loop covers the row with fewer warps than the table's 4: on the measured model the shared-expert down IQ4_NL K 640 (2 warps; 47 launches a verify step) and the IQ4_XS K 2560 tensors (3 warps)",
+   "limits": [
+    "sm_120 (cc 1200), IQ4_NL and IQ4_XS, 2-4 columns only (5-8 columns already launch 2 warps); other types and T=1 keep the stock launch",
+    "the dropped warps add an exact +0 to each partial; a partial that is exactly -0 would become +0 in stock (never observed; the check would abort)",
+    "IQ4_XS K 2560 [320] gains nothing measurable (region timer -0.02..+0.10 us); [3072] and IQ4_NL [1280] gain",
+    "check mode compares only launches outside a CUDA graph capture (GGML_CUDA_DISABLE_GRAPHS=1); aborts on any byte difference",
+    "Both timed arms also loaded two kernel entries that are not in this repo (region_down_silu_c2r4u5, region_src1q_hc_pre_t4), so the absolute tok/s are that machine's; the difference between the arms is what these rows add."
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "mmvq-moe-row1",
+   "title": "fused expert gate/up MMVQ: one row a block and a 64-register bound",
+   "module": "kernels",
+   "engine": "llama.cpp",
+   "base": "b12681",
+   "switch": {
+    "kind": "env",
+    "name": "GGML_CUDA_MMVQ_MOE_ROW1",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "GGML_CUDA_MMVQ_MOE_ROW1_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "GGML_CUDA_MMVQ_MOE_ROW1",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/exact-patches-20261124 (rta, ii-chk-t1-6, iii-offon-t1-57, iv-trace-*)",
+     "numbers": "On b12681 (boltbeam-runs/exact-patches-20261124, count-only, the dev session at -c 86016 -ncmoe 2, the PORT switch set and the port kernel list): (ii) turns 1-6 with every check mode of this module's three launch-shape rows and GGML_CUDA_EXT_KERNELS_CHECK on, graphs off (ii-chk-t1-6): GGML_CUDA_MMVQ_MOE_ROW1_CHECK >= 12,289 checks, 0 differ, no abort; (iii) turns 1-57, the three rows + the bf16-gemv-k2560-t4 entries on vs off (iii-offon-t1-57): replies 57/57 and draft schedules 57/57; GGML_CUDA_MMVQ_MOE_ROW1 ran >= 204,801 host launches. Region timer on the b12681 source (rta/): T=4 confirm x3, stock less variant: 40 distinct experts IQ2_S +2.18..+2.35 us x 20, IQ3_XXS +2.35..+2.39 x 17, IQ3_S +1.68..+1.75 x 10 = 0.103 ms/step; 26 distinct +0.67..+0.85 / +0.64..+0.66 / +1.47..+1.48 = 0.041; T 2-8 every format wins, 0 differ. test-backend-ops MUL_MAT 2724/2724 and MUL_MAT_ID 1077/1077 with every new switch and check on (tbo-*.txt). Gated timing (boltbeam-runs/overnight-pairs-20261125, the dev session turns 1-57, recorded history, the owner's 256k line, decode tok/s = 2.949 tok/step / ms/step): p2 PORTFIX (the k-pool indexer build, these four items absent) vs GAPEXACT (that build + mmq-few-ring2 + mmvq-active-warps + mmvq-moe-row1 + the two bf16-gemv-k2560-t4 entries, all on together): PORTFIX 242.8 / 243.0, GAPEXACT 247.9 / 251.0 tok/s (12.145 / 12.135 -> 11.898 / 11.751 ms/step); p3 LIVE (b12521, 5 runs) 242.0 vs GAPEXACT 247.9 / 251.1; replies identical in every run. 2 pairs each, both positive; a formal CI needs 3. The four items were timed together, not one by one. GAPEXACT reads 247.9 when it runs after another build and 251.1 after itself: unexplained. Dev session only, held-out sessions not yet timed. RTX 5090 sm_120 only. No timing against a stock b12681 build exists for these items: the comparison is stated as measured, not converted. Both timed arms also loaded two kernel entries that are not in this repo (region_down_silu_c2r4u5, region_src1q_hc_pre_t4), so the absolute tok/s are that machine's; the difference between the arms is what these rows add.",
+     "match": {
+      "what": "reply sha256 and draft schedule (draft_n, draft_accepted) per turn, switch on vs off, same build (iii-offon-t1-57, turns 1-57)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "gain": {
+    "value": "-0.093..-0.100 ms/step (traced)",
+    "unit": "kernel time a verify step of the fused gate/up launches: IQ2_S 0.579 -> 0.535, IQ3_XXS 0.498 -> 0.477, IQ3_S 0.366 -> 0.331 (turns 5-6: -0.100); 0.568 -> 0.528, 0.484 -> 0.463, 0.357 -> 0.325 (turns 22-23: -0.093); control group -0.005 / -0.004",
+    "vs": "same build, switch off",
+    "conditions": "RTX 5090 at 450 W, sm_120 (170 SMs), one request at a time, the dev session at -c 86016 -ncmoe 2, MTP draft k=3 (verify T=4); traced (nsys) kernel time, not a timed session: two traced windows of one OFF and one ON run; the engine's live routing (the timer's 26-distinct fill gave 0.041). Gated timing (boltbeam-runs/overnight-pairs-20261125, the dev session turns 1-57, recorded history, the owner's 256k line, decode tok/s = 2.949 tok/step / ms/step): p2 PORTFIX (the k-pool indexer build, these four items absent) vs GAPEXACT (that build + mmq-few-ring2 + mmvq-active-warps + mmvq-moe-row1 + the two bf16-gemv-k2560-t4 entries, all on together): PORTFIX 242.8 / 243.0, GAPEXACT 247.9 / 251.0 tok/s (12.145 / 12.135 -> 11.898 / 11.751 ms/step); p3 LIVE (b12521, 5 runs) 242.0 vs GAPEXACT 247.9 / 251.1; replies identical in every run. 2 pairs each, both positive; a formal CI needs 3. The four items were timed together, not one by one. GAPEXACT reads 247.9 when it runs after another build and 251.1 after itself: unexplained. Dev session only, held-out sessions not yet timed. RTX 5090 sm_120 only. No timing against a stock b12681 build exists for these items: the comparison is stated as measured, not converted.",
+    "run": "boltbeam-runs/exact-patches-20261124 (iv-trace-off/on, iv-traceQ-off/on; iv-trace*-ms.txt); boltbeam-runs/overnight-pairs-20261125 (p2-portfix-vs-gapexact, p3-live-vs-gapexact)",
+    "basis": "traced kernel durations ON vs OFF (value); the end-to-end gated pairs (all four items together) are in conditions"
+   },
+   "exercised_by": "the fused MUL_MAT_ID gate + up (+ GLU) launch (mul_mat_vec_q_moe, has_fusion) of IQ2_S, IQ3_XXS and IQ3_S experts at 2-8 tokens, cc 1200: on the measured model the T=4 verify's expert gate/up (20 + 17 + 10 launches a verify step)",
+   "limits": [
+    "sm_120 (cc 1200), fused launch of IQ2_S / IQ3_XXS / IQ3_S only: the unfused down launch loses with one row a block (IQ4_NL -3.4..-3.9 us, Q2_0 -11.5 us, b12521 gen-expertfmt section C) and Q2_K does not win; IQ4_XS untimed",
+    "the saving depends on how many distinct experts a verify step routes to (region timer: 0.103 ms/step at 40 distinct, 0.041 at 26)",
+    "check mode compares dst and the shared expert's dst outside a CUDA graph capture (GGML_CUDA_DISABLE_GRAPHS=1); aborts on any byte difference",
+    "Both timed arms also loaded two kernel entries that are not in this repo (region_down_silu_c2r4u5, region_src1q_hc_pre_t4), so the absolute tok/s are that machine's; the difference between the arms is what these rows add."
+   ],
+   "rule_exceptions": []
+  },
+  {
    "name": "moe-inplace",
    "title": "prefill reads cached experts in place",
    "module": "experts",
@@ -2037,7 +2212,7 @@
    "dir": "kernels/region-chain-k2560-k10240/",
    "hook": "ext-kernels-window",
    "files": {
-    "manifest.json": "ed160461fe984d529a20d47fb56c5f8c833029a8cd75edfa88ecc61fbd00126e",
+    "manifest.json": "e93303234c768b0d7b684be91d60b5050073c9eff77addfb47b4a42c1f9af30a",
     "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
     "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
     "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
@@ -2107,7 +2282,8 @@
     "measured with the shipped 256k switch set (kv-stream N 52,848, sparse-direct, sparse-split, the indexer and kernels mods, MTP draft k=3, q8_0 KV); author: the region generator (tile exact2, order row llama.cpp.fattn_mma.sparse_q8.d256.c1x8, compiled nvcc 13.2 -O3 -use_fast_math), recorded in each manifest entry; regenerating gives these bytes",
     "ark_down_c2r4u5 carries sm_count_min 54: the hook drops it below 54 SMs (made for 54 to 1073741824 SMs), where the engine runs MMF (tensor cores, another order) for its op; needs the hook at arkey_ie_mods 8104ce7's sm_count_min / sm_count_max or later (an older hook ignores the key: BoltBeam builds the hook and the list from one commit, mods apply)",
     "region_abf27ac5588f / region_7fc28e3641f8 / region_ff96d2ea18a8: exact shapes only (the recorded [7, 10240] / [13, 10240] state fronts, the [320] SCALE + SILU); no SM-count dependence (elementwise, no reduction); need the hook's strided-view and state-write rules (3e8d1e9 or later); author: the region generator (diwa-gen 1727a3fa3), recorded in each manifest entry; tools/reproduce_shipped.py regenerates them byte for byte",
-    "b12681: region_abf27ac5588f and region_7fc28e3641f8 (the conv-state front) are not in this list: upstream #31669 rebuilt that graph when a draft is loaded (get_rows + concat on dim 1 + cont(transpose)), so they never match; they need regeneration on the new graph. The list names build d141011c only."
+    "b12681: region_abf27ac5588f and region_7fc28e3641f8 (the conv-state front) are not in this list: upstream #31669 rebuilt that graph when a draft is loaded (get_rows + concat on dim 1 + cont(transpose)), so they never match; they need regeneration on the new graph. The list names build d141011c only.",
+    "on b12681 the list also carries rt_router_c2r4u1 and rt_kproj_c2r4u1 (files in ../bf16-gemv-k2560-t4/, row bf16-gemv-k2560-t4): 11 entries"
    ],
    "gain": {
     "value": "+10.0",
@@ -2116,14 +2292,50 @@
     "conditions": "RTX 5090 at 450 W, one request at a time, MoE model on the engine qwen4exp graph, q8_0 KV streamed (kv-stream N 52,848), MTP draft k=3, the shipped 256k switch set; 3 alternating pairs, turns 1-116, recorded history, page cache evicted before every arm; build storage-tmp/hook-r5/tree (this commit hook); replies 116/116 in all 6 runs; 8 entries loaded, 0 dropped in every arm",
     "run": "boltbeam-runs/release-0334-20261121/ship-confirm"
    }
+  },
+  {
+   "name": "bf16-gemv-k2560-t4",
+   "dir": "kernels/bf16-gemv-k2560-t4/",
+   "hook": "ext-kernels",
+   "files": {
+    "rt_kproj_c2r4u1.cu": "26ea700dcb06feb3791ee67dcb35fdb11202e7cf1607b43dcd2f4bb4d35ad68c",
+    "rt_kproj_c2r4u1.cubin": "bb3db31ff1f6c0e83f02bd12d1af0e96d460205b90b07b78f8935a151f310beb",
+    "rt_router_c2r4u1.cu": "5ae6e84d4a4ac8524d7d26b2ac2fa5847515892e76d40c0cd608f71396dbf76f",
+    "rt_router_c2r4u1.cubin": "f992d58ae9bcd9b147c6d9ef762fce5982d80b321dbb395114ac118d531ceaed"
+   },
+   "source": [
+    "rt_router_c2r4u1.cu",
+    "rt_kproj_c2r4u1.cu"
+   ],
+   "lines": 254,
+   "budget": 270,
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/exact-patches-20261124 (rta/gen3-*, ii-chk-t1-6, iii-offon-t1-57, iv-trace-*); boltbeam-runs/regiontimer-densefloat-20261124 (check/); boltbeam-runs/overnight-pairs-20261125 (p2, p3)",
+     "numbers": "On b12681 (count-only, the dev session at -c 86016 -ncmoe 2): (ii) turns 1-6, GGML_CUDA_EXT_KERNELS_CHECK (graphs off): rt_router_c2r4u1 >= 33,793 checks, rt_kproj_c2r4u1 >= 8,961 checks, 0 differ, worst 0; (iii) turns 1-57, the port's kernel list + these 2 entries (with mmq-few-ring2, mmvq-active-warps, mmvq-moe-row1 on) vs the port's list alone: replies 57/57, draft schedules 57/57; first match rt_router node 131 (ffn_moe_logits-0), rt_kproj node 218 (indexer_k_raw-3). Region timer on the b12681 source (rta/gen3-1..3, copies 7, stock = mul_mat_vec_f): router +1.71..+1.78 us a call x 48, k_proj +1.63..+1.65 x 12 = 0.104 ms/step; device read 0 differ 6/6. Traced (iv): router 0.217 -> 0.125 and k_proj 0.048 -> 0.029 ms a verify step (turns 5-6), 0.208 -> 0.125 and 0.048 -> 0.030 (turns 22-23): -0.101..-0.111 ms/step. CPU emulator (b12521 run): 0 of 49,152 differ in 48 trials, mutants 2/2 caught. Gated timing (boltbeam-runs/overnight-pairs-20261125, the dev session turns 1-57, recorded history, the owner's 256k line, decode tok/s = 2.949 tok/step / ms/step): p2 PORTFIX (the k-pool indexer build, these four items absent) vs GAPEXACT (that build + mmq-few-ring2 + mmvq-active-warps + mmvq-moe-row1 + the two bf16-gemv-k2560-t4 entries, all on together): PORTFIX 242.8 / 243.0, GAPEXACT 247.9 / 251.0 tok/s (12.145 / 12.135 -> 11.898 / 11.751 ms/step); p3 LIVE (b12521, 5 runs) 242.0 vs GAPEXACT 247.9 / 251.1; replies identical in every run. 2 pairs each, both positive; a formal CI needs 3. The four items were timed together, not one by one. GAPEXACT reads 247.9 when it runs after another build and 251.1 after itself: unexplained. Dev session only, held-out sessions not yet timed. RTX 5090 sm_120 only. No timing against a stock b12681 build exists for these items: the comparison is stated as measured, not converted. Both timed arms also loaded two kernel entries that are not in this repo (region_down_silu_c2r4u5, region_src1q_hc_pre_t4), so the absolute tok/s are that machine's; the difference between the arms is what these rows add.",
+     "match": {
+      "what": "reply sha256 and draft schedule per turn, the list with these entries (and the three launch-shape rows) on vs off (iii-offon-t1-57)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "exercised_by": "two one-op MUL_MAT windows at the T=4 verify: BF16 x F32 [2560, 256] x [2560, 4] (the MoE router, ffn_gate_inp, 48 a verify step) and [2560, 128] x [2560, 4] (indexer k_proj, 12 a verify step); stock runs mul_mat_vec_f there",
+   "limits": [
+    "generator diwa-gen bdb8c0363 (= 940db05ef render, byte-equal), family region_chain.v1, order llama.cpp.mmvf.bf16_f32.b256 as explicit FMAs, -use_fast_math -fmad=false; launch shape 2 columns x 4 rows a block (grids 64x2, 32x2); sm_120, sm_count_min 103 / 52; build key d141011c",
+    "T=4 only (match key ne [256, 4] / [128, 4]); other T keep mul_mat_vec_f",
+    "the two entries ship in ../region-chain-k2560-k10240/manifest.json (the one list the engine reads), kernel files ../bf16-gemv-k2560-t4/rt_router_c2r4u1.cubin (sha256 f992d58ae9bcd9b147c6d9ef762fce5982d80b321dbb395114ac118d531ceaed) and rt_kproj_c2r4u1.cubin (bb3db31ff1f6c0e83f02bd12d1af0e96d460205b90b07b78f8935a151f310beb), byte-equal to the files the timed build loaded",
+    "Both timed arms also loaded two kernel entries that are not in this repo (region_down_silu_c2r4u5, region_src1q_hc_pre_t4), so the absolute tok/s are that machine's; the difference between the arms is what these rows add."
+   ]
   }
  ],
  "tested_trees": [
   {
-   "id": "modules-port-b12681",
-   "path": "storage-tmp/portgap/tree",
-   "what": "b12681 (d141011c2) + the 6 module patches of this folder applied with git apply to the port's base checkout (boltbeam-engines/llama.cpp/port-b12681-20261124/src); = the grammar-backend tree storage-tmp/grambk/tree plus the indexer module's k-pool rows (the r2 -> r1 diff of the port tree, 7 files). Built (llama-server + test-backend-ops, CUDA 13.2.86 sm_120, Release, the port's cmake line) as boltbeam-engines/llama.cpp/port-b12681-gap-20261124 (storage-tmp/portgap/tree is a copy of its tree without .git) and run on the GPU: boltbeam-runs/port-gap-20261124",
-   "contains": "the 6 modules on b12681 (rs-one-copy and the 4 k-pool rows dropped)",
+   "id": "release-kpool-exact-b12681",
+   "path": "storage-tmp/release1125/tree",
+   "what": "the tree that was timed (boltbeam-runs/overnight-pairs-20261125 p2, p3: GAPEXACT): port-b12681-gap-20261124/tree (b12681 d141011c2 + the 6 module patches with the k-pool indexer rows + the grammar-backend fix) with this folder's mmq-few.cu and mmvq.cu (mmq-few-ring2, mmvq-active-warps, mmvq-moe-row1). storage-tmp/release1125/tree is a link to boltbeam-engines/llama.cpp/port-b12681-gapexact-20261124/tree; built as boltbeam-engines/llama.cpp/port-b12681-gapexact-20261124/build; identity: boltbeam-runs/exact-patches-20261124 (v-gapexact-t1-57), boltbeam-runs/port-gap-20261124",
+   "contains": "the 6 modules on b12681 with the k-pool indexer rows and the three launch-shape rows in kernels",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

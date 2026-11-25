@@ -1876,6 +1876,222 @@
      "symbol": "region_ff96d2ea18a8"
     }
    }
+  },
+  {
+   "id": "rt_router_c2r4u1",
+   "target": "nvidia_sm120",
+   "sm_count_min": 103,
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       256,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        256
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x0"
+       },
+       {
+        "ext": "x1"
+       }
+      ]
+     }
+    ],
+    "outputs": [
+     0
+    ],
+    "alias_ok": []
+   },
+   "kernel": {
+    "file": "../bf16-gemv-k2560-t4/rt_router_c2r4u1.cubin",
+    "sha256": "f992d58ae9bcd9b147c6d9ef762fce5982d80b321dbb395114ac118d531ceaed",
+    "symbol": "rt_router_c2r4u1",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     64,
+     2,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 0,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "549e8dcb319845ce0b62ca2bba65ea27bf08627aafbc972c479d7144c0a44a3d",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)",
+     "Opt(op=OptOps.UPCAST, axis=0, arg=2)",
+     "Opt(op=OptOps.UPCAST, axis=1, arg=4)"
+    ],
+    "compile_flags": [
+     "-O3",
+     "-use_fast_math",
+     "-fmad=false"
+    ],
+    "checks": {
+     "outputs": 8,
+     "shared_values": 8,
+     "loops": 0,
+     "fmul": 0,
+     "mma": 0,
+     "ffma": 80,
+     "shfl": 40,
+     "ok": true,
+     "why": [],
+     "gate": false
+    }
+   }
+  },
+  {
+   "id": "rt_kproj_c2r4u1",
+   "target": "nvidia_sm120",
+   "sm_count_min": 52,
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       128,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        128
+       ],
+       [
+        2560,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x0"
+       },
+       {
+        "ext": "x1"
+       }
+      ]
+     }
+    ],
+    "outputs": [
+     0
+    ],
+    "alias_ok": []
+   },
+   "kernel": {
+    "file": "../bf16-gemv-k2560-t4/rt_kproj_c2r4u1.cubin",
+    "sha256": "bb3db31ff1f6c0e83f02bd12d1af0e96d460205b90b07b78f8935a151f310beb",
+    "symbol": "rt_kproj_c2r4u1",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     32,
+     2,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 0,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "837557177415ab043951db965e4d4c7a4f4a1010d6c26b8300f1e95206e76fa2",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)",
+     "Opt(op=OptOps.UPCAST, axis=0, arg=2)",
+     "Opt(op=OptOps.UPCAST, axis=1, arg=4)"
+    ],
+    "compile_flags": [
+     "-O3",
+     "-use_fast_math",
+     "-fmad=false"
+    ],
+    "checks": {
+     "outputs": 8,
+     "shared_values": 8,
+     "loops": 0,
+     "fmul": 0,
+     "mma": 0,
+     "ffma": 80,
+     "shfl": 40,
+     "ok": true,
+     "why": [],
+     "gate": false
+    }
+   }
   }
  ]
 }
