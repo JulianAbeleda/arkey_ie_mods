@@ -1,0 +1,1506 @@
+diff --git a/ggml/src/ggml-cuda/CMakeLists.txt b/ggml/src/ggml-cuda/CMakeLists.txt
+index dcb380535..7edab80dc 100644
+--- a/ggml/src/ggml-cuda/CMakeLists.txt
++++ b/ggml/src/ggml-cuda/CMakeLists.txt
+@@ -127,6 +127,7 @@ if (CUDAToolkit_FOUND)
+ 
+     ggml_cuda_fattn_vec_instances(${CMAKE_CURRENT_SOURCE_DIR} SRCS)
+     list(APPEND GGML_SOURCES_CUDA ${SRCS})
++    list(APPEND GGML_SOURCES_CUDA ext-kernels.cpp ../../../vendor/hash/sha256/sha256.c)  # opt-in mod GGML_CUDA_EXT_KERNELS
+ 
+     ggml_add_backend_library(ggml-cuda
+                              ${GGML_HEADERS_CUDA}
+@@ -135,6 +136,7 @@ if (CUDAToolkit_FOUND)
+ 
+     target_link_libraries(ggml-cuda PRIVATE ${CMAKE_DL_LIBS})
+ 
++    target_include_directories(ggml-cuda PRIVATE ../../../vendor ../../../vendor/hash)
+     if (GGML_CUDA_GRAPHS)
+         add_compile_definitions(GGML_CUDA_USE_GRAPHS)
+     endif()
+diff --git a/ggml/src/ggml-cuda/concat.cu b/ggml/src/ggml-cuda/concat.cu
+index f8dcd95ab..663fe3e90 100644
+--- a/ggml/src/ggml-cuda/concat.cu
++++ b/ggml/src/ggml-cuda/concat.cu
+@@ -1,6 +1,7 @@
+ #include "concat.cuh"
+ 
+ #include <stdint.h>
++#include <vector>
+ 
+ // contiguous kernels
+ template <typename T, int dim>
+@@ -79,8 +80,8 @@ static void concat_cont_cuda(const T * x,
+     concat_cont<T, 2><<<num_blocks, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(x, y, dst, ne00, ne01, ne02, ne0, ne1, ne2);
+ }
+ 
+-// non-contiguous kernel (slow)
+-template <typename T, int dim>
++// non-contiguous kernel (slow); by_rows (GGML_CUDA_CONCAT_ROWS): a block takes `rows` whole rows, not one
++template <typename T, int dim, bool by_rows = false>
+ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE)
+     concat_non_cont(
+         const char * src0,
+@@ -103,22 +104,24 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE)
+           uint64_t   nb12,
+           uint64_t   nb13,
+            int64_t   ne0,
+-           int64_t /*ne1*/,
++           int64_t   ne1,
+            int64_t /*ne2*/,
+            int64_t /*ne3*/,
+           uint64_t   nb0,
+           uint64_t   nb1,
+           uint64_t   nb2,
+-          uint64_t   nb3) {
++          uint64_t   nb3,
++           int64_t   rows) {
+     static_assert(dim >= 0 && dim <= 3, "dim must be in [0, 3]");
+ 
+     const int64_t i3 = blockIdx.z;
+     const int64_t i2 = blockIdx.y;
+-    const int64_t i1 = blockIdx.x;
++    const int64_t r  = by_rows ? threadIdx.x / (uint32_t) ne0 : 0;  // this thread's row of the block
++    const int64_t i1 = by_rows ? (int64_t) blockIdx.x * rows + r : blockIdx.x;
+ 
+     const T * x;
+ 
+-    for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
++    for (int64_t i0 = threadIdx.x - r * ne0; i0 < ne0 && (!by_rows || (r < rows && i1 < ne1)); i0 += blockDim.x) {
+         if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
+             x = (const T *)(src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+         } else {
+@@ -163,17 +166,25 @@ static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml
+     } else {
+         GGML_ASSERT(!ggml_is_quantized(src0->type));
+ 
+-        dim3 grid_dim(dst->ne[1], dst->ne[2], dst->ne[3]);
++        // GGML_CUDA_CONCAT_ROWS=1 (local mod, unset = stock): stock launches one block a row, so a row shorter than a
++        // block leaves its other threads idle (13 of 256 busy at [13,10240]: 10,240 blocks for 0.5 MB). With it a
++        // block takes as many whole rows as fit, floor(block / ne0), and the grid follows the element count.
++        // GGML_CUDA_CONCAT_ROWS_CHECK=1 (uncaptured runs: with GGML_CUDA_DISABLE_GRAPHS=1) also runs the stock shape
++        // and compares every byte.
++        static const bool rows_on = getenv("GGML_CUDA_CONCAT_ROWS") != nullptr, rows_check = getenv("GGML_CUDA_CONCAT_ROWS_CHECK") != nullptr;
++        int64_t rows = rows_on && dst->ne[0] > 0 ? std::max<int64_t>(1, CUDA_CONCAT_BLOCK_SIZE / dst->ne[0]) : 1;
+         auto launch_kernel = [&](auto dim) {
+-            concat_non_cont<T, dim><<<grid_dim, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(
++            dim3 grid_dim((dst->ne[1] + rows - 1) / rows, dst->ne[2], dst->ne[3]);
++            (rows > 1 ? concat_non_cont<T, dim, true> : concat_non_cont<T, dim, false>)<<<grid_dim, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(
+                 (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
+                 src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+                 src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
+                 src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+                 src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3],
+                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+-                dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3]);
++                dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], rows);
+         };
++        auto launch = [&]() {
+         switch (dim) {
+             case 0:
+                 launch_kernel(std::integral_constant<int, 0>{});
+@@ -190,6 +201,23 @@ static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml
+             default:
+                 GGML_ABORT("Invalid dim: %d", dim);
+         }
++        };
++        launch();
++        cudaStreamCaptureStatus cap = cudaStreamCaptureStatusNone;
++        if (rows > 1 && rows_check && cudaStreamIsCapturing(stream, &cap) == cudaSuccess && cap == cudaStreamCaptureStatusNone) {
++            static uint64_t   n_check = 0, n_diff = 0;
++            std::vector<char> got(ggml_nbytes(dst)), ref(ggml_nbytes(dst));
++            CUDA_CHECK(cudaStreamSynchronize(stream));
++            CUDA_CHECK(cudaMemcpy(got.data(), dst->data, got.size(), cudaMemcpyDeviceToHost));
++            rows = 1;
++            launch();   // the stock shape; its result stays in the node
++            CUDA_CHECK(cudaStreamSynchronize(stream));
++            CUDA_CHECK(cudaMemcpy(ref.data(), dst->data, ref.size(), cudaMemcpyDeviceToHost));
++            n_diff += got != ref;
++            if (n_check++ % 4096 == 0 || got != ref) {
++                GGML_LOG_WARN("GGML_CUDA_CONCAT_ROWS_CHECK %s: checks %llu, differ %llu\n", n_diff ? "DIFF" : "ok", (unsigned long long) n_check, (unsigned long long) n_diff);
++            }
++        }
+     }
+ }
+ 
+diff --git a/ggml/src/ggml-cuda/cpy.cu b/ggml/src/ggml-cuda/cpy.cu
+index f1f1bf2da..f8b87904e 100644
+--- a/ggml/src/ggml-cuda/cpy.cu
++++ b/ggml/src/ggml-cuda/cpy.cu
+@@ -426,6 +426,22 @@ static bool ggml_cuda_cpy_as_memcpy_2d(const ggml_tensor * src0, const ggml_tens
+     return spitch >= width && dpitch >= width;
+ }
+ 
++// GGML_CUDA_GRAPH_CPY_KERNEL=1 (local mod, off by default): while the stream is capturing a CUDA graph, a same-type strided
++// copy of F32/F16/BF16/I32 takes the scalar copy kernel below instead of cudaMemcpy2DAsync. A 2-D memcpy node cannot take
++// new operand addresses in cudaGraphExecUpdate (only 1-D memcpy nodes can), so a graph holding one is re-instantiated
++// whenever the compute buffer is re-planned; a kernel node takes any address. Outside capture the stock 2-D copy stays.
++static bool ggml_cuda_cpy_graph_kernel(ggml_type type, cudaStream_t stream) {
++    static const bool on = [] {
++        const char * env = getenv("GGML_CUDA_GRAPH_CPY_KERNEL");
++        return env != nullptr && atoi(env) != 0;
++    }();
++    if (!on || (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16 && type != GGML_TYPE_I32)) {
++        return false;
++    }
++    cudaStreamCaptureStatus cap = cudaStreamCaptureStatusNone;
++    return cudaStreamIsCapturing(stream, &cap) == cudaSuccess && cap != cudaStreamCaptureStatusNone;
++}
++
+ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1) {
+     const int64_t ne = ggml_nelements(src0);
+     GGML_ASSERT(ne == ggml_nelements(src1));
+@@ -474,7 +490,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
+         {
+             CUDA_CHECK(cudaMemcpyAsync(src1_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
+         }
+-    } else if (ggml_cuda_cpy_as_memcpy_2d(src0, src1, mc_width, mc_height, mc_spitch, mc_dpitch)) {
++    } else if (ggml_cuda_cpy_as_memcpy_2d(src0, src1, mc_width, mc_height, mc_spitch, mc_dpitch) &&
++               !ggml_cuda_cpy_graph_kernel(src0->type, main_stream)) {
+         CUDA_CHECK(cudaMemcpy2DAsync(src1_ddc, mc_dpitch, src0_ddc, mc_spitch,
+                                      mc_width, mc_height, cudaMemcpyDeviceToDevice, main_stream));
+     } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F8_E4M3) {
+diff --git a/ggml/src/ggml-cuda/ext-kernels.cpp b/ggml/src/ggml-cuda/ext-kernels.cpp
+new file mode 100644
+index 000000000..4b489465c
+--- /dev/null
++++ b/ggml/src/ggml-cuda/ext-kernels.cpp
+@@ -0,0 +1,945 @@
++// Opt-in mod: GGML_CUDA_EXT_KERNELS=<manifest.json> runs kernels named in a boltbeam.kernel_manifest.v1/v2 file in place
++// of the engine's own, for graph nodes that match an entry's ops, types and shapes (never a model or tensor name).
++// v2: an entry may take a WINDOW of N consecutive nodes (a region) with its wiring; one launch replaces all N, or a
++// sequence of launches (launches + scratch: values cut between launches that are not live outputs live in scratch),
++// with run-time extents ({"ne": [node, src, dim]} args, -1 in ne / nb: any), op_params bytes (op_params_hex) and a
++// kv-stream step (kv_stream: a streamed K/V cache resolved into VRAM for the launches after it).
++// Unset = the stock engine. This file holds no kernels: they arrive as cubin / PTX files, verified by sha256.
++// Anything that does not match or does not load falls back to the engine's own path for that node.
++// GGML_CUDA_EXT_KERNELS_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1) runs both and compares every live output at the
++// entry's tolerance.
++#include "ggml-impl.h"
++#include "ext-src1q.cuh"
++
++#include <cuda.h>
++#include <nlohmann/json.hpp>
++extern "C" {
++#include <sha256/sha256.h>
++}
++
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <cstring>
++#include <deque>
++#include <fstream>
++#include <functional>
++#include <iterator>
++#include <mutex>
++#include <string>
++#include <vector>
++
++int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx);
++
++// the kv module's kv-stream (kv-stream.cuh), weak: a build without that module has no streamed cache, the step is a no-op.
++// The mask struct is that header's layout (kv-stream.cuh includes device code a host compiler cannot read)
++struct ggml_cuda_kvs_mask {
++    const void * data = nullptr;
++    int64_t      stride = 0, ne01 = 0;
++    int          ncols1 = 1;
++    int32_t *    cells = nullptr;
++    void *       scratch = nullptr;
++    bool         swapped = false;
++    int64_t      out_stride = 0;
++};
++static_assert(sizeof(ggml_cuda_kvs_mask) == 64, "the layout of kv-stream.cuh's ggml_cuda_kvs_mask");
++#if defined(__GNUC__)
++#define EXT_KVS 1
++__attribute__((weak)) int64_t ggml_cuda_kvs_resolve_cells(const ggml_tensor * K, int64_t n_kv, int64_t n_lists, int64_t n_kv_max, int64_t ne01);
++__attribute__((weak)) bool ggml_cuda_kvs_attn(CUstream stream, const ggml_tensor * K, const ggml_tensor * V, int64_t n_kv, bool sparse_direct,
++                                              int32_t * indices, const int32_t * counts, int64_t n_lists, int64_t n_kv_max,
++                                              ggml_cuda_kvs_mask * mask, const char ** K_data, const char ** V_data);
++#endif
++
++namespace {
++
++using json = nlohmann::json;
++typedef std::array<int64_t, GGML_MAX_DIMS> ext_ne;
++
++struct ext_op {
++    ggml_op                op;
++    int                    unary = -1;     // GGML_OP_UNARY: the unary op, else -1
++    ggml_type              type;
++    ext_ne                 ne, ne_max = {};   // ne -1 (launches entries only): any extent up to ne_max (the kernel's bound)
++    std::vector<ggml_type> src_types;
++    std::vector<ext_ne>    src_ne, src_ne_max;
++    std::vector<ext_ne>    src_ne_min;     // per src: a -1 extent's lower bound (0: none), e.g. where the engine's own path changes
++    std::vector<int>       src_node;       // per src: the window node it is (0..), or -1 = a tensor from outside
++    std::vector<std::string> src_ext;      // per outside src: its manifest name; one name = one tensor across the window
++    int                    uses = 0;       // in-window uses (filled at load)
++    std::vector<float>     params;         // the op's leading op_params as f32, matched bitwise (a scale's factor and bias)
++    std::vector<uint8_t>   params_raw;     // op_params_hex: the leading op_params bytes, matched exactly
++    std::vector<int64_t>   nb;             // a strided node (a view): its byte strides, matched exactly (-1: dense in that dim); empty = contiguous
++    std::vector<std::vector<int64_t>> src_nb;  // the same per outside src
++    int64_t                view_offs = 0;  // an interior view of a window node: its byte offset in that node's buffer
++};
++
++struct ext_arg {
++    int      node;  // window node, or -1: a constant
++    int      src;   // -1: the node's output, 0..: its src
++    uint64_t bits;  // the constant (i32 / u32 / f32 in the low 4 bytes, i64 in 8)
++    int      scratch = -1;  // a scratch slot's address (node -1)
++    int      dim = -1;      // >= 0: the extent ne[dim] of the node / src as i32 (not its address)
++    bool     kv = false;    // after a kv-stream step: an arg at K's / V's address takes the step's pointer
++};
++
++struct ext_kvs {               // a kv-stream step: K, V, mask (node, src); the index lists and counts (scratch slots)
++    ext_arg  k, v, mask;
++    int      lists, counts;
++    int64_t  n_lists, n_kv_max, ncols1;
++};
++
++struct ext_launch {
++    CUfunction           fn;
++    unsigned             grid[3], block[3], shmem;
++    bool                 pdl = false;   // the kernel waits (griddepcontrol.wait) before it reads or writes any argument
++    bool                 state = false; // it writes outside state (a SET_ROWS output, or an output while alias_ok is set)
++    std::vector<ext_arg> args;
++    bool                 is_kvs = false;  // a kv-stream step, not a kernel
++    ext_kvs              kvs;
++};
++
++struct ext_mem {                // per engine stream: the scratch block and the kv-stream step's mask scratch
++    void *      stream;
++    CUdeviceptr base = 0, kvs = 0;
++    size_t      kvs_bytes = 0;   // SIZE_MAX: the kv-stream buffer failed (said once, never retried)
++};
++
++struct ext_entry {
++    std::string                      id;
++    std::vector<ext_op>              ops;
++    std::vector<int>                 outputs;   // window nodes read outside the window
++    std::vector<std::pair<int, int>> alias_ok;  // (node, src) inputs a live output may occupy exactly (same address, size)
++    std::vector<ext_launch>          launches;  // one, or a sequence run in order (all loaded before any runs)
++    std::vector<size_t>              scratch;   // per slot: its byte offset in the scratch block; back(): the block's size
++    std::deque<ext_mem>              scratch_mem;  // per engine stream: allocated once (a deque: references stay valid)
++    bool                             inplace = false;  // an output is a write into an outside tensor (SET_ROWS): no early start
++    double                           tol;  // check mode: largest allowed |ext - stock|, 0 = bit-identical
++    bool                             rel = false;  // tol is relative to max|stock| of each output (tolerance_mode rel_max)
++    uint64_t                         n_match = 0, n_check = 0, n_diff = 0, n_refused = 0;
++    double                           worst = 0;
++    struct src1q { int node, layout, slot; size_t bytes; };
++    std::vector<src1q>               src1_q;    // outputs a launch also wrote quantized (ext-src1q.cuh layout, bytes) into a scratch slot
++};
++
++// the graph this thread evaluates: the matmuls that read an entry's quantized output, and where its bytes are
++struct ext_src1q_rec {
++    const ggml_tensor * src1;
++    const void *        data;
++    int                 layout;
++    size_t              bytes;
++    CUdeviceptr         ptr;
++    const void *        stream;   // the entry's stream: a matmul on another stream (a concurrent branch) quantizes itself
++};
++struct ext_src1q_reg {
++    std::vector<ext_src1q_rec> recs;
++    uint64_t                   used = 0;
++};
++thread_local ext_src1q_reg ext_reg;
++
++bool ext_is_view(ggml_op op) {   // no bytes of its own
++    return op == GGML_OP_RESHAPE || op == GGML_OP_VIEW || op == GGML_OP_TRANSPOSE || op == GGML_OP_PERMUTE;
++}
++
++ggml_type ext_type(const std::string & s) {
++    for (int t = 0; t < GGML_TYPE_COUNT; ++t) {
++        const char * name = ggml_type_name((ggml_type) t);
++        if (name != nullptr && s == name) {
++            return (ggml_type) t;
++        }
++    }
++    throw std::runtime_error("unknown type " + s);
++}
++
++ggml_op ext_op_of(const std::string & s) {
++    for (int o = 0; o < GGML_OP_COUNT; ++o) {
++        if (s == std::string("GGML_OP_") + ggml_op_name((ggml_op) o)) {
++            return (ggml_op) o;
++        }
++    }
++    throw std::runtime_error("unknown op " + s);
++}
++
++int ext_unary_of(const std::string & s) {
++    for (int u = 0; u < GGML_UNARY_OP_COUNT; ++u) {
++        if (s == std::string("GGML_UNARY_OP_") + ggml_unary_op_name((ggml_unary_op) u)) {
++            return u;
++        }
++    }
++    throw std::runtime_error("unknown unary op " + s);
++}
++
++ext_ne ext_shape(const json & j) {
++    ext_ne ne;
++    ne.fill(1);
++    for (size_t d = 0; d < j.size(); ++d) {
++        ne.at(d) = j[d].get<int64_t>();
++    }
++    return ne;
++}
++
++std::string ext_sha256(const std::string & blob) {
++    unsigned char digest[SHA256_DIGEST_SIZE];
++    char          hex[2*SHA256_DIGEST_SIZE + 1];
++    sha256_hash(digest, (const unsigned char *) blob.data(), blob.size());
++    for (int b = 0; b < SHA256_DIGEST_SIZE; ++b) {
++        snprintf(hex + 2*b, 3, "%02x", digest[b]);
++    }
++    return hex;
++}
++
++void ext_ok(CUresult r, const char * what) {
++    if (r != CUDA_SUCCESS) {
++        throw std::runtime_error(std::string(what) + " failed: " + std::to_string((int) r));
++    }
++}
++
++ext_entry ext_load_entry(const json & j, const std::string & dir, const std::string & chip, bool v2, int nsm) {
++    ext_entry e;
++    e.id = j.at("id").get<std::string>();
++    if (j.at("target") != chip) {
++        throw std::runtime_error("built for " + j.at("target").get<std::string>() + ", this device is " + chip);
++    }
++    if (j.contains("sm_count") && j.at("sm_count").get<int>() != nsm) {   // an order derived from the SM count (a stream-K split)
++        throw std::runtime_error("made for " + std::to_string(j.at("sm_count").get<int>()) + " SMs, this device has " + std::to_string(nsm));
++    }
++    const int sm_lo = j.value("sm_count_min", 1), sm_hi = j.value("sm_count_max", 1 << 30);   // the engine picks its kernel by SM count
++    if (nsm < sm_lo || nsm > sm_hi) {
++        throw std::runtime_error("made for " + std::to_string(sm_lo) + " to " + std::to_string(sm_hi) + " SMs, this device has " + std::to_string(nsm));
++    }
++    const json & ops   = j.at("match").at("ops");
++    const bool   multi = j.contains("launches");
++    if (ops.empty() || (!v2 && ops.size() != 1)) {
++        throw std::runtime_error("a v1 entry takes a window of one op, a v2 entry at least one");
++    }
++    for (size_t k = 0; k < ops.size(); ++k) {
++        const json & o = ops[k];
++        ext_op       op;
++        op.op   = ext_op_of(o.at("op").get<std::string>());
++        op.type = ext_type(o.at("type").get<std::string>());
++        op.ne   = ext_shape(o.at("ne"));
++        if (o.contains("unary")) {
++            op.unary = ext_unary_of(o.at("unary").get<std::string>());
++        }
++        for (const json & v : o.value("op_params_f32", json::array())) {
++            op.params.push_back(v.get<float>());
++        }
++        // these op_params are the op: never match on shape alone (scale: factor, bias; arange: start, stop, step; concat: dim)
++        if (op.params.size() < (op.op == GGML_OP_SCALE ? 2u : op.op == GGML_OP_ARANGE ? 3u : op.op == GGML_OP_CONCAT ? 1u : 0u)) {
++            throw std::runtime_error("a GGML_OP_SCALE / ARANGE / CONCAT op needs its op_params_f32 (2 / 3 / 1 values)");
++        }
++        const std::string hex = o.value("op_params_hex", std::string());
++        if ((!hex.empty() && !v2) || hex.size() % 2 != 0 || hex.size() / 2 > GGML_MAX_OP_PARAMS || hex.find_first_not_of("0123456789abcdef") != std::string::npos) {
++            throw std::runtime_error("op_params_hex: whole bytes in lower-case hex, at most GGML_MAX_OP_PARAMS");
++        }
++        for (size_t c = 0; c < hex.size(); c += 2) {
++            op.params_raw.push_back((uint8_t) std::stoul(hex.substr(c, 2), nullptr, 16));
++        }
++        op.nb        = o.value("nb", std::vector<int64_t>());
++        op.view_offs = o.value("view_offs", (int64_t) 0);
++        if ((op.op == GGML_OP_UNARY) != (op.unary >= 0)) {
++            throw std::runtime_error("a GGML_OP_UNARY op needs its unary, and only it");
++        }
++        for (const json & t : o.at("src_types")) {
++            op.src_types.push_back(ext_type(t.get<std::string>()));
++        }
++        for (const json & s : o.at("src_ne")) {
++            op.src_ne.push_back(ext_shape(s));
++        }
++        op.src_nb = o.value("src_nb", std::vector<std::vector<int64_t>>(op.src_types.size()));
++        op.ne_max = ext_shape(o.value("ne_max", json::array()));
++        const json src_max = o.value("src_ne_max", json::array());
++        for (size_t s = 0; s < op.src_types.size(); ++s) {
++            op.src_ne_max.push_back(ext_shape(s < src_max.size() ? src_max[s] : json::array()));
++        }
++        const json src_min = o.value("src_ne_min", json::array());
++        for (size_t s = 0; s < op.src_types.size(); ++s) {
++            op.src_ne_min.push_back(ext_shape(s < src_min.size() ? src_min[s] : json::array()));
++        }
++
++        bool nb_ok = op.src_nb.size() == op.src_types.size() && (op.nb.empty() || op.nb.size() == GGML_MAX_DIMS);
++        for (const std::vector<int64_t> & nb : op.src_nb) {
++            nb_ok = nb_ok && (nb.empty() || nb.size() == GGML_MAX_DIMS);
++        }
++        // contiguous: true, or the node's strides (nb): a strided tensor is matched only on its exact layout
++        if (o.value("contiguous", false) != op.nb.empty() || !nb_ok || op.src_ne.size() != op.src_types.size() || op.src_types.size() > GGML_MAX_SRC) {
++            throw std::runtime_error("needs contiguous: true or nb (4 strides), one src_ne per src_types, src_nb of 4 strides or []");
++        }
++        for (size_t s = 0; s <= op.src_types.size(); ++s) {   // a wildcard (the node, then each src): a launches entry, bounded
++            const bool                   self = s == op.src_types.size();
++            const ext_ne &               ne = self ? op.ne : op.src_ne[s], & mx = self ? op.ne_max : op.src_ne_max[s];
++            const std::vector<int64_t> & nb = self ? op.nb : op.src_nb[s];
++            for (int d = 0; d < GGML_MAX_DIMS; ++d) {
++                if ((ne[d] < 0 && (!multi || ne[d] != -1 || mx[d] <= 1)) || (!nb.empty() && nb[d] < 0 && (!multi || nb[d] != -1))) {
++                    throw std::runtime_error("-1 (any) in ne / nb: a launches entry only, an ne -1 with its bound in ne_max / src_ne_max");
++                }
++            }
++        }
++        op.src_node.assign(op.src_types.size(), -1);
++        op.src_ext.assign(op.src_types.size(), "");
++        if (o.contains("src")) {   // v2 wiring: {"node": j} (an earlier window node) or {"ext": n} (from outside)
++            if (o.at("src").size() != op.src_types.size()) {
++                throw std::runtime_error("one src wiring per src_types");
++            }
++            for (size_t s = 0; s < op.src_types.size(); ++s) {
++                const json & w = o.at("src")[s];
++                if (w.contains("ext")) {
++                    op.src_ext[s] = w.at("ext").is_string() ? w.at("ext").get<std::string>() : w.at("ext").dump();
++                }
++                if (w.contains("node")) {
++                    const int n = w.at("node").get<int>();
++                    const bool self = n == (int) k && op.op == GGML_OP_CPY && s == 1;   // a cast: its src 1 is the node itself
++                    if (n < 0 || (n >= (int) k && !self)) {
++                        throw std::runtime_error("a src names a window node that is not earlier");
++                    }
++                    op.src_node[s] = n;
++                    (self ? op : e.ops[n]).uses++;
++                }
++            }
++        }
++        e.ops.push_back(op);
++    }
++    for (const json & o : j.at("match").value("outputs", json::array({(int) ops.size() - 1}))) {
++        const int n = o.get<int>();
++        if (n < 0 || n >= (int) ops.size()) {
++            throw std::runtime_error("an output names a node outside the window");
++        }
++        e.outputs.push_back(n);
++    }
++    for (size_t k = 0; k < e.ops.size(); ++k) {   // a node no window node reads must be read outside: a live output
++        if (e.ops[k].uses == 0 && std::find(e.outputs.begin(), e.outputs.end(), (int) k) == e.outputs.end()) {
++            throw std::runtime_error("node " + std::to_string(k) + " is read by no one: it must be a listed output");
++        }
++    }
++    std::vector<bool> fixed(e.ops.size());   // a node whose value the entry fixes: every src a fixed window node (an ARANGE has none)
++    for (size_t k = 0; k < e.ops.size(); ++k) {   // a SET_ROWS writes into its src 2: a listed output; its rows fixed, its destination a window view
++        const ext_op & op = e.ops[k];
++        fixed[k]          = op.op == GGML_OP_ARANGE || (!op.src_node.empty() && (op.op == GGML_OP_SCALE || op.op == GGML_OP_CPY || op.op == GGML_OP_VIEW || op.op == GGML_OP_RESHAPE));
++        for (size_t s = 0; s < op.src_node.size(); ++s) {
++            fixed[k] = fixed[k] && op.src_node[s] >= 0 && (op.src_node[s] == (int) k || fixed[op.src_node[s]]);
++        }
++        if (op.op == GGML_OP_SET_ROWS && (std::find(e.outputs.begin(), e.outputs.end(), (int) k) == e.outputs.end() || op.src_node.size() != 3 ||
++                                          op.src_node[1] < 0 || !fixed[op.src_node[1]] || op.src_node[2] < 0 || e.ops[op.src_node[2]].src_node.empty() ||
++                                          e.ops[op.src_node[2]].src_node[0] >= 0 || e.ops[op.src_node[2]].uses != 1)) {
++            throw std::runtime_error("a GGML_OP_SET_ROWS must be a listed output, its rows (src 1) fixed by the window, its destination (src 2) a window view of an outside tensor");
++        }
++        e.inplace = e.inplace || op.op == GGML_OP_SET_ROWS;
++    }
++    for (const json & a : j.at("match").value("alias_ok", json::array())) {
++        e.alias_ok.emplace_back(a.at("node").get<int>(), a.at("src").get<int>());
++        if (ext_is_view(e.ops.at(e.alias_ok.back().first).op)) {   // a view reads no bytes: an output on its src is a state write
++            throw std::runtime_error("alias_ok names a view's src");
++        }
++    }
++    if (multi && (!v2 || j.contains("kernel") || j.contains("launch") || j.contains("args") || j.at("launches").empty())) {
++        throw std::runtime_error("launches: a v2 entry only, non-empty, in place of kernel / launch / args");
++    }
++    e.launches.reserve(multi ? j.at("launches").size() : 1);
++    for (const json & s : j.value("scratch", json::array())) {   // slots 0..n-1, each 256-byte aligned in one block
++        if (!multi || s.at("slot").get<size_t>() != e.scratch.size() || s.at("bytes").get<int64_t>() <= 0) {
++            throw std::runtime_error("scratch: slots 0..n-1 in order, bytes > 0, with launches only");
++        }
++        e.scratch.push_back(e.scratch.empty() ? 0 : e.scratch.back());
++        e.scratch.back() += (s.at("bytes").get<size_t>() + 255) / 256 * 256;
++    }
++    e.scratch.insert(e.scratch.begin(), 0);   // e.scratch[s]: slot s's offset; back(): the block's bytes
++    std::vector<bool> named(e.scratch.size() - 1), written(e.ops.size());   // written: by an earlier launch
++    // a node's bytes are held: an outside tensor, written by an earlier launch, or a view of a held node
++    std::function<bool(int)> held = [&](int m) { return m < 0 || written[m] || (ext_is_view(e.ops[m].op) && held(e.ops[m].src_node[0])); };
++    auto node_ref = [&](const json & r, bool dim) {   // {"node": k, "src": s} or [node, src, dim]: a tensor of the window
++        ext_arg a = { r.is_array() ? r.at(0).get<int>() : r.at("node").get<int>(), r.is_array() ? r.at(1).get<int>() : r.at("src").get<int>(), 0 };
++        a.dim = dim ? r.at(2).get<int>() : -1;
++        if (a.node < 0 || a.node >= (int) e.ops.size() || a.src < -1 || a.src >= (int) e.ops[a.node].src_types.size() || (dim && (a.dim < 0 || a.dim >= GGML_MAX_DIMS))) {
++            throw std::runtime_error("argument names a tensor outside the window");
++        }
++        return a;
++    };
++    const ext_kvs * kvs = nullptr;   // the kv-stream step, once it has run: later args naming its K / V take its pointers
++    for (const json & q : multi ? j.at("launches") : json::array({j})) {
++        ext_launch L;
++        std::vector<int> writes;
++        if (multi && q.contains("kv_stream")) {   // K, V, mask (node, src); lists / counts (scratch slots, written before)
++            const json & kq = q.at("kv_stream");
++            L.is_kvs = true;
++            L.kvs    = { node_ref(kq.at("k"), false), node_ref(kq.at("v"), false), node_ref(kq.at("mask"), false), kq.at("lists").get<int>(),
++                         kq.at("counts").get<int>(), kq.at("n_lists").get<int64_t>(), kq.at("n_kv_max").get<int64_t>(), kq.value("ncols1", (int64_t) 1) };
++            const ext_kvs & K = L.kvs;
++            if (kvs != nullptr || K.k.src < 0 || K.v.src < 0 || K.mask.src < 0 || !held(e.ops[K.k.node].src_node[K.k.src]) ||
++                !held(e.ops[K.v.node].src_node[K.v.src]) || !held(e.ops[K.mask.node].src_node[K.mask.src]) || K.n_lists <= 0 || K.n_kv_max <= 0 || K.ncols1 <= 0 || K.lists < 0 || K.counts < 0 || K.lists == K.counts ||
++                K.lists >= (int) named.size() || K.counts >= (int) named.size() || e.scratch[K.lists + 1] - e.scratch[K.lists] < (size_t) (K.n_lists*K.n_kv_max*4) ||
++                e.scratch[K.counts + 1] - e.scratch[K.counts] < (size_t) (K.n_lists*4) || !named[K.lists] || !named[K.counts]) {
++                throw std::runtime_error("kv_stream: one step; k / v / mask inputs; lists and counts two slots an earlier launch names, of n_lists x n_kv_max / n_lists i32");
++            }
++            e.launches.push_back(L);
++            kvs = &e.launches.back().kvs;   // reserved below: no reallocation while launches are parsed
++            continue;
++        }
++        const json & k = q.at("kernel");
++        std::ifstream f(dir + k.at("file").get<std::string>(), std::ios::binary);
++        std::string   blob((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
++        if (!f || k.at("format") == "hsaco" || ext_sha256(blob) != k.at("sha256")) {
++            throw std::runtime_error("kernel file missing, wrong format or wrong sha256");
++        }
++        CUmodule mod;
++        ext_ok(cuModuleLoadData(&mod, blob.c_str()), "cuModuleLoadData");  // cubin or PTX, into the current (primary) context
++        ext_ok(cuModuleGetFunction(&L.fn, mod, k.at("symbol").get<std::string>().c_str()), "cuModuleGetFunction");
++        const json & l = q.at("launch");
++        for (int d = 0; d < 3; ++d) {
++            L.grid[d]  = l.at("grid").at(d).get<unsigned>();
++            L.block[d] = l.at("block").at(d).get<unsigned>();
++        }
++        L.shmem = l.value("shared_bytes", 0u);
++        L.pdl   = l.value("pdl", false) && !e.inplace;   // a state write never starts before the kernel ahead of it has ended
++        if (multi) {   // what would fail at launch fails here: no sequence stops half way on a launch error
++            int max_threads = 0;
++            ext_ok(cuFuncGetAttribute(&max_threads, CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, L.fn), "cuFuncGetAttribute");
++            int grid_max[3], smem_static = 0, smem_max = 0;
++            CUdevice dev;
++            ext_ok(cuCtxGetDevice(&dev), "cuCtxGetDevice");
++            for (int d = 0; d < 3; ++d) {
++                ext_ok(cuDeviceGetAttribute(&grid_max[d], (CUdevice_attribute) (CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X + d), dev), "cuDeviceGetAttribute");
++            }
++            ext_ok(cuDeviceGetAttribute(&smem_max, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev), "cuDeviceGetAttribute");
++            ext_ok(cuFuncGetAttribute(&smem_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, L.fn), "cuFuncGetAttribute");
++            bool ok = (int64_t) L.block[0] * L.block[1] * L.block[2] <= max_threads && (int64_t) smem_static + L.shmem <= smem_max;
++            for (int d = 0; d < 3; ++d) {
++                ok = ok && L.grid[d] >= 1 && L.block[d] >= 1 && L.grid[d] <= (unsigned) grid_max[d];
++            }
++            if (!ok) {
++                throw std::runtime_error("a launch's grid, block or shared memory is outside what its kernel and this device allow");
++            }
++            if (L.shmem > 48*1024) {
++                ext_ok(cuFuncSetAttribute(L.fn, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, (int) L.shmem), "cuFuncSetAttribute");
++            }
++        }
++        for (const json & a : q.at("args")) {
++            ext_arg arg = { -1, -1, 0 };
++            if (multi && a.contains("scratch") && !a.contains("node")) {
++                arg.scratch = a.at("scratch").get<int>();
++                if (arg.scratch < 0 || arg.scratch >= (int) named.size()) {
++                    throw std::runtime_error("argument names a scratch slot the entry does not declare");
++                }
++                named[arg.scratch] = true;
++            } else if (multi && a.contains("ne") && !a.contains("node")) {   // a run-time extent: metadata, no bytes read
++                arg = node_ref(a.at("ne"), true);
++            } else if (a.contains("node")) {
++                arg = node_ref(a, false);
++                const std::string & x = arg.src >= 0 ? e.ops[arg.node].src_ext[arg.src] : "";
++                if (kvs != nullptr && ((arg.node == kvs->mask.node && arg.src == kvs->mask.src) || (!x.empty() && x == e.ops[kvs->mask.node].src_ext[kvs->mask.src]))) {
++                    throw std::runtime_error("a launch after the kv_stream step reads its mask (its columns no longer match the rewritten lists)");
++                }
++                arg.kv = kvs != nullptr;   // K / V by address at run time: any route to them takes the step's pointers
++                if (arg.src == 0 && ext_is_view(e.ops[arg.node].op) && e.ops[arg.node].src_node[0] < 0) {   // its offset is a run-time value
++                    throw std::runtime_error("argument names the tensor a view is of: pass the view (src -1)");
++                }
++                const bool out = std::find(e.outputs.begin(), e.outputs.end(), arg.node) != e.outputs.end();
++                if (multi && arg.src == -1 && !out) {   // the allocator may alias interior tensors: a cut value goes to scratch
++                    throw std::runtime_error("a launch writes node " + std::to_string(arg.node) + ", not a listed output: pass a scratch slot");
++                }
++                const int m = arg.src >= 0 ? e.ops[arg.node].src_node[arg.src] : -1;   // a cast's src 1 is the node itself
++                if (multi && m != arg.node && !held(m)) {   // a cut value no earlier launch wrote
++                    throw std::runtime_error("a launch reads node " + std::to_string(m) + ", which no earlier launch wrote: pass a scratch slot");
++                }
++                if (arg.src == -1 && out) {
++                    writes.push_back(arg.node);
++                    L.state = L.state || !e.alias_ok.empty() || e.ops[arg.node].op == GGML_OP_SET_ROWS;
++                }
++            } else if (a.at("type") == "f32") {
++                const float v = a.at("scalar").get<float>();
++                memcpy(&arg.bits, &v, sizeof(v));
++            } else {
++                arg.bits = (uint64_t) a.at("scalar").get<int64_t>();
++            }
++            L.args.push_back(arg);
++        }
++        for (int m : writes) {   // a full view (RESHAPE / TRANSPOSE / PERMUTE) of a window node writes that node's bytes
++            for (; m >= 0 && !written[m]; m = ext_is_view(e.ops[m].op) && e.ops[m].op != GGML_OP_VIEW ? e.ops[m].src_node[0] : -1) {
++                written[m] = true;
++            }
++        }
++        e.launches.push_back(L);
++    }
++    for (size_t s = 0; s < named.size(); ++s) {
++        if (!named[s]) {
++            throw std::runtime_error("scratch slot " + std::to_string(s) + " is named by no launch");
++        }
++    }
++    for (int o : e.outputs) {   // a view's bytes are those of the node it views
++        if (multi && !held(o)) {
++            throw std::runtime_error("output " + std::to_string(o) + " is written by no launch");
++        }
++    }
++    for (size_t q = 1; q < e.launches.size(); ++q) {   // a launch after a state write waits for it: no early start
++        e.launches[q].state = e.launches[q].state || e.launches[q - 1].state;
++        e.launches[q].pdl   = e.launches[q].pdl && !e.launches[q - 1].state;
++    }
++    for (const json & q : j.value("src1_q8_1", json::array())) {   // the q8_1 a matmul reading an output would make (ext-src1q.cuh)
++        static const std::string layouts[] = {"q8_1", "mmq_few_d4", "mmq_few_ds4"};
++        const int     lay = (int) (std::find(std::begin(layouts), std::end(layouts), q.at("layout").get<std::string>()) - std::begin(layouts));
++        const int     n   = q.at("node").get<int>(), s = q.at("scratch").get<int>();
++        const int64_t b   = q.at("bytes").get<int64_t>();
++        if (!multi || lay == 3 || std::find(e.outputs.begin(), e.outputs.end(), n) == e.outputs.end() || e.ops[n].type != GGML_TYPE_F32 ||
++            s < 0 || s + 1 >= (int) e.scratch.size() || b <= 0 || e.scratch[s + 1] - e.scratch[s] < (size_t) b) {
++            throw std::runtime_error("src1_q8_1: an f32 output, a known layout, a scratch slot of at least its bytes, with launches");
++        }
++        e.src1_q.push_back({n, lay, s, (size_t) b});
++    }
++    e.tol = j.value("tolerance", 0.0);
++    if (j.value("tolerance_mode", "abs") != "abs" && j.value("tolerance_mode", "abs") != "rel_max") {
++        throw std::runtime_error("tolerance_mode: abs or rel_max");
++    }
++    e.rel = j.value("tolerance_mode", "abs") == "rel_max";
++    return e;
++}
++
++std::vector<ext_entry> ext_load() {
++    std::vector<ext_entry> entries;
++    const std::string      path = getenv("GGML_CUDA_EXT_KERNELS");
++    try {
++        const json m = json::parse(std::ifstream(path));
++        const bool v2 = m.at("schema") == "boltbeam.kernel_manifest.v2";
++        if (!v2 && m.at("schema") != "boltbeam.kernel_manifest.v1") {
++            throw std::runtime_error("unknown schema");
++        }
++        std::string commit = ggml_commit();
++        commit             = commit.substr(0, commit.find('-'));
++        bool build_ok      = false;
++        for (const json & b : m.at("engine").at("builds")) {
++            const std::string s = b.get<std::string>();
++            const size_t      n = std::min(s.size(), commit.size());
++            build_ok            = build_ok || (n >= 7 && s.compare(0, n, commit, 0, n) == 0);
++        }
++        if (!build_ok) {
++            throw std::runtime_error("this build (" + commit + ") is not one the manifest was checked on");
++        }
++        CUdevice dev;
++        int      major = 0, minor = 0;
++        ext_ok(cuCtxGetDevice(&dev), "cuCtxGetDevice");
++        ext_ok(cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev), "cuDeviceGetAttribute");
++        ext_ok(cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev), "cuDeviceGetAttribute");
++        const std::string chip = "nvidia_sm" + std::to_string(10*major + minor);
++        int nsm = 0;
++        ext_ok(cuDeviceGetAttribute(&nsm, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, dev), "cuDeviceGetAttribute");
++        const std::string dir  = path.substr(0, path.find_last_of('/') + 1);
++        for (const json & j : m.at("entries")) {
++            try {
++                entries.push_back(ext_load_entry(j, dir, chip, v2, nsm));
++                GGML_LOG_WARN("%s: loaded %s (%zu ops)\n", __func__, entries.back().id.c_str(), entries.back().ops.size());
++            } catch (const std::exception & err) {
++                GGML_LOG_WARN("%s: entry %s dropped, the engine's own kernel runs: %s\n", __func__, j.value("id", "?").c_str(), err.what());
++            }
++        }
++    } catch (const std::exception & err) {
++        GGML_LOG_WARN("%s: %s not used, the engine's own kernels run: %s\n", __func__, path.c_str(), err.what());
++    }
++    if (getenv("GGML_CUDA_EXT_KERNELS_CHECK") != nullptr && getenv("GGML_CUDA_DISABLE_GRAPHS") == nullptr) {
++        GGML_LOG_WARN("%s: GGML_CUDA_EXT_KERNELS_CHECK checks only uncaptured runs: set GGML_CUDA_DISABLE_GRAPHS=1\n", __func__);
++    }
++    return entries;
++}
++
++bool ext_same(const ggml_tensor * t, ggml_type type, const ext_ne & ne, const std::vector<int64_t> & nb = {}, const ext_ne & ne_max = {},
++              const ext_ne & ne_min = {}) {
++    bool same = t != nullptr && t->type == type;
++    for (int d = 0; same && d < GGML_MAX_DIMS; ++d) {   // -1: an extent up to its bound / a dense stride (the kernel's ne args)
++        const bool dense = t->ne[d] == 1 || (int64_t) t->nb[d] == (d == 0 ? (int64_t) ggml_type_size(type) : (int64_t) (t->nb[d - 1] * t->ne[d - 1]));
++        same = (ne[d] == -1 ? t->ne[d] <= ne_max[d] && t->ne[d] >= ne_min[d] : t->ne[d] == ne[d]) && (nb.empty() || (nb[d] == -1 ? dense : (int64_t) t->nb[d] == nb[d]));
++    }
++    // strided: the strides exact; a block-quantized view 16-byte aligned (vector row loads), else element-aligned
++    return same && (nb.empty() ? ggml_is_contiguous(t) && (uintptr_t) t->data % 16 == 0
++                               : (uintptr_t) t->data % (ggml_blck_size(type) > 1 ? 16 : ggml_type_size(type)) == 0);
++}
++
++std::vector<uint8_t> ext_read(void * stream, const ggml_tensor * t) {
++    std::vector<uint8_t> v(ggml_nbytes(t));
++    // on the engine's (non-blocking) stream, then a sync: ordered after every queued kernel and complete on return
++    ext_ok(cuMemcpyDtoHAsync(v.data(), (CUdeviceptr) t->data, v.size(), (CUstream) stream), "cuMemcpyDtoHAsync");
++    ext_ok(cuStreamSynchronize((CUstream) stream), "cuStreamSynchronize");
++    return v;
++}
++
++// an interior node may be a view (RESHAPE / VIEW / TRANSPOSE / PERMUTE: no bytes of its own) of an earlier window node,
++// at the entry's offset, or of the outside tensor that is its src 0 (state: the offset is a run-time value). Either
++// way its bytes are proven to lie inside the tensor it views
++bool ext_window_view(const std::vector<ggml_tensor *> & w, int k, const ext_op & op) {
++    const ggml_tensor * t = w[k], * base = t->view_src, * s0 = t->src[0];
++    if (base == nullptr) {
++        return true;
++    }
++    const bool inside  = std::find(w.begin(), w.begin() + k, base) != w.begin() + k && (int64_t) t->view_offs == op.view_offs;
++    const bool outside = !op.src_node.empty() && op.src_node[0] < 0 && s0 != nullptr && (s0->view_src ? s0->view_src : s0) == base;
++    return ext_is_view(t->op) && (inside || outside) &&
++           (const char *) t->data >= (const char *) base->data && (const char *) t->data + ggml_nbytes(t) <= (const char *) base->data + ggml_nbytes(base);
++}
++
++// the window at i for entry e, or empty: ops, types, shapes, wiring; interior nodes dead outside; no partial aliasing
++std::vector<ggml_tensor *> ext_match(ext_entry & e, ggml_cgraph * cgraph, int i) {
++    const int n = (int) e.ops.size();
++    if (i + n > cgraph->n_nodes) {
++        return {};
++    }
++    std::vector<ggml_tensor *> w(n);
++    for (int k = 0; k < n; ++k) {
++        ggml_tensor * node = cgraph->nodes[i + k];
++        const ext_op & op  = e.ops[k];
++        if (node->op != op.op || !ext_same(node, op.type, op.ne, op.nb, op.ne_max) || (op.unary >= 0 && (int) ggml_get_unary_op(node) != op.unary) ||
++            (k > 0 && (node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) ||
++            (!op.params.empty() && memcmp(node->op_params, op.params.data(), op.params.size() * sizeof(float)) != 0) ||
++            (!op.params_raw.empty() && memcmp(node->op_params, op.params_raw.data(), op.params_raw.size()) != 0)) {
++            return {};
++        }
++        if (op.src_types.size() < GGML_MAX_SRC && node->src[op.src_types.size()] != nullptr) {
++            return {};
++        }
++        w[k] = node;
++        for (size_t s = 0; s < op.src_types.size(); ++s) {
++            if (op.src_node[s] >= 0 ? node->src[s] != w[op.src_node[s]] : !ext_same(node->src[s], op.src_types[s], op.src_ne[s], op.src_nb[s], op.src_ne_max[s], op.src_ne_min[s])) {
++                return {};
++            }
++        }
++    }
++    for (int k = 0; k < n; ++k) {   // interior: read only inside the window, not a graph output, a view only of a window node
++        if (std::find(e.outputs.begin(), e.outputs.end(), k) != e.outputs.end()) {
++            continue;
++        }
++        if ((w[k]->flags & GGML_TENSOR_FLAG_OUTPUT) || !ext_window_view(w, k, e.ops[k]) || ggml_node_get_use_count(cgraph, i + k) != e.ops[k].uses) {
++            return {};
++        }
++    }
++    for (int k = 0; k < n; ++k) {   // inputs the manifest names alike (two gemvs on one activation) are one tensor
++        for (size_t s = 0; s < e.ops[k].src_ext.size(); ++s) {
++            for (int q = 0; q <= k && !e.ops[k].src_ext[s].empty(); ++q) {
++                for (size_t r = 0; r < e.ops[q].src_ext.size() && (q < k || r < s); ++r) {
++                    if (e.ops[q].src_ext[r] == e.ops[k].src_ext[s] && w[q]->src[r] != w[k]->src[s]) {
++                        return {};
++                    }
++                }
++            }
++        }
++    }
++    for (int o : e.outputs) {       // written ranges against every input from outside: disjoint, or exactly one allowed input
++        const char * a0 = (const char *) w[o]->data, * a1 = a0 + ggml_nbytes(w[o]);
++        const int    dv = e.ops[o].op == GGML_OP_SET_ROWS ? e.ops[o].src_node[2] : -1;   // in place: the view it writes through
++        // it writes exactly the bytes of that view (a view of an outside tensor: the interior test above)
++        if (dv >= 0 && (w[dv]->view_src == nullptr || w[o]->data != w[dv]->data || memcmp(w[o]->nb, w[dv]->nb, sizeof(w[o]->nb)) != 0 ||
++                        memcmp(w[o]->ne, w[dv]->ne, sizeof(w[o]->ne)) != 0)) {
++            return {};
++        }
++        for (int k = 0; k < n; ++k) {
++            for (size_t s = 0; s < e.ops[k].src_types.size(); ++s) {
++                if (e.ops[k].src_node[s] >= 0 || (k == dv && s == 0)) {   // the destination view's own src: a view reads no bytes
++                    continue;
++                }
++                const ggml_tensor * x  = w[k]->src[s], * v = s == 0 && w[k]->view_src != nullptr ? w[k] : x;   // a view of it: its own bytes too
++                const char *        b0 = (const char *) x->data, * b1 = b0 + ggml_nbytes(x), * v0 = (const char *) v->data;
++                if ((b1 <= a0 || a1 <= b0) && (v0 + ggml_nbytes(v) <= a0 || a1 <= v0)) {
++                    continue;
++                }
++                const bool exact = a0 == b0 && a1 == b1 &&
++                                   std::find(e.alias_ok.begin(), e.alias_ok.end(), std::make_pair(k, (int) s)) != e.alias_ok.end();
++                if (!exact) {
++                    if (e.n_refused++ == 0) {
++                        GGML_LOG_WARN("%s: %s refused at node %d: output %d overlaps input (%d, %zu); the engine's own kernels run\n",
++                                      __func__, e.id.c_str(), i, o, k, s);
++                    }
++                    return {};
++                }
++            }
++        }
++    }
++    return w;
++}
++
++// GGML_CUDA_EXT_KERNELS_DUMP=<file>: append each graph shape the hook sees once (JSON lines: per node its op, unary,
++// type, ne, contiguity, use count, output flag and sources as a node index or an outside tensor's type/ne). The input
++// of the region finder: windows come from the engine's own graph, never from a hand table.
++void ext_dump(const ggml_cgraph * cgraph) {
++    static const char *          path = getenv("GGML_CUDA_EXT_KERNELS_DUMP");
++    static std::vector<uint64_t> seen;
++    static const ggml_cgraph *   last = nullptr;
++    static int                   last_n = -1;
++    if (path == nullptr || (cgraph == last && cgraph->n_nodes == last_n) || seen.size() >= 4096) {
++        return;
++    }
++    last = cgraph; last_n = cgraph->n_nodes;
++    uint64_t h = 1469598103934665603ull;   // the graph's shape: ops and output shapes (FNV-1a)
++    for (int k = 0; k < cgraph->n_nodes; ++k) {
++        const ggml_tensor * t = cgraph->nodes[k];
++        for (uint64_t v : { (uint64_t) t->op, (uint64_t) t->ne[0], (uint64_t) t->ne[1], (uint64_t) t->ne[2] }) {
++            h = (h ^ v) * 1099511628211ull;
++        }
++    }
++    if (std::find(seen.begin(), seen.end(), h) != seen.end()) {
++        return;
++    }
++    seen.push_back(h);
++    json nodes = json::array();
++    for (int k = 0; k < cgraph->n_nodes; ++k) {
++        const ggml_tensor * t = cgraph->nodes[k];
++        json n = {{"i", k}, {"op", std::string("GGML_OP_") + ggml_op_name(t->op)}, {"type", ggml_type_name(t->type)},
++                  {"ne", {t->ne[0], t->ne[1], t->ne[2], t->ne[3]}}, {"contiguous", ggml_is_contiguous(t)}, {"view", t->view_src != nullptr},
++                  {"uses", ggml_node_get_use_count(cgraph, k)}, {"output", (t->flags & GGML_TENSOR_FLAG_OUTPUT) != 0}, {"name", t->name}};
++        if (t->op == GGML_OP_UNARY) {
++            n["unary"] = std::string("GGML_UNARY_OP_") + ggml_unary_op_name(ggml_get_unary_op(t));
++        }
++        json src = json::array();
++        for (int s = 0; s < GGML_MAX_SRC && t->src[s] != nullptr; ++s) {
++            int j = -1;
++            for (int q = k - 1; q >= 0 && j < 0; --q) {
++                j = cgraph->nodes[q] == t->src[s] ? q : -1;
++            }
++            const ggml_tensor * x = t->src[s];
++            src.push_back(j >= 0 ? json{{"node", j}} : json{{"type", ggml_type_name(x->type)}, {"ne", {x->ne[0], x->ne[1], x->ne[2], x->ne[3]}},
++                                                          {"contiguous", ggml_is_contiguous(x)}});
++        }
++        n["src"] = src;
++        nodes.push_back(n);
++    }
++    std::ofstream(path, std::ios::app) << json{{"schema", "boltbeam.engine_graph_dump.v1"}, {"n_nodes", cgraph->n_nodes}, {"nodes", nodes}}.dump() << "\n";
++}
++
++}  // namespace
++
++// Returns the number of nodes the external kernel replaced (the window's length), or 0: the engine's own path runs.
++// i -1: the engine starts evaluating cgraph (the quantized-src1 records of the last evaluation are dropped).
++int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx) {
++    static std::vector<ext_entry> entries = ext_load();
++    static const bool             check   = getenv("GGML_CUDA_EXT_KERNELS_CHECK") != nullptr;
++    static const bool             pdl_on  = getenv("GGML_CUDA_PDL") == nullptr || atoi(getenv("GGML_CUDA_PDL")) != 0;
++    if (i < 0) {   // the engine starts evaluating cgraph: nothing quantized yet
++        ext_reg.recs.clear();
++        return 0;
++    }
++    ext_dump(cgraph);   // once per graph shape, only with GGML_CUDA_EXT_KERNELS_DUMP set
++
++    for (ext_entry & e : entries) {
++        const std::vector<ggml_tensor *> w = ext_match(e, cgraph, i);
++        if (w.empty()) {
++            continue;
++        }
++        static std::mutex mu;   // contexts may run on several threads
++        ext_mem *         mem     = nullptr;   // this stream's scratch: once per engine stream (context), never freed (graphs keep it)
++        CUdeviceptr       scratch = 0;
++        if (e.scratch.back() > 0) {
++            std::lock_guard<std::mutex> lock(mu);
++            auto sm = std::find_if(e.scratch_mem.begin(), e.scratch_mem.end(), [&](const ext_mem & m) { return m.stream == stream; });
++            if (sm == e.scratch_mem.end()) {
++                if (const CUresult r = cuMemAlloc(&scratch, e.scratch.back()); r != CUDA_SUCCESS) {
++                    scratch = 0;   // remembered: no retry, said once
++                    GGML_LOG_WARN("%s: %s scratch of %zu bytes failed (%d), the engine's own kernels run\n", __func__, e.id.c_str(), e.scratch.back(), (int) r);
++                }
++                e.scratch_mem.push_back(ext_mem{ stream, scratch });
++                sm = e.scratch_mem.end() - 1;
++            }
++            if ((scratch = sm->base) == 0) {
++                return 0;
++            }
++            mem = &*sm;
++        }
++        // this entry's scratch is rewritten now: a matmul registered on an earlier match's quantized bytes would read these
++        ext_reg.recs.erase(std::remove_if(ext_reg.recs.begin(), ext_reg.recs.end(), [&](const ext_src1q_rec & r) {
++            return scratch != 0 && r.ptr >= scratch && r.ptr < scratch + e.scratch.back(); }), ext_reg.recs.end());
++        CUstreamCaptureStatus capture = CU_STREAM_CAPTURE_STATUS_NONE;
++        const bool do_check = check && cuStreamIsCapturing((CUstream) stream, &capture) == CUDA_SUCCESS &&
++                              capture == CU_STREAM_CAPTURE_STATUS_NONE;
++        std::vector<std::pair<const ggml_tensor *, std::vector<uint8_t>>> saved;  // inputs a live output occupies
++        if (do_check) {
++            for (int o : e.outputs) {   // the state a SET_ROWS writes: the stock replay starts from the same bytes
++                if (e.ops[o].op == GGML_OP_SET_ROWS) {
++                    saved.emplace_back(w[o], ext_read(stream, w[o]));
++                }
++            }
++            for (const auto & [k, s] : e.alias_ok) {
++                for (int o : e.outputs) {
++                    if (w[o]->data == w[k]->src[s]->data) {
++                        saved.emplace_back(w[k]->src[s], ext_read(stream, w[k]->src[s]));
++                    }
++                }
++            }
++        }
++        CUlaunchAttribute attr;
++        attr.id                                         = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
++        attr.value.programmaticStreamSerializationAllowed = 1;
++        auto tensor = [&](const ext_arg & a) { return a.src == -1 ? w[a.node] : w[a.node]->src[a.src]; };
++        const char * fn = __func__;
++        auto failed = [&](size_t q, const char * what, int r) {   // stock recomputes every node, unless outside state is written
++            if (q > 0 && e.launches[q - 1].state) {
++                GGML_ABORT("%s: %s launch %zu: %s failed (%d) after a launch wrote outside state", fn, e.id.c_str(), q, what, r);
++            }
++            GGML_LOG_WARN("%s: %s %s failed (%d), the engine's own kernel runs\n", fn, e.id.c_str(), what, r);
++            return 0;
++        };
++        const char * kv_ptr[3] = {}, * kv_at[3] = {};   // the kv-stream step's K / V (index 1 / 2): resolved, and the nodes' addresses
++        for (size_t q = 0; q < e.launches.size(); ++q) {
++            const ext_launch &    L = e.launches[q];
++            if (L.is_kvs) {   // as the engine's sparse attention: resolve the listed pages into VRAM, rows rewritten in place
++                const ext_kvs &     K = L.kvs;
++                const ggml_tensor * k = tensor(K.k), * v = tensor(K.v), * m = tensor(K.mask);
++                kv_ptr[1] = kv_at[1] = (const char *) k->data;
++                kv_ptr[2] = kv_at[2] = (const char *) v->data;
++#ifdef EXT_KVS
++                if (ggml_cuda_kvs_attn == nullptr || ggml_cuda_kvs_resolve_cells == nullptr) {
++                    continue;   // no kv module in this build: no streamed cache
++                }
++                ggml_cuda_kvs_mask kvm;
++                const int64_t      cells = ggml_cuda_kvs_resolve_cells(k, k->ne[1], K.n_lists, K.n_kv_max, m->ne[1]);
++                if (cells > 0) {   // the mask scattered to slot rows, as fattn does (cells: the lists before the rewrite)
++                    const size_t need = (size_t) (K.n_lists*K.n_kv_max*4 + 255) / 256 * 256 + (size_t) (m->ne[1]*cells*2);
++                    std::lock_guard<std::mutex> lock(mu);   // sized once: the pool's cell count is fixed for the server's life
++                    if (mem->kvs_bytes == 0 && cuMemAlloc(&mem->kvs, need) != CUDA_SUCCESS) {
++                        mem->kvs_bytes = SIZE_MAX;
++                        GGML_LOG_WARN("%s: %s kv-stream buffer of %zu bytes failed, the engine's own kernels run\n", fn, e.id.c_str(), need);
++                    }
++                    mem->kvs_bytes = mem->kvs_bytes == 0 ? need : mem->kvs_bytes;
++                    if (mem->kvs_bytes == SIZE_MAX || mem->kvs_bytes < need) {
++                        return failed(q, "kv-stream buffer", (int) (need / 1024));
++                    }
++                    kvm.data    = m->data;
++                    kvm.stride  = m->nb[1] / 2;
++                    kvm.ne01    = m->ne[1];
++                    kvm.ncols1  = (int) K.ncols1;
++                    kvm.cells   = (int32_t *) mem->kvs;
++                    kvm.scratch = (void *) (mem->kvs + (K.n_lists*K.n_kv_max*4 + 255) / 256 * 256);
++                }
++                ggml_cuda_kvs_attn((CUstream) stream, k, v, k->ne[1], true, (int32_t *) (scratch + e.scratch[K.lists]),
++                                   (const int32_t *) (scratch + e.scratch[K.counts]), K.n_lists, K.n_kv_max, &kvm, &kv_ptr[1], &kv_ptr[2]);
++#endif
++                continue;
++            }
++            std::vector<uint64_t> values;
++            std::vector<void *>   params;
++            for (const ext_arg & a : L.args) {
++                values.push_back(a.scratch >= 0 ? (uint64_t) scratch + e.scratch[a.scratch] : a.node < 0 ? a.bits
++                                 : a.dim >= 0 ? (uint64_t) (uint32_t) (int32_t) tensor(a)->ne[a.dim]
++                                 : a.kv && tensor(a)->data == kv_at[1] ? (uint64_t) (uintptr_t) kv_ptr[1]
++                                 : a.kv && tensor(a)->data == kv_at[2] ? (uint64_t) (uintptr_t) kv_ptr[2]
++                                                                       : (uint64_t) (uintptr_t) tensor(a)->data);
++            }
++            for (uint64_t & v : values) {
++                params.push_back(&v);
++            }
++            CUlaunchConfig cfg = {};
++            cfg.gridDimX       = L.grid[0];
++            cfg.gridDimY       = L.grid[1];
++            cfg.gridDimZ       = L.grid[2];
++            cfg.blockDimX      = L.block[0];
++            cfg.blockDimY      = L.block[1];
++            cfg.blockDimZ      = L.block[2];
++            cfg.sharedMemBytes = L.shmem;
++            cfg.hStream        = (CUstream) stream;
++            cfg.attrs          = &attr;
++            cfg.numAttrs       = L.pdl && pdl_on ? 1 : 0;
++            if (const CUresult r = cuLaunchKernelEx(&cfg, L.fn, params.data(), nullptr); r != CUDA_SUCCESS) {
++                return failed(q, "launch", (int) r);
++            }
++        }
++        if (e.n_match++ == 0) {
++            GGML_LOG_WARN("%s: %s first match at node %d (%s), %zu nodes\n", __func__, e.id.c_str(), i, w[0]->name, w.size());
++        }
++        for (const auto & q : e.src1_q) {   // the later matmuls whose src1 is output q.node (a contiguous view of all of it)
++            const ggml_tensor * t = w[q.node];
++            if (t->view_src != nullptr) {
++                continue;   // a view: a write through its root would not stop the scan below
++            }
++            for (int j = i + (int) w.size(); j < cgraph->n_nodes; ++j) {
++                const ggml_tensor * m  = cgraph->nodes[j];
++                const ggml_tensor * s1 = m->op == GGML_OP_MUL_MAT || m->op == GGML_OP_MUL_MAT_ID ? m->src[1] : nullptr;
++                if (s1 != nullptr && (s1 == t || s1->view_src == t) && s1->data == t->data && ggml_is_contiguous(s1) &&
++                    s1->ne[0] == t->ne[0] && ggml_nelements(s1) == ggml_nelements(t) &&
++                    // q8_1 rows are one row a column whatever the view's dims; the few-row layout orders its units by
++                    // the matmul's own dims (channels before column groups), so only the output's own shape is the same bytes
++                    (q.layout == GGML_CUDA_EXT_SRC1_Q8_1 || (s1->ne[1] == t->ne[1] && s1->ne[2] == t->ne[2] && s1->ne[3] == t->ne[3]))) {
++                    ext_reg.recs.push_back({ s1, t->data, q.layout, q.bytes, scratch + e.scratch[q.slot], stream });
++                } else if (!ext_is_view(m->op) && (m == t || m->view_src == t || m->data == t->data)) {
++                    break;   // a node writes the output's bytes: the matmuls after it read other values
++                }
++            }
++        }
++        if (do_check) {
++            std::vector<std::vector<uint8_t>> ext;
++            for (int o : e.outputs) {
++                ext.push_back(ext_read(stream, w[o]));
++            }
++            for (const auto & [t, bytes] : saved) {   // put back what the external kernel overwrote, then run stock
++                // on the engine's stream: cuMemcpyHtoD runs on the legacy stream, which a non-blocking stream does not wait
++                // for, and from pageable memory it may return before the DMA lands, so the stock replay raced it
++                ext_ok(cuMemcpyHtoDAsync((CUdeviceptr) t->data, bytes.data(), bytes.size(), (CUstream) stream), "cuMemcpyHtoDAsync");
++            }
++            ext_ok(cuStreamSynchronize((CUstream) stream), "cuStreamSynchronize");   // `saved` (pageable) must outlive the copies
++            for (ggml_tensor * node : w) {
++                GGML_ASSERT(stock(stock_ctx, node));
++            }
++            double worst = 0;
++            for (size_t q = 0; q < e.outputs.size(); ++q) {
++                const ggml_tensor *        t   = w[e.outputs[q]];
++                const std::vector<uint8_t> ref = ext_read(stream, t);  // the engine's result stays in the node
++                double                     out = 0, scale = 0;         // rel_max: |ext - stock| over max|stock| of the output
++                for (size_t b = 0; b < ref.size(); b += 4) {
++                    float x, y;
++                    memcpy(&x, &ext[q][b], 4);
++                    memcpy(&y, &ref[b], 4);
++                    scale = e.rel && t->type == GGML_TYPE_F32 && std::isfinite(y) ? std::max(scale, (double) fabsf(y)) : scale;
++                    if (memcmp(&ext[q][b], &ref[b], 4) != 0 && !(e.rel && x == 0 && y == 0)) {  // bitwise first: a NaN or a signed zero counts (abs)
++                        const double d = t->type == GGML_TYPE_F32 ? fabs((double) x - y) : INFINITY;
++                        out            = d > 0 ? std::max(out, d) : INFINITY;
++                    }
++                }
++                worst = std::max(worst, e.rel && out > 0 ? (scale > 0 ? out / scale : INFINITY) : out);
++            }
++            e.worst = std::max(e.worst, worst);
++            if (worst > e.tol) {
++                e.n_diff++;
++                GGML_LOG_WARN("GGML_CUDA_EXT_KERNELS_CHECK differs: %s worst |ext - stock|%s %g > %g\n", e.id.c_str(), e.rel ? " / max|stock|" : "", worst, e.tol);
++            }
++            if (e.n_check++ % 256 == 0) {
++                GGML_LOG_WARN("GGML_CUDA_EXT_KERNELS_CHECK %s: %s checks %llu, differ %llu, worst %g\n", e.n_diff ? "DIFF" : "ok",
++                              e.id.c_str(), (unsigned long long) e.n_check, (unsigned long long) e.n_diff, e.worst);
++            }
++        }
++        return (int) w.size();
++    }
++    return 0;
++}
++
++const void * ggml_cuda_ext_src1_q(void * stream, const ggml_tensor * src1, int layout, size_t nbytes) {
++    for (const ext_src1q_rec & r : ext_reg.recs) {
++        if (r.src1 == src1 && r.data == src1->data && r.layout == layout && r.bytes == nbytes && r.stream == stream) {
++            if (ext_reg.used++ == 0) {
++                GGML_LOG_WARN("%s: first matmul on an ext entry's quantized src1 (%s, layout %d, %zu bytes)\n", __func__, src1->name, layout, nbytes);
++            }
++            return (const void *) r.ptr;
++        }
++    }
++    return nullptr;
++}
++
++bool ggml_cuda_ext_src1_q_checking() {
++    static const bool check = getenv("GGML_CUDA_EXT_KERNELS_CHECK") != nullptr;
++    return check;
++}
++
++const void * ggml_cuda_ext_src1_q_check(void * stream, const void * ext, const void * stock, size_t nbytes) {
++    CUstreamCaptureStatus capture = CU_STREAM_CAPTURE_STATUS_NONE;
++    if (ext == nullptr || cuStreamIsCapturing((CUstream) stream, &capture) != CUDA_SUCCESS || capture != CU_STREAM_CAPTURE_STATUS_NONE) {
++        return nullptr;   // check mode runs with GGML_CUDA_DISABLE_GRAPHS=1, as the entries' own check
++    }
++    std::vector<uint8_t> a(nbytes), b(nbytes);
++    ext_ok(cuMemcpyDtoHAsync(a.data(), (CUdeviceptr) ext, nbytes, (CUstream) stream), "cuMemcpyDtoHAsync");
++    ext_ok(cuMemcpyDtoHAsync(b.data(), (CUdeviceptr) stock, nbytes, (CUstream) stream), "cuMemcpyDtoHAsync");
++    ext_ok(cuStreamSynchronize((CUstream) stream), "cuStreamSynchronize");
++    static uint64_t n_check = 0, n_diff = 0;
++    size_t          first   = 0;
++    while (first < nbytes && a[first] == b[first]) {
++        first++;
++    }
++    if (first < nbytes) {
++        n_diff++;
++        GGML_LOG_WARN("GGML_CUDA_EXT_KERNELS_CHECK differs: quantized src1, %zu bytes, first at byte %zu (ext %02x, stock %02x)\n",
++                      nbytes, first, a[first], b[first]);
++    }
++    if (n_check++ % 256 == 0) {
++        GGML_LOG_WARN("GGML_CUDA_EXT_KERNELS_CHECK %s: quantized src1 checks %llu, differ %llu\n", n_diff ? "DIFF" : "ok",
++                      (unsigned long long) n_check, (unsigned long long) n_diff);
++    }
++    return nullptr;
++}
+diff --git a/ggml/src/ggml-cuda/ext-src1q.cuh b/ggml/src/ggml-cuda/ext-src1q.cuh
+new file mode 100644
+index 000000000..6e56e4548
+--- /dev/null
++++ b/ggml/src/ggml-cuda/ext-src1q.cuh
+@@ -0,0 +1,25 @@
++#pragma once
++// Opt-in mod (kernels module, ext-kernels.cpp): a matmul asks whether its src1 was already quantized, in the layout and
++// size it is about to make, by an ext entry earlier in this graph (manifest src1_q8_1: the entry's launches write the
++// quantized bytes of one of its outputs into a scratch slot). The answer is that slot, or nullptr: the stock quantize
++// runs. Check mode (GGML_CUDA_EXT_KERNELS_CHECK) quantizes as stock too, compares the bytes and goes on with stock's.
++#include <cstddef>
++
++struct ggml_tensor;
++
++enum {
++    GGML_CUDA_EXT_SRC1_Q8_1        = 0, // quantize_row_q8_1_cuda: block_q8_1 rows padded to MATRIX_ROW_PADDING (MMVQ)
++    GGML_CUDA_EXT_SRC1_MMQ_FEW_D4  = 1, // quantize_mmq_few_q8_1_cuda, MMQ_Q8_1_DS_LAYOUT_D4 (few-row MMQ)
++    GGML_CUDA_EXT_SRC1_MMQ_FEW_DS4 = 2, // the same, MMQ_Q8_1_DS_LAYOUT_DS4
++};
++
++#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
++static inline const void * ggml_cuda_ext_src1_q(void *, const ggml_tensor *, int, size_t) { return nullptr; }
++static inline bool         ggml_cuda_ext_src1_q_checking() { return false; }
++static inline const void * ggml_cuda_ext_src1_q_check(void *, const void *, const void *, size_t) { return nullptr; }
++#else
++const void * ggml_cuda_ext_src1_q(void * stream, const ggml_tensor * src1, int layout, size_t nbytes);
++bool         ggml_cuda_ext_src1_q_checking();
++// check mode: ext (may be nullptr) against stock's bytes on the device; returns nullptr (stock's bytes go on)
++const void * ggml_cuda_ext_src1_q_check(void * stream, const void * ext, const void * stock, size_t nbytes);
++#endif
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index a07e9a622..20d6e447a 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -881,6 +881,10 @@ ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_
+         next_graph_eviction_time = time_now + 5'000'000;
+         for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
+             if (it->first != first_node_ptr && time_now - it->second->last_used_time >= 10'000'000) {
++                if (getenv("GGML_CUDA_GRAPH_STATS")) {
++                    GGML_LOG_WARN("GGML_CUDA_GRAPH_STATS: ctx %p idle-evict graph %p (%zu instances)\n", (const void *) this,
++                        (const void *) it->second.get(), it->second->instances.size());
++                }
+                 it = cuda_graphs.erase(it);
+             } else {
+                 ++it;
+@@ -3192,6 +3196,52 @@ static void ggml_backend_cuda_free(ggml_backend_t backend) {
+     delete backend;
+ }
+ 
++// sched-pack-inputs (GGML_SCHED_PACK_INPUTS=1): the scheduler's staged host inputs of one split arrive as one packed
++// host -> device copy into pool scratch and one kernel that scatters each input to its tensor: 2 stream calls, not one per input
++#define GGML_CUDA_PACK_MAX 32
++struct ggml_cuda_pack_items {
++    char *   dst[GGML_CUDA_PACK_MAX];
++    uint32_t off[GGML_CUDA_PACK_MAX];
++    uint32_t n  [GGML_CUDA_PACK_MAX];
++};
++
++static __global__ void k_pack_scatter(const char * __restrict__ src, const ggml_cuda_pack_items it) {
++    const char *   s = src + it.off[blockIdx.x];
++    char *         d = it.dst[blockIdx.x];
++    const uint32_t n = it.n[blockIdx.x];
++    uint32_t i0 = 0;
++    if ((((uintptr_t) d | (uintptr_t) s) & 15) == 0) {
++        for (uint32_t i = threadIdx.x; i < n/16; i += blockDim.x) {
++            ((int4 *) d)[i] = ((const int4 *) s)[i];
++        }
++        i0 = n/16*16;
++    }
++    for (uint32_t i = i0 + threadIdx.x; i < n; i += blockDim.x) {
++        d[i] = s[i];
++    }
++}
++
++static bool ggml_backend_cuda_pack_scatter(ggml_backend_t backend, const void * host, size_t size, int count,
++        void * const * dst, const size_t * off, const size_t * n) {
++    if (count <= 0 || count > GGML_CUDA_PACK_MAX || size >= UINT32_MAX) {
++        return false;
++    }
++    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
++    ggml_cuda_set_device(cuda_ctx->device);
++    ggml_cuda_pack_items it;
++    for (int i = 0; i < count; ++i) {
++        it.dst[i] = (char *) dst[i];
++        it.off[i] = (uint32_t) off[i];
++        it.n[i]   = (uint32_t) n[i];
++    }
++    // stream ordered: the scratch is free again once the kernel ran, like every pool temporary
++    ggml_cuda_pool_alloc<char> buf(cuda_ctx->pool(), size);
++    CUDA_CHECK(cudaMemcpyAsync(buf.get(), host, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
++    k_pack_scatter<<<count, 128, 0, cuda_ctx->stream()>>>(buf.get(), it);
++    CUDA_CHECK(cudaGetLastError());
++    return true;
++}
++
+ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+@@ -3473,17 +3523,106 @@ static int ggml_cuda_graph_chunk_size() {
+     return chunk_size;
+ }
+ 
++// GGML_CUDA_GRAPH_MAX_KEYS=K (local mod, off by default): at most K cached graphs (keys) per context hold CUDA graph
++// executables. A sched reserve (e.g. a sampler change) moves the ggml graph to new addresses, so its key changes and the
++// old key is dead; stock keeps dead keys and their executables for 10 s. Before a new key creates its first executable,
++// whole graphs other than it are destroyed, least recently used first, until fewer than K hold executables. Device
++// memory in executables is then bounded per context by K x chunks per graph x the size of one. Unset or 0 = stock.
++// GGML_CUDA_GRAPH_STATS=1 logs each executable created, updated or re-instantiated: live executables, cached graphs,
++// evictions and free device memory (it synchronizes the stream around each: diagnostics only).
++static size_t ggml_cuda_graph_live(const ggml_backend_cuda_context * cuda_ctx) {
++    size_t n = 0;
++    for (const auto & [key, g] : cuda_ctx->cuda_graphs) {
++        n += g->instances.size();
++    }
++    return n;
++}
++
++static int64_t ggml_cuda_graph_env(const char * name) {
++    const char * e = getenv(name);
++    return e ? atoll(e) : 0;
++}
++
++static size_t ggml_cuda_graph_evicted = 0;
++
++static void ggml_cuda_graph_cap(ggml_backend_cuda_context * cuda_ctx, const ggml_cuda_graph * keep) {
++    static const int64_t max_keys = ggml_cuda_graph_env("GGML_CUDA_GRAPH_MAX_KEYS");
++    if (max_keys <= 0) {
++        return;
++    }
++    for (;;) {
++        int64_t n_keys = 0;
++        auto lru = cuda_ctx->cuda_graphs.end();
++        for (auto it = cuda_ctx->cuda_graphs.begin(); it != cuda_ctx->cuda_graphs.end(); ++it) {
++            if (it->second.get() == keep || it->second->instances.empty()) {
++                continue;
++            }
++            n_keys++;
++            if (lru == cuda_ctx->cuda_graphs.end() || it->second->last_used_time < lru->second->last_used_time) {
++                lru = it;
++            }
++        }
++        if (n_keys < max_keys) {
++            return;
++        }
++        cuda_ctx->cuda_graphs.erase(lru);
++        ggml_cuda_graph_evicted++;
++    }
++}
++
++static bool ggml_cuda_graph_stats_on() {
++    static const bool on = ggml_cuda_graph_env("GGML_CUDA_GRAPH_STATS") != 0;
++    return on;
++}
++
++static double ggml_cuda_graph_free_mib() {
++    size_t free_b = 0, total_b = 0;
++    CUDA_CHECK(cudaMemGetInfo(&free_b, &total_b));
++    return free_b / 1048576.0;
++}
++
++static void ggml_cuda_graph_stats(const ggml_backend_cuda_context * cuda_ctx, const ggml_cuda_graph * graph, size_t idx,
++        const char * path, double free_before, size_t n_cuda_nodes) {
++    if (!ggml_cuda_graph_stats_on()) {
++        return;
++    }
++    const double free_after = ggml_cuda_graph_free_mib();
++    GGML_LOG_WARN("GGML_CUDA_GRAPH_STATS: ctx %p %s graph %p chunk %zu cuda nodes %zu: live instances %zu, cached graphs %zu, evicted %zu, free %.1f MiB (delta %+.1f)\n",
++        (const void *) cuda_ctx, path, (const void *) graph, idx, n_cuda_nodes, ggml_cuda_graph_live(cuda_ctx),
++        cuda_ctx->cuda_graphs.size(), ggml_cuda_graph_evicted, free_after, free_after - free_before);
++}
++
+ // end the capture of chunk `idx`, update or create its executable and launch it
+ static void ggml_cuda_graph_launch_chunk(ggml_backend_cuda_context * cuda_ctx, ggml_cuda_graph * graph, size_t idx) {
+     cudaGraph_t cuda_graph = nullptr;
+     CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_graph));
+ 
++    const bool   stats       = ggml_cuda_graph_stats_on();
++    size_t       n_cuda_nodes = 0;
++    if (stats) {
++        CUDA_CHECK(cudaGraphGetNodes(cuda_graph, nullptr, &n_cuda_nodes));
++    }
+     if (idx < graph->instances.size()) {
++        const double free_before = stats ? ggml_cuda_graph_free_mib() : 0.0;
++        const cudaGraphExec_t prev = graph->instances[idx].handle;
+         ggml_cuda_graph_update_executable(graph->instances[idx], cuda_graph, cuda_ctx->device);
++        if (stats) {
++            CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
++            ggml_cuda_graph_stats(cuda_ctx, graph, idx, prev == graph->instances[idx].handle ? "update" : "reinst",
++                free_before, n_cuda_nodes);
++        }
+     } else {
+         GGML_ASSERT(idx == graph->instances.size());
++        if (idx == 0) {
++            ggml_cuda_graph_cap(cuda_ctx, graph); // GGML_CUDA_GRAPH_MAX_KEYS: a new key evicts the least recently used ones
++        }
++        if (stats) {
++            CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
++        }
++        const double free_before = stats ? ggml_cuda_graph_free_mib() : 0.0;
+         graph->instances.emplace_back();
+         CUDA_CHECK(cudaGraphInstantiate(&graph->instances[idx].handle, cuda_graph, nullptr, nullptr, 0));
++        ggml_cuda_graph_stats(cuda_ctx, graph, idx, "new", free_before, n_cuda_nodes);
+ #ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
+         graph->instances[idx].clusters = ggml_cuda_graph_get_clusters(cuda_graph, cuda_ctx->device);
+ #endif // USE_CUDA_GRAPH_CLUSTER_CHECK
+@@ -4506,6 +4645,14 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
+     return false;
+ }
+ 
++#if defined(GGML_USE_HIP)
++// the hook loads CUDA cubins through the driver API (ext-kernels.cpp); not ported to hipModule yet: on HIP no manifest
++// entry runs, so every node takes the stock path, as with GGML_CUDA_EXT_KERNELS unset
++static int ggml_cuda_ext_kernels_run(void *, ggml_cgraph *, int, bool (*)(void *, ggml_tensor *), void *) { return 0; }
++#else
++int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx);
++#endif
++
+ // try and fuse nodes and return the number of nodes to skip
+ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+ 
+@@ -5456,6 +5603,10 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+                 stream_ctx.concurrent_events.clear();
+             }
+ 
++            static const bool ext_on = getenv("GGML_CUDA_EXT_KERNELS") != nullptr;
++            if (ext_on) {
++                ggml_cuda_ext_kernels_run(cuda_ctx->stream(), cgraph, -1, nullptr, nullptr);   // a new evaluation (i -1)
++            }
+             for (int i = 0; i < cgraph->n_nodes; i++) {
+                 ggml_tensor * node = cgraph->nodes[i];
+ #ifdef USE_CUDA_GRAPH
+@@ -5507,6 +5658,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+                     continue;
+                 }
+ 
++                // opt-in mod: an external kernel from a manifest takes this node (ext-kernels.cpp); unset = stock
++                static const bool ext_kernels = getenv("GGML_CUDA_EXT_KERNELS") != nullptr;
++                if (const int ext_n = ext_kernels ? ggml_cuda_ext_kernels_run(cuda_ctx->stream(), cgraph, i, [](void * ctx, ggml_tensor * t) {
++                        return ggml_cuda_compute_forward(*(ggml_backend_cuda_context *) ctx, t); }, cuda_ctx) : 0; ext_n != 0) {
++                    if (ext_n > 1) {
++                        i += ext_n - 1;  // a window: skipped like a stock fusion (the next node sees the jump)
++                        continue;
++                    }
++                    if (!is_concurrent_event_active) {
++                        try_launch_concurrent_event(node);
++                    }
++                    continue;
++                }
++
+                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
+ 
+                 if (nodes_to_skip != 0) {
+@@ -7060,6 +7225,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+         return (void *)ggml_backend_cuda_comm_init_rank;
+     }
+ #endif // GGML_USE_NCCL
++    if (strcmp(name, "ggml_backend_cuda_pack_scatter") == 0) {
++        return (void *)ggml_backend_cuda_pack_scatter;
++    }
+     if (strcmp(name, "ggml_backend_register_host_buffer") == 0) {
+         return (void *)ggml_backend_cuda_register_host_buffer;
+     }
+diff --git a/ggml/src/ggml-cuda/mmq-few.cu b/ggml/src/ggml-cuda/mmq-few.cu
+index bc7cbc6e5..cac539896 100644
+--- a/ggml/src/ggml-cuda/mmq-few.cu
++++ b/ggml/src/ggml-cuda/mmq-few.cu
+@@ -2,6 +2,7 @@
+ #include "cp-async.cuh"
+ #include "mma.cuh"
+ #include "mmvq.cuh"
++#include "ext-src1q.cuh"
+ #include "quantize.cuh"
+ #include "vecdotq.cuh"
+ 
+@@ -814,6 +815,7 @@ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor
+     ggml_cuda_pool_alloc<int>  pairs(ctx.pool());
+     ggml_cuda_pool_alloc<int4> src1_q(ctx.pool());
+     int npairs_max = 0;
++    const int4 * src1_ext = nullptr;
+     if (ids) {
+         GGML_ASSERT(ids->type == GGML_TYPE_I32);
+         GGML_ASSERT(ids->nb[0] == ggml_type_size(ids->type));
+@@ -834,35 +836,43 @@ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor
+         GGML_ASSERT(ne11 <= MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS);
+         GGML_ASSERT(ne12 % ne02 == 0 && ne13 % ne03 == 0);
+ 
+-        src1_q.alloc(int64_t(ne12)*ne13*nunits*ncg*MMQ_FEW_Q8_1_INT4);
+-        quantize_mmq_few_q8_1_cuda((const float *) src1->data, src1_q.get(), mmq_few_ds_layout(src0->type), ne10, nb11/sizeof(float), nb12/sizeof(float), nb13/sizeof(float),
+-            ne11, ne12, ne13, stream);
++        const size_t nbytes = int64_t(ne12)*ne13*nunits*ncg*MMQ_FEW_Q8_1_INT4*sizeof(int4);
++        // opt-in mod (ext-kernels.cpp): src1 already quantized by an ext entry earlier in this graph, or nullptr (stock)
++        src1_ext = (const int4 *) ggml_cuda_ext_src1_q(stream, src1, mmq_few_ds_layout(src0->type) == MMQ_Q8_1_DS_LAYOUT_DS4 ?
++            GGML_CUDA_EXT_SRC1_MMQ_FEW_DS4 : GGML_CUDA_EXT_SRC1_MMQ_FEW_D4, nbytes);
++        if (src1_ext == nullptr || ggml_cuda_ext_src1_q_checking()) {
++            src1_q.alloc(int64_t(ne12)*ne13*nunits*ncg*MMQ_FEW_Q8_1_INT4);
++            quantize_mmq_few_q8_1_cuda((const float *) src1->data, src1_q.get(), mmq_few_ds_layout(src0->type), ne10, nb11/sizeof(float), nb12/sizeof(float), nb13/sizeof(float),
++                ne11, ne12, ne13, stream);
++            src1_ext = (const int4 *) ggml_cuda_ext_src1_q_check(stream, src1_ext, src1_q.get(), nbytes);  // check mode: stock bytes go on
++        }
+     }
++    const int4 * y_q = src1_ext ? src1_ext : src1_q.get();
+ 
+     switch (src0->type) {
+         case GGML_TYPE_Q8_0:
+-            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q8_0>(src0, src1, dst, src1_q.get(), pairs.get(), npairs_max, ncg, stream);
++            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q8_0>(src0, src1, dst, y_q, pairs.get(), npairs_max, ncg, stream);
+             break;
+         case GGML_TYPE_Q3_K:
+-            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q3_K>(src0, src1, dst, src1_q.get(), pairs.get(), npairs_max, ncg, stream);
++            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q3_K>(src0, src1, dst, y_q, pairs.get(), npairs_max, ncg, stream);
+             break;
+         case GGML_TYPE_Q4_K:
+-            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q4_K>(src0, src1, dst, src1_q.get(), pairs.get(), npairs_max, ncg, stream);
++            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q4_K>(src0, src1, dst, y_q, pairs.get(), npairs_max, ncg, stream);
+             break;
+         case GGML_TYPE_Q5_K:
+-            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q5_K>(src0, src1, dst, src1_q.get(), pairs.get(), npairs_max, ncg, stream);
++            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q5_K>(src0, src1, dst, y_q, pairs.get(), npairs_max, ncg, stream);
+             break;
+         case GGML_TYPE_Q6_K:
+-            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q6_K>(src0, src1, dst, src1_q.get(), pairs.get(), npairs_max, ncg, stream);
++            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_Q6_K>(src0, src1, dst, y_q, pairs.get(), npairs_max, ncg, stream);
+             break;
+         case GGML_TYPE_IQ3_S:
+-            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_IQ3_S>(src0, src1, dst, src1_q.get(), pairs.get(), npairs_max, ncg, stream);
++            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_IQ3_S>(src0, src1, dst, y_q, pairs.get(), npairs_max, ncg, stream);
+             break;
+         case GGML_TYPE_IQ4_NL:
+-            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_IQ4_NL>(src0, src1, dst, src1_q.get(), pairs.get(), npairs_max, ncg, stream);
++            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_IQ4_NL>(src0, src1, dst, y_q, pairs.get(), npairs_max, ncg, stream);
+             break;
+         case GGML_TYPE_IQ4_XS:
+-            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_IQ4_XS>(src0, src1, dst, src1_q.get(), pairs.get(), npairs_max, ncg, stream);
++            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_IQ4_XS>(src0, src1, dst, y_q, pairs.get(), npairs_max, ncg, stream);
+             break;
+         default:
+             GGML_ABORT("unsupported type for few-row MMQ");
+diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
+index 6f10428e6..951a92709 100644
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -1,4 +1,5 @@
+ #include "mmvq.cuh"
++#include "ext-src1q.cuh"
+ #include "quantize.cuh"
+ #include "unary.cuh"
+ #include "vecdotq.cuh"
+@@ -1621,13 +1622,19 @@ void ggml_cuda_mul_mat_vec_q(
+     }
+ 
+     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
+-    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
+-    {
++    const size_t  q8_1_bytes  = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1;
++    // opt-in mod (ext-kernels.cpp): src1 already quantized by an ext entry earlier in this graph, or nullptr (stock)
++    const void *  src1_ext    = ggml_cuda_ext_src1_q(stream, src1, GGML_CUDA_EXT_SRC1_Q8_1, q8_1_bytes);
++    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool());
++    if (src1_ext == nullptr || ggml_cuda_ext_src1_q_checking()) {
++        src1_q8_1.alloc(q8_1_bytes);
+         const int64_t s11 = src1->nb[1] / ts_src1;
+         const int64_t s12 = src1->nb[2] / ts_src1;
+         const int64_t s13 = src1->nb[3] / ts_src1;
+         quantize_row_q8_1_cuda(src1_d, src1_q8_1.get(), ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
++        src1_ext = ggml_cuda_ext_src1_q_check(stream, src1_ext, src1_q8_1.get(), q8_1_bytes);  // check mode: stock bytes go on
+     }
++    const char * src1_q = src1_ext ? (const char *) src1_ext : src1_q8_1.get();
+ 
+     const int64_t s01 = src0->nb[1] / ts_src0;
+     const int64_t s11 = ne10_padded / QK8_1;
+@@ -1652,7 +1659,7 @@ void ggml_cuda_mul_mat_vec_q(
+     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
+ 
+     mul_mat_vec_q_switch_type(
+-        src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
++        src0->data, src0->type, src1_q, ids_d, fusion_local, dst_d, ne00,
+         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
+         ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+         ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
+diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
+index a43814799..ac3ff797b 100644
+--- a/ggml/src/ggml-cuda/vendors/hip.h
++++ b/ggml/src/ggml-cuda/vendors/hip.h
+@@ -145,6 +145,9 @@ typedef uint64_t ggml_cuda_thread_mask_t;
+ #define cudaGraphGetNodes hipGraphGetNodes
+ #define cudaGraphExecUpdate hipGraphExecUpdate
+ #define cudaStreamCaptureModeRelaxed hipStreamCaptureModeRelaxed
++#define cudaStreamCaptureStatus hipStreamCaptureStatus
++#define cudaStreamCaptureStatusNone hipStreamCaptureStatusNone
++#define cudaStreamIsCapturing hipStreamIsCapturing
+ #define cudaStreamBeginCapture hipStreamBeginCapture
+ #define cudaGraph_t hipGraph_t
+ #define cudaStream_t hipStream_t

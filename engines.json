@@ -30,9 +30,16 @@
       "versions": [
         "1.0.0",
         "b12521",
+        "b12681",
         "7592b61d3",
         "5193ef1d"
       ],
+      "retired_versions": {
+        "1.0.0": {
+          "date": "2026-11-24",
+          "why": "owner policy 2026-11-24: at most two llama.cpp versions, upstream master as the stock reference plus the latest port; 1.0.0 (b12359) was frozen since 2026-11-19 and is superseded by b12521 and the b12681 port"
+        }
+      },
       "base_identity": {
         "kind": "git_commit",
         "how": "git rev-parse HEAD of the base checkout (local.json checkouts) equals base.commit; the touched files have no local changes"

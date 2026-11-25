@@ -1,0 +1,491 @@
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index b40eb5535..69438f73c 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -9,6 +9,7 @@
+ #include "ngram-map.h"
+ #include "ngram-mod.h"
+ #include "sampling.h"
++#include "ggml-backend.h"
+ 
+ #include <algorithm>
+ #include <cassert>
+@@ -3089,6 +3090,48 @@ common_params common_base_params_to_speculative(const common_params & params) {
+     return result;
+ }
+ 
++// LLAMA_DRAFT_ROUTE_COUNT=path (diagnostic, off = stock): count the experts the draft's MoE router picks. Observes the
++// draft context's "ffn_moe_probs" tensor ([n_expert, n_tokens] F32) through the eval callback and takes the top n_used on
++// the host. Rows written: expert, hits and weight mass in 1-token passes (decode), hits and mass in larger passes (catch-up).
++struct draft_route_count {
++    std::string path; int n_used = 0; uint64_t n_tok[2] = {0, 0}; uint64_t calls = 0;
++    std::vector<uint64_t> hits[2]; std::vector<double> mass[2]; std::vector<float> buf;
++    void dump() const {
++        FILE * f = fopen(path.c_str(), "w");
++        if (!f) { return; }
++        fprintf(f, "# n_expert %zu n_used %d tokens_decode %" PRIu64 " tokens_catchup %" PRIu64 "\n", hits[0].size(), n_used, n_tok[0], n_tok[1]);
++        for (size_t e = 0; e < hits[0].size(); e++) {
++            fprintf(f, "%zu %" PRIu64 " %.6f %" PRIu64 " %.6f\n", e, hits[0][e], mass[0][e], hits[1][e], mass[1][e]);
++        }
++        fclose(f);
++    }
++    ~draft_route_count() { if (!path.empty() && calls > 0) { dump(); } }
++};
++static draft_route_count g_draft_route_count;
++static bool draft_route_count_cb(struct ggml_tensor * t, bool ask, void * ud) {
++    auto * rc = (draft_route_count *) ud;
++    const bool want = strncmp(t->name, "ffn_moe_probs-", 14) == 0;
++    if (ask || !want) { return ask ? want : true; }
++    const int64_t n_expert = t->ne[0], n_tokens = t->ne[1];
++    if (t->type != GGML_TYPE_F32 || n_expert < rc->n_used) { return true; }
++    for (int k = 0; k < 2; k++) { rc->hits[k].resize(n_expert); rc->mass[k].resize(n_expert); }
++    rc->buf.resize(n_expert*n_tokens);
++    ggml_backend_tensor_get(t, rc->buf.data(), 0, rc->buf.size()*sizeof(float));
++    const int k = n_tokens == 1 ? 0 : 1;
++    std::vector<int32_t> idx(n_expert);
++    for (int64_t j = 0; j < n_tokens; j++) {
++        const float * p = rc->buf.data() + j*n_expert;
++        for (int64_t e = 0; e < n_expert; e++) { idx[e] = (int32_t) e; }
++        std::partial_sort(idx.begin(), idx.begin() + rc->n_used, idx.end(), [p](int32_t a, int32_t b) { return p[a] > p[b] || (p[a] == p[b] && a < b); });
++        double sum = 0.0;
++        for (int u = 0; u < rc->n_used; u++) { sum += p[idx[u]]; }
++        for (int u = 0; u < rc->n_used; u++) { rc->hits[k][idx[u]]++; rc->mass[k][idx[u]] += sum > 0 ? p[idx[u]]/sum : 0.0; }
++    }
++    rc->n_tok[k] += n_tokens;
++    if (++rc->calls % 20000 == 0) { rc->dump(); }
++    return true;
++}
++
+ struct common_speculative_init_result::impl {
+     impl() = default;
+     ~impl() = default;
+@@ -3122,6 +3165,12 @@ common_speculative_init_result::common_speculative_init_result(
+     //       the extra memory for small models is likely negligible?
+     cparams.n_rs_seq  = 0;
+     cparams.ctx_other = ctx_tgt;
++    if (const char * rc_path = getenv("LLAMA_DRAFT_ROUTE_COUNT"); rc_path != nullptr && *rc_path != '\0' && has_draft) {
++        g_draft_route_count.path = rc_path; // filled once the draft model is loaded (n_used below)
++        cparams.cb_eval           = draft_route_count_cb;
++        cparams.cb_eval_user_data = &g_draft_route_count;
++        LOG_WRN("%s: LLAMA_DRAFT_ROUTE_COUNT: counting the draft's routed experts into %s\n", __func__, rc_path);
++    }
+ 
+     std::string model_path;
+     if (has_draft) {
+@@ -3135,6 +3184,13 @@ common_speculative_init_result::common_speculative_init_result(
+         }
+ 
+         pimpl->model.reset(model_dft);
++        if (cparams.cb_eval == draft_route_count_cb) {
++            char arch[64] = {0}, val[32] = {0};
++            llama_model_meta_val_str(model_dft, "general.architecture", arch, sizeof(arch));
++            llama_model_meta_val_str(model_dft, (std::string(arch) + ".expert_used_count").c_str(), val, sizeof(val));
++            g_draft_route_count.n_used = atoi(val);
++            GGML_ASSERT(g_draft_route_count.n_used > 0);
++        }
+ 
+         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
+         if (ctx_dft == nullptr) {
+diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
+index 5b3c32858..08afcd3bd 100644
+--- a/ggml/src/ggml-cuda/common.cuh
++++ b/ggml/src/ggml-cuda/common.cuh
+@@ -1429,6 +1429,12 @@ struct ggml_backend_cuda_context {
+     bool any_cuda_graph_has_instance() const;
+ #endif // USE_CUDA_GRAPH
+ 
++    // LLAMA_MOE_INPLACE: data of a compute-buffer copy of host experts -> per-expert byte offsets on the device (see mul_mat_q)
++    // an entry keeps its device buffer for the life of the context, so a captured CUDA graph can hold the pointer
++    struct mmid_inplace_entry { int64_t * delta = nullptr; int64_t n_set = 0; };
++    static constexpr int64_t mmid_inplace_max = 4096;
++    std::unordered_map<const void *, mmid_inplace_entry> mmid_inplace;
++
+     explicit ggml_backend_cuda_context(int device);
+ 
+     std::unique_ptr<ggml_cuda_stream_context> concurrent_stream_context;
+@@ -1448,6 +1454,35 @@ struct ggml_backend_cuda_context {
+     ggml_cuda_stream_context & stream_context() { return *concurrent_stream_context; }
+ 
+     cublasHandle_t cublas_handle() {
++        // LLAMA_CUBLAS_SHARED=1 (off = stock): one cuBLAS handle + workspace per device for every backend context of the
++        // process (the target and the draft context each created their own: ~100 MiB a context). Contexts run one at a
++        // time on one thread; the handle is re-bound to the calling context's stream when it changes. cublasSetStream
++        // resets the workspace, so it is set again after it, as the stock path does at creation.
++        static const bool shared = getenv("LLAMA_CUBLAS_SHARED") != nullptr;
++        if (shared && curr_stream_no == 0) {
++            static cublasHandle_t sh[GGML_CUDA_MAX_DEVICES] = {};
++            static void *         sw[GGML_CUDA_MAX_DEVICES] = {};
++            static cudaStream_t   ss[GGML_CUDA_MAX_DEVICES] = {};
++            static size_t         sz[GGML_CUDA_MAX_DEVICES] = {};
++            if (sh[device] == nullptr) {
++                ggml_cuda_set_device(device);
++                CUBLAS_CHECK(cublasCreate(&sh[device]));
++                CUBLAS_CHECK(cublasSetMathMode(sh[device], CUBLAS_TF32_TENSOR_OP_MATH));
++#if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2)))
++                sz[device] = (ggml_cuda_info().devices[device].cc >= GGML_CUDA_CC_HOPPER) ? 32 * 1024 * 1024 : 4 * 1024 * 1024;
++                CUDA_CHECK(cudaMalloc(&sw[device], sz[device]));
++#endif
++                fprintf(stderr, "cublas_shared: on (device %d)\n", device);
++            }
++            if (ss[device] != stream()) {
++                ss[device] = stream();
++                CUBLAS_CHECK(cublasSetStream(sh[device], ss[device]));
++#if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2)))
++                CUBLAS_CHECK(cublasSetWorkspace(sh[device], sw[device], sz[device]));
++#endif
++            }
++            return sh[device];
++        }
+         if (cublas_handles[device][curr_stream_no] == nullptr) {
+             ggml_cuda_set_device(device);
+             CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index a07e9a622..1461a6a76 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -994,6 +994,9 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
+     if (copy_event != nullptr) {
+         CUDA_CHECK(cudaEventDestroy(copy_event));
+     }
++    for (const auto & [data, entry] : mmid_inplace) {
++        CUDA_CHECK(cudaFree(entry.delta));
++    }
+     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
+             if (streams[i][j] != nullptr) {
+@@ -7044,8 +7047,42 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+     GGML_UNUSED(reg);
+ }
+ 
++// LLAMA_MOE_INPLACE: sets the per-expert byte offsets (n of them, 0 = read the copy) that the MMQ MUL_MAT_ID `node` adds to the
++// base of its weights `w`, a compute-buffer copy of host experts that the caller fills only where the offset is 0.
++// delta == nullptr clears the offsets of w. Returns false if node does not run the MMQ kernel: the caller then fills all of w.
++static bool ggml_backend_cuda_mmid_inplace(ggml_backend_t backend, const ggml_tensor * node, const ggml_tensor * w, const int64_t * delta, int64_t n) {
++    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
++    auto it = cuda_ctx->mmid_inplace.find(w->data);
++    bool ok = delta != nullptr && n <= ggml_backend_cuda_context::mmid_inplace_max;
++    if (ok) {
++        const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
++        ok = node->op == GGML_OP_MUL_MAT_ID && node->src[0] == w && node->type == GGML_TYPE_F32 && node->src[1]->type == GGML_TYPE_F32 &&
++            node->ne[2] > MMVQ_MAX_BATCH_SIZE && ggml_cuda_should_use_mmq(w->type, cc, node->src[1]->ne[2], w->ne[2]);
++    }
++    if (!ok && (it == cuda_ctx->mmid_inplace.end() || it->second.n_set == 0)) {
++        return false; // nothing to clear
++    }
++    ggml_cuda_set_device(cuda_ctx->device);
++    if (it == cuda_ctx->mmid_inplace.end()) {
++        it = cuda_ctx->mmid_inplace.emplace(w->data, ggml_backend_cuda_context::mmid_inplace_entry()).first;
++        CUDA_CHECK(cudaMalloc(&it->second.delta, ggml_backend_cuda_context::mmid_inplace_max*sizeof(int64_t)));
++    }
++    if (ok) {
++        // pageable memory: the copy is staged before the call returns
++        CUDA_CHECK(cudaMemcpyAsync(it->second.delta, delta, n*sizeof(int64_t), cudaMemcpyHostToDevice, cuda_ctx->stream()));
++        it->second.n_set = n;
++    } else {
++        CUDA_CHECK(cudaMemsetAsync(it->second.delta, 0, it->second.n_set*sizeof(int64_t), cuda_ctx->stream()));
++        it->second.n_set = 0;
++    }
++    return ok;
++}
++
+ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+     GGML_UNUSED(reg);
++    if (strcmp(name, "ggml_backend_cuda_mmid_inplace") == 0) {
++        return (void *)ggml_backend_cuda_mmid_inplace;
++    }
+     if (strcmp(name, "ggml_backend_comm_init") == 0) {
+         return (void *)ggml_backend_cuda_comm_init;
+     }
+diff --git a/ggml/src/ggml-cuda/mmq.cu b/ggml/src/ggml-cuda/mmq.cu
+index c9bcbc2aa..c57bd972b 100644
+--- a/ggml/src/ggml-cuda/mmq.cu
++++ b/ggml/src/ggml-cuda/mmq.cu
+@@ -380,6 +380,11 @@ void ggml_cuda_mul_mat_q(
+                                          ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
+     const int64_t s13 = ne12*s12;
+ 
++    // LLAMA_MOE_INPLACE: the experts with an offset are read from the MoE cache, see ggml_backend_cuda_mmid_inplace
++    // (an entry exists for every copy of host experts the caller staged, so a captured graph always holds its pointer)
++    const auto inplace = gate ? ctx.mmid_inplace.end() : ctx.mmid_inplace.find(src0_d);
++    const int64_t * x_delta = inplace != ctx.mmid_inplace.end() ? inplace->second.delta : nullptr;
++
+     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
+     const mmq_args args = {
+         src0_d, src0->type, (const int *) src1_q8_1.get(), ids_dst.get(), tile_spec.get(), dst_d,
+@@ -387,9 +392,39 @@ void ggml_cuda_mul_mat_q(
+         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
+         ne02,    1, s02, s12, s2,
+         ne03, ne13, s03, s13, s3,
+-        ntj, J_best, fusion_device};
++        ntj, J_best, fusion_device, x_delta};
+ 
+     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, prec_src1);
++
++    // LLAMA_MOE_INPLACE_CHECK=1 (needs GGML_CUDA_DISABLE_GRAPHS=1 and a fully staged src0): the same kernel again without the
++    // offsets, every byte of the two outputs compared
++    static const bool check = getenv("LLAMA_MOE_INPLACE_CHECK") != nullptr && atoi(getenv("LLAMA_MOE_INPLACE_CHECK")) > 0;
++    if (check && x_delta && inplace->second.n_set > 0) {
++        static size_t n_calls = 0, n_diff_total = 0;
++        const size_t nbytes = ggml_nbytes(dst);
++        ggml_cuda_pool_alloc<char> ref(ctx.pool(), nbytes);
++        CUDA_CHECK(cudaMemcpyAsync(ref.ptr, dst_d, nbytes, cudaMemcpyDeviceToDevice, stream));
++        mmq_args args_ref = args;
++        args_ref.dst      = (float *) ref.ptr;
++        args_ref.x_delta  = nullptr;
++        ggml_cuda_mul_mat_q_switch_type(ctx, args_ref, stream, prec_src1);
++        std::vector<char>    out(nbytes), out_ref(nbytes);
++        std::vector<int64_t> delta(ne02);
++        CUDA_CHECK(cudaMemcpyAsync(out.data(),     dst_d,   nbytes, cudaMemcpyDeviceToHost, stream));
++        CUDA_CHECK(cudaMemcpyAsync(out_ref.data(), ref.ptr, nbytes, cudaMemcpyDeviceToHost, stream));
++        CUDA_CHECK(cudaMemcpyAsync(delta.data(), x_delta, ne02*sizeof(int64_t), cudaMemcpyDeviceToHost, stream));
++        CUDA_CHECK(cudaStreamSynchronize(stream));
++        size_t n_diff = 0, n_moved = 0;
++        for (size_t i = 0; i < nbytes; ++i) {
++            n_diff += out[i] != out_ref[i];
++        }
++        for (int64_t e = 0; e < ne02; ++e) {
++            n_moved += delta[e] != 0;
++        }
++        n_diff_total += n_diff;
++        fprintf(stderr, "moe_inplace check: call %zu %s tokens %ld experts in place %zu of %ld bytes %zu diff %zu total diff %zu\n",
++            ++n_calls, src0->name, (long) ne12, n_moved, (long) ne02, nbytes, n_diff, n_diff_total);
++    }
+ }
+ 
+ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts) {
+diff --git a/ggml/src/ggml-cuda/mmq.cuh b/ggml/src/ggml-cuda/mmq.cuh
+index be2f11430..b28a29fa9 100644
+--- a/ggml/src/ggml-cuda/mmq.cuh
++++ b/ggml/src/ggml-cuda/mmq.cuh
+@@ -1029,7 +1029,9 @@ static __global__ void mul_mat_q(
+         const uint3 blocks_per_ne00, const int nrows_x, const int ncols_dst, const int stride_row_x, const int ncols_y, const int stride_col_dst,
+         const uint3 channel_ratio, const uint3 nchannels_y, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
+         const uint3 sample_ratio, const uint3 nsamples_y, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
+-        const uint3 ntj) {
++        const uint3 ntj, const int64_t * __restrict__ x_delta) {
++    // x_delta (LLAMA_MOE_INPLACE): with ids, bytes added to x for the expert of the tile, so the weights of an expert are read where
++    // they are (a MoE cache slot) instead of at x + expert*stride_channel_x. Only the address changes, nullptr = unchanged.
+ 
+ #ifdef TURING_MMA_AVAILABLE
+     constexpr bool fusion_available = true;
+@@ -1140,7 +1142,7 @@ static __global__ void mul_mat_q(
+ 
+         constexpr bool fixup = false;
+         mul_mat_q_process_tile<type, J, fallback, fixup, prec_src1, has_fusion>
+-            (x, x_gate, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
++            (x_delta ? x + x_delta[zt] : x, x_gate, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
+              glu_op, glu_limit, x_scale_tile, gate_scale_tile, stride_row_x, ncols_y, stride_col_dst,
+              tile_x_i_max, col_high - col_low, 0, blocks_per_ne00.z);
+         return;
+@@ -1226,7 +1228,7 @@ static __global__ void mul_mat_q(
+ 
+         constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
+         mul_mat_q_process_tile<type, J, fallback, fixup, prec_src1, false>
+-            (x, x_gate, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
++            (x_delta ? x + x_delta[zt] : x, x_gate, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
+              glu_op, glu_limit, x_scale_tile, gate_scale, stride_row_x, ncols_y, stride_col_dst,
+              tile_x_i_max, col_high - col_low, kb0_start, kb0_stop);
+ 
+@@ -1302,7 +1304,7 @@ static __global__ void mul_mat_q(
+ 
+     constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
+     mul_mat_q_process_tile<type, J, fallback, fixup, prec_src1, false>
+-        (x, x_gate, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
++        (x_delta ? x + x_delta[zt] : x, x_gate, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
+          glu_op, glu_limit, x_scale_tile, gate_scale, stride_row_x, ncols_y, stride_col_dst,
+          tile_x_i_max, col_high - col_low, kb0_start, kb0_stop);
+ }
+@@ -1470,6 +1472,7 @@ struct mmq_args {
+     int64_t ntj;
+     int J_best; // Tile width in ne11(dense)/ne12(MoE) direction to use for optimal performance.
+     ggml_cuda_mm_fusion_args_device fusion = {}; // gate != nullptr selects the fused gate/up/GLU path
++    const int64_t * x_delta = nullptr; // per-expert byte offsets of x, see mul_mat_q
+ };
+ 
+ static size_t mmq_get_nbytes_shared(const ggml_cuda_mmq_config & config, const int cc) {
+@@ -1528,7 +1531,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
+              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
+              channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
+              sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
+-             ntj_fd);
++             ntj_fd, args.x_delta);
+         return;
+     }
+ 
+@@ -1555,7 +1558,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
+              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
+              channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
+              sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
+-             ntj_fd);
++             ntj_fd, args.x_delta);
+         return;
+     }
+ 
+@@ -1589,7 +1592,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
+          blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
+          channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
+          sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
+-         ntj_fd);
++         ntj_fd, args.x_delta);
+ 
+     if (!fixup_needed) {
+         return;
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 4caca65f3..940d2312e 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -3143,12 +3143,20 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+ 
+     auto & st = lctx->copy_experts;
+ 
++    // LLAMA_MOE_INPLACE=1: the matmul reads the cached experts in the MoE cache, they are not copied to dst (unset = stock)
++    // LLAMA_MOE_INPLACE_CHECK=1: they are copied as well, and the backend compares the matmul with and without the cache
++    typedef bool (*inplace_fn_t)(ggml_backend_t, const ggml_tensor *, const ggml_tensor *, const int64_t *, int64_t);
++    static const bool inplace_env   = getenv("LLAMA_MOE_INPLACE") != nullptr && atoi(getenv("LLAMA_MOE_INPLACE")) > 0;
++    static const bool inplace_check = getenv("LLAMA_MOE_INPLACE_CHECK") != nullptr && atoi(getenv("LLAMA_MOE_INPLACE_CHECK")) > 0;
++    const inplace_fn_t inplace_fn = !inplace_env || !lctx->moe_cache ? nullptr : (inplace_fn_t) ggml_backend_reg_get_proc_address(
++        ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)), "ggml_backend_cuda_mmid_inplace");
++
+     // the ids must be computed before the split starts, so only the first node of the split is considered
+-    if (ggml_graph_n_nodes(graph) == 0) {
+-        return false;
+-    }
+-    const ggml_tensor * node = ggml_graph_node(graph, 0);
+-    if (node->op != GGML_OP_MUL_MAT_ID || node->src[0] != dst) {
++    const ggml_tensor * node = ggml_graph_n_nodes(graph) > 0 ? ggml_graph_node(graph, 0) : nullptr;
++    if (node == nullptr || node->op != GGML_OP_MUL_MAT_ID || node->src[0] != dst) {
++        if (inplace_fn) {
++            inplace_fn(backend, nullptr, dst, nullptr, 0); // dst is not read with the offsets of an earlier graph
++        }
+         return false;
+     }
+ 
+@@ -3183,6 +3191,21 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+         st.ids = ids;
+     }
+ 
++    bool inplace = false;
++    if (inplace_fn) {
++        st.delta.assign(n_expert, 0);
++        for (int64_t e = 0; e < n_expert; e++) {
++            const char * cached = st.used[e] ? (const char *) lctx->moe_cache->expert_data(backend, src, e) : nullptr;
++            if (cached != nullptr) {
++                st.delta[e] = cached - ((const char *) dst->data + e*expert_size);
++            }
++        }
++        // false: the matmul does not take offsets, or they are cleared and all of dst is staged
++        inplace = inplace_fn(backend, node, dst, st.delta.data(), n_expert) && !inplace_check;
++    }
++    // the padding rule below, after a run of experts that is followed by an expert read in place
++    const size_t pad = std::min<size_t>(expert_size, 512);
++
+     // group consecutive experts and copy them together
+     for (int64_t first = 0; first < n_expert; ) {
+         if (!st.used[first]) {
+@@ -3197,13 +3220,13 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+         // the experts in the MoE cache are copied from device memory, the others are uploaded
+         int64_t next = first;
+         for (int64_t e = first; e <= last && lctx->moe_cache; ) {
+-            const int64_t n = lctx->moe_cache->copy_experts(backend, src, dst, e, last);
++            const int64_t n = inplace ? st.delta[e] != 0 : lctx->moe_cache->copy_experts(backend, src, dst, e, last);
+             if (n == 0) {
+                 e++;
+                 continue;
+             }
+             if (next < e) {
+-                ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + next*expert_size, next*expert_size, (e - next)*expert_size);
++                ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + next*expert_size, next*expert_size, (e - next)*expert_size + (inplace ? pad : 0));
+             }
+             e   += n;
+             next = e;
+@@ -3213,7 +3236,7 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+         const size_t offset  = next*expert_size;
+         const size_t padding = last < n_expert - 1 ? std::min<size_t>(expert_size, 512) : 0;
+         const size_t size    = (last + 1 - next)*expert_size + padding;
+-        if (size > 0) {
++        if (size > 0 && !(inplace && next > last)) { // in place: no padding after an expert that is not read from dst
+             ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
+         }
+ 
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 3e3921c7d..b1ea494ce 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -416,6 +416,7 @@ private:
+         const ggml_tensor *  ids = nullptr;
+         std::vector<int32_t> ids_data;
+         std::vector<bool>    used;
++        std::vector<int64_t> delta; // LLAMA_MOE_INPLACE: cache address - copy address of each used expert, 0 if not cached
+ 
+         void reset() {
+             ids = nullptr;
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index ba35af021..cb9616d06 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -373,6 +373,7 @@ struct llama_moe_cache::impl {
+     stats stats_small; // up to 8 tokens per ubatch
+     stats stats_large;
+     stats stats_copy;  // experts copied from the cache for large batches
++    size_t n_inplace = 0; // experts read in place by large batches (LLAMA_MOE_INPLACE)
+ 
+     std::vector<device> devices;
+     std::vector<group> groups;
+@@ -764,6 +765,22 @@ struct llama_moe_cache::impl {
+         return n;
+     }
+ 
++    // as copy_experts, large batches only read the cache
++    const void * expert_data(ggml_backend_t backend, const ggml_tensor * w, int64_t e) {
++        const auto it = bindings.find(w);
++        if (it == bindings.end()) {
++            return nullptr;
++        }
++        const binding & b = it->second;
++        const group & g = groups[layers[b.il].ig];
++        const int32_t * slots = g.lru.slot_map[b.il];
++        if (backend != devices[g.id].backend || slots == nullptr || slots[e] >= g.n_slots) {
++            return nullptr;
++        }
++        n_inplace++;
++        return (const char *) g.banks[b.ip]->data + slots[e]*g.banks[b.ip]->nb[2];
++    }
++
+     bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph) {
+         const auto it = layer_of.find(src);
+         if (it == layer_of.end()) {
+@@ -875,6 +892,9 @@ struct llama_moe_cache::impl {
+         if (stats_copy.hits > 0) {
+             LLAMA_LOG_INFO("llama_moe_cache: large batches: %zu experts copied from the cache, %.2f MiB\n", stats_copy.hits, stats_copy.bytes/1024.0/1024.0);
+         }
++        if (n_inplace > 0) {
++            LLAMA_LOG_INFO("llama_moe_cache: large batches: %zu experts read in place\n", n_inplace);
++        }
+     }
+ };
+ 
+@@ -970,6 +990,10 @@ int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor
+     return pimpl->copy_experts(backend, w, dst, e, last);
+ }
+ 
++const void * llama_moe_cache::expert_data(ggml_backend_t backend, const ggml_tensor * w, int64_t e) {
++    return pimpl->expert_data(backend, w, e);
++}
++
+ std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown() const {
+     std::map<ggml_backend_buffer_type_t, size_t> res;
+     for (const auto & d : pimpl->devices) {
+diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
+index 833eac360..334462fdb 100644
+--- a/src/llama-moe-cache.h
++++ b/src/llama-moe-cache.h
+@@ -60,6 +60,9 @@ public:
+     // returns the number of experts copied, 0 if expert e is not in the cache
+     int64_t copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last);
+ 
++    // LLAMA_MOE_INPLACE: the device address of expert e of w in the cache of backend, nullptr if it is not cached there
++    const void * expert_data(ggml_backend_t backend, const ggml_tensor * w, int64_t e);
++
+     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
+ 
+ private:

@@ -1,0 +1,1244 @@
+diff --git a/ggml/src/ggml-cuda/lightning-indexer.cu b/ggml/src/ggml-cuda/lightning-indexer.cu
+index b7939243b..0dd352efe 100644
+--- a/ggml/src/ggml-cuda/lightning-indexer.cu
++++ b/ggml/src/ggml-cuda/lightning-indexer.cu
+@@ -1,3 +1,4 @@
++#include <vector>
+ #include "common.cuh"
+ #include "lightning-indexer.cuh"
+ #include "fattn-common.cuh"
+@@ -486,6 +487,138 @@ static __global__ void lightning_indexer_kernel_tile(
+     }
+ }
+ 
++// LLAMA_IDX_KEYS=1 (indexer/idx-keys, local long-context mod, off by default): the vec kernel below the tile kernel's
++// batch (decode: verify, catch-up, draft) runs one block per (64 keys, token), so every key is read and dequantized
++// once per token, and every (key, token, head) dot ends in a 5-step warp-shuffle reduction: at a 4-token verify over
++// 60k pooled keys that is 4.8M shuffles, 38 us a launch against a 5.6 us DRAM floor. This kernel gives each thread one
++// key for every token of the batch: the key is read once (16-byte loads into shared memory), dequantized once into
++// registers, and each head's dot is the same operations the vec kernel runs in the same tree: lane partials
++// p[l] = fma chain over elements 4l..4l+3 from 0, then the xor butterfly (offsets 16, 8, 4, 2, 1) whose value is
++// R(0, 1), R(l, 16) = p[l] + p[l+16], R(l, s) = R(l, 2s) + R(l+s, 2s); float + is commutative bit for bit. Then relu,
++// score = fma(sum, w, score) over the heads in order, + the mask. So the scores are the vec kernel's bit for bit.
++// q8_0 keys, 4 heads x 128, one stream, 1-7 tokens. MINB 3 caps the registers at 65536 / (3 x 128) = 170 for 3 blocks
++// an SM, used when the 2-block grid would take more than one wave.
++// LLAMA_IDX_KEYS_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1): the vec kernel also runs, every score compared bit for bit.
++#define LIGHTNING_INDEXER_KEYS_BLOCK 128
++
++template <int L, int S>
++struct lightning_indexer_keys_tree {
++    static __device__ __forceinline__ float eval(const float * k, const float4 * q) {
++        if constexpr (S == 16) {
++            const float4 qa = q[L];
++            const float4 qb = q[L + 16];
++            float a = 0.0f;
++            float b = 0.0f;
++            a = fmaf(qa.x, k[4*L + 0], a); a = fmaf(qa.y, k[4*L + 1], a); a = fmaf(qa.z, k[4*L + 2], a); a = fmaf(qa.w, k[4*L + 3], a);
++            b = fmaf(qb.x, k[4*(L+16) + 0], b); b = fmaf(qb.y, k[4*(L+16) + 1], b); b = fmaf(qb.z, k[4*(L+16) + 2], b); b = fmaf(qb.w, k[4*(L+16) + 3], b);
++            return a + b;
++        } else {
++            return lightning_indexer_keys_tree<L, 2*S>::eval(k, q) + lightning_indexer_keys_tree<L + S, 2*S>::eval(k, q);
++        }
++    }
++};
++
++template <int NQ, int N_HEAD, int MINB>
++__launch_bounds__(LIGHTNING_INDEXER_KEYS_BLOCK, MINB)
++static __global__ void lightning_indexer_kernel_keys(
++        const float * Q, const char * K, const float * W, const half * M, float * dst,
++        int n_kv, size_t nb1, size_t nbq1, size_t nbq2, size_t nbk2, size_t nbw1, size_t nbm1) {
++    constexpr int NK  = LIGHTNING_INDEXER_KEYS_BLOCK;
++    constexpr int ROW = 4 * sizeof(block_q8_0); // 128 elements
++    __shared__ __align__(16) int k_sh[NK * ROW / 4];
++    __shared__ float4 q_sh[NQ][N_HEAD][32];
++    __shared__ float  w_sh[NQ][N_HEAD];
++
++    ggml_cuda_pdl_lc();
++
++    const int tid  = threadIdx.x;
++    const int kv0  = blockIdx.x * NK;
++    const int nrow = min(NK, n_kv - kv0);
++
++    ggml_cuda_pdl_sync();
++
++    const int nw = nrow * ROW / 4;
++    if (nbk2 == ROW) {
++        // kv0 * 136 is a multiple of 16: 16-byte loads, then the last 8 bytes of an odd row count
++        const int4 * src = (const int4 *) (K + (size_t) kv0 * ROW);
++        const int n16 = nw / 4;
++        for (int i = tid; i < n16; i += NK) {
++            ((int4 *) k_sh)[i] = src[i];
++        }
++        for (int i = n16*4 + tid; i < nw; i += NK) {
++            k_sh[i] = ((const int *) src)[i];
++        }
++    } else {
++        for (int i = tid; i < nw; i += NK) {
++            k_sh[i] = ((const int *) (K + (size_t) (kv0 + i / (ROW/4)) * nbk2))[i % (ROW/4)];
++        }
++    }
++    for (int i = tid; i < NQ * N_HEAD * 32; i += NK) {
++        const int t = i / (N_HEAD * 32);
++        const int h = (i / 32) % N_HEAD;
++        const int e = i % 32;
++        q_sh[t][h][e] = *(const float4 *) ((const char *) Q + t*nbq2 + h*nbq1 + e*sizeof(float4));
++    }
++    if (tid < NQ * N_HEAD) {
++        w_sh[tid / N_HEAD][tid % N_HEAD] = ((const float *) ((const char *) W + (tid / N_HEAD)*nbw1))[tid % N_HEAD];
++    }
++    __syncthreads();
++    if (tid >= nrow) {
++        return;
++    }
++
++    // dequantize_V_q8_0<float>: d (half -> float) * q (int8 -> float)
++    int rr[ROW/4];
++#pragma unroll
++    for (int i = 0; i < ROW/4; ++i) {
++        rr[i] = k_sh[tid * (ROW/4) + i];
++    }
++    const unsigned char * rb = (const unsigned char *) rr;
++    float k[128];
++#pragma unroll
++    for (int b = 0; b < 4; ++b) {
++        half dh;
++        memcpy(&dh, rb + b*sizeof(block_q8_0), sizeof(half));
++        const float d = __half2float(dh);
++#pragma unroll
++        for (int j = 0; j < QK8_0; ++j) {
++            k[b*QK8_0 + j] = d * (float) (int8_t) rb[b*sizeof(block_q8_0) + sizeof(half) + j];
++        }
++    }
++
++    const int i_kv = kv0 + tid;
++#pragma unroll
++    for (int t = 0; t < NQ; ++t) {
++        float score = 0.0f;
++#pragma unroll
++        for (int h = 0; h < N_HEAD; ++h) {
++            float sum = lightning_indexer_keys_tree<0, 1>::eval(k, q_sh[t][h]);
++            sum = (sum > 0.0f) ? sum : 0.0f;
++            score = fmaf(sum, w_sh[t][h], score);
++        }
++        const half * m_base = (const half *) ((const char *) M + t*nbm1);
++        float * dst_base = (float *) ((char *) dst + t*nb1);
++        dst_base[i_kv] = score + __half2float(m_base[i_kv]);
++    }
++}
++
++template <int NQ>
++static void lightning_indexer_keys_launch(
++        cudaStream_t stream, int nsm, const float * q_d, const char * k_d, const float * w_d, const half * m_d, float * dst_d,
++        int n_kv, size_t nb1, size_t nbq1, size_t nbq2, size_t nbk2, size_t nbw1, size_t nbm1) {
++    static int occ = -1;
++    if (occ < 0) {
++        CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ, lightning_indexer_kernel_keys<NQ, 4, 1>, LIGHTNING_INDEXER_KEYS_BLOCK, 0));
++    }
++    const int grid = (n_kv + LIGHTNING_INDEXER_KEYS_BLOCK - 1) / LIGHTNING_INDEXER_KEYS_BLOCK;
++    const ggml_cuda_kernel_launch_params params(dim3(grid), dim3(LIGHTNING_INDEXER_KEYS_BLOCK), 0, stream);
++    if (grid > occ * nsm) {
++        ggml_cuda_kernel_launch(lightning_indexer_kernel_keys<NQ, 4, 3>, params, q_d, k_d, w_d, m_d, dst_d, n_kv, nb1, nbq1, nbq2, nbk2, nbw1, nbm1);
++    } else {
++        ggml_cuda_kernel_launch(lightning_indexer_kernel_keys<NQ, 4, 1>, params, q_d, k_d, w_d, m_d, dst_d, n_kv, nb1, nbq1, nbq2, nbk2, nbw1, nbm1);
++    }
++}
++
+ #define LIGHTNING_INDEXER_CASE(lightning_indexer_kernel, n_embd, n_head, K, type_K)         \
+     if (K->type == (type_K)) {                                                              \
+         lightning_indexer_kernel<WARPS_PER_BLOCK, K_VECS_PER_BLOCK, n_embd, n_head, type_K> \
+@@ -550,6 +683,37 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor *
+     const int device = ggml_cuda_get_device();
+     const int cc     = ggml_cuda_info().devices[device].cc;
+ 
++    // LLAMA_IDX_INPLACE_CHECK: src[4] is the stock score (f32 copy of the keys), already computed; this node read q8_0 in place
++    struct idx_inplace_check {
++        ggml_backend_cuda_context & ctx;
++        const ggml_tensor * dst;
++        ~idx_inplace_check() {
++            const ggml_tensor * ref = dst->src[4];
++            if (ref == nullptr) {
++                return;
++            }
++            static uint64_t n_check = 0, n_values = 0;
++            const size_t n = ggml_nbytes(dst);
++            GGML_ASSERT(n == ggml_nbytes(ref) && dst->src[1]->type == GGML_TYPE_Q8_0 && ref->src[1]->type == GGML_TYPE_F32);
++            std::vector<uint32_t> a(n/4), b(n/4);
++            CUDA_CHECK(cudaMemcpyAsync(a.data(), dst->data, n, cudaMemcpyDeviceToHost, ctx.stream()));
++            CUDA_CHECK(cudaMemcpyAsync(b.data(), ref->data, n, cudaMemcpyDeviceToHost, ctx.stream()));
++            CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
++            size_t n_diff = 0;
++            for (size_t i = 0; i < n/4; ++i) {
++                n_diff += a[i] != b[i]; // bit patterns: -inf, zero signs and NaN payloads count
++            }
++            n_values += n/4;
++            if (++n_check <= 3 || n_check % 2000 == 0 || n_diff != 0) {
++                GGML_LOG_WARN("idx_inplace check %llu (%s, q %lld, n_pool %lld): %zu of %zu score bit patterns differ; %llu scores checked\n",
++                    (unsigned long long) n_check, dst->name, (long long) dst->ne[1], (long long) dst->ne[0], n_diff, n/4, (unsigned long long) n_values);
++            }
++            if (n_diff != 0) {
++                GGML_ABORT("LLAMA_IDX_INPLACE_CHECK: in-place and stock indexer scores differ");
++            }
++        }
++    } idx_check{ctx, dst};
++
+     if (n_embd == 128 && n_head == 64) {
+         if ((turing_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) && k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_BF16) {
+             constexpr int K_VECS_PER_BLOCK = 32;
+@@ -643,6 +807,70 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor *
+         GGML_ABORT("fatal error");
+     } else if (n_embd == 128 && n_head == 4) {
+         // a batch smaller than a token tile, use vector kernel
++#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
++        // LLAMA_IDX_KEYS: one thread per key for every token (see lightning_indexer_kernel_keys)
++        static const bool idx_keys       = getenv("LLAMA_IDX_KEYS")       && atoi(getenv("LLAMA_IDX_KEYS"))       != 0;
++        static const bool idx_keys_check = getenv("LLAMA_IDX_KEYS_CHECK") && atoi(getenv("LLAMA_IDX_KEYS_CHECK")) != 0;
++        if ((idx_keys || idx_keys_check) && k->type == GGML_TYPE_Q8_0 && n_stream == 1 && n_batch <= 7 && k->ne[1] == 1 &&
++                nbk2 % 4 == 0 && (uintptr_t) k_d % 4 == 0 && nbq1 % 16 == 0 && nbq2 % 16 == 0 && (uintptr_t) q_d % 16 == 0 &&
++                (nbk2 != 4*sizeof(block_q8_0) || (uintptr_t) k_d % 16 == 0)) {
++            const int nsm = ggml_cuda_info().devices[device].nsm;
++            float * out = dst_d;
++            ggml_cuda_pool_alloc<float> check_alloc(ctx.pool());
++            if (idx_keys_check) {
++                out = check_alloc.alloc(ggml_nelements(dst)); // the vec kernel's scores stay in the node
++                GGML_ASSERT(ggml_is_contiguous(dst));
++            }
++            switch (n_batch) {
++                case 1: lightning_indexer_keys_launch<1>(ctx.stream(), nsm, q_d, k_d, w_d, m_d, out, n_kv, nb1, nbq1, nbq2, nbk2, nbw1, nbm1); break;
++                case 2: lightning_indexer_keys_launch<2>(ctx.stream(), nsm, q_d, k_d, w_d, m_d, out, n_kv, nb1, nbq1, nbq2, nbk2, nbw1, nbm1); break;
++                case 3: lightning_indexer_keys_launch<3>(ctx.stream(), nsm, q_d, k_d, w_d, m_d, out, n_kv, nb1, nbq1, nbq2, nbk2, nbw1, nbm1); break;
++                case 4: lightning_indexer_keys_launch<4>(ctx.stream(), nsm, q_d, k_d, w_d, m_d, out, n_kv, nb1, nbq1, nbq2, nbk2, nbw1, nbm1); break;
++                case 5: lightning_indexer_keys_launch<5>(ctx.stream(), nsm, q_d, k_d, w_d, m_d, out, n_kv, nb1, nbq1, nbq2, nbk2, nbw1, nbm1); break;
++                case 6: lightning_indexer_keys_launch<6>(ctx.stream(), nsm, q_d, k_d, w_d, m_d, out, n_kv, nb1, nbq1, nbq2, nbk2, nbw1, nbm1); break;
++                case 7: lightning_indexer_keys_launch<7>(ctx.stream(), nsm, q_d, k_d, w_d, m_d, out, n_kv, nb1, nbq1, nbq2, nbk2, nbw1, nbm1); break;
++                default: GGML_ABORT("fatal error");
++            }
++            if (!idx_keys_check) {
++                return;
++            }
++            // check: run the vec kernel into the node below, then compare every score's bit pattern
++            struct idx_keys_compare {
++                ggml_backend_cuda_context & ctx;
++                const ggml_tensor * dst;
++                const float * keys_out;
++                ~idx_keys_compare() {
++                    static uint64_t n_check = 0, n_values = 0;
++                    const size_t n = ggml_nelements(dst);
++                    std::vector<uint32_t> a(n), b(n);
++                    CUDA_CHECK(cudaMemcpyAsync(a.data(), dst->data, n*4, cudaMemcpyDeviceToHost, ctx.stream()));
++                    CUDA_CHECK(cudaMemcpyAsync(b.data(), keys_out, n*4, cudaMemcpyDeviceToHost, ctx.stream()));
++                    CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
++                    size_t n_diff = 0;
++                    for (size_t i = 0; i < n; ++i) {
++                        n_diff += a[i] != b[i];
++                    }
++                    n_values += n;
++                    if (++n_check <= 3 || n_check % 2000 == 0 || n_diff != 0) {
++                        GGML_LOG_WARN("idx_keys check %llu (%s, q %lld, n_pool %lld): %zu of %zu score bit patterns differ; %llu scores checked\n",
++                            (unsigned long long) n_check, dst->name, (long long) dst->ne[1], (long long) dst->ne[0], n_diff, n, (unsigned long long) n_values);
++                    }
++                    if (n_diff != 0) {
++                        GGML_ABORT("LLAMA_IDX_KEYS_CHECK: one-thread-per-key and vec indexer scores differ");
++                    }
++                }
++            } keys_cmp{ctx, dst, out};
++            constexpr int K_VECS_PER_WARP = 8;
++            constexpr int WARPS_PER_BLOCK = 8;
++            constexpr int K_VECS_PER_BLOCK = K_VECS_PER_WARP * WARPS_PER_BLOCK;
++            dim3 block(32, WARPS_PER_BLOCK);
++            int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
++            dim3 grid(num_kv_blocks, n_batch, n_stream);
++            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q8_0)
++            GGML_ABORT("fatal error");
++            return;
++        }
++#endif // !GGML_USE_HIP && !GGML_USE_MUSA
+         constexpr int K_VECS_PER_WARP = 8;
+         constexpr int WARPS_PER_BLOCK = 8;
+         constexpr int K_VECS_PER_BLOCK = K_VECS_PER_WARP * WARPS_PER_BLOCK;
+diff --git a/ggml/src/ggml-cuda/top-k.cu b/ggml/src/ggml-cuda/top-k.cu
+index 2639a664d..1c534c800 100644
+--- a/ggml/src/ggml-cuda/top-k.cu
++++ b/ggml/src/ggml-cuda/top-k.cu
+@@ -1,6 +1,13 @@
+ #include "argsort.cuh"
+ #include "top-k.cuh"
+ 
++#include <algorithm>
++#include <cstring>
++#include <functional>
++#include <mutex>
++#include <unordered_map>
++#include <vector>
++
+ // Adjusted implementation thresholds from #28547, can be overridden at build time
+ #ifndef GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC
+ #    if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+@@ -248,7 +255,333 @@ static __global__ void top_k_radix_gather(
+     }
+ }
+ 
+-static void top_k_radix_cuda(
++// LLAMA_TOPK_FUSED=1 (local long-context mod, off by default): the radix top-k of a few rows in ONE launch instead of ten.
++// The blocks of a row meet at a barrier after each radix pass (a persistent, self-clearing arrival counter per row), then
++// every block sums the same block histograms and derives the same state, so no select kernel is needed; the bin is found
++// with a parallel suffix sum instead of the serial scan. Same threshold key, same tie count, same gather rule as the
++// stock kernels: picks above the threshold in atomicAdd order (no fixed order, as stock), ties in the last slots in
++// ascending column order. All blocks must be resident at once for the barrier: the caller keeps the grid <= nsm.
++// LLAMA_TOPK_FUSED_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1): stock result stays in the node, the fused result and a host
++// reference are compared with it word for word on every call.
++#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) // the fused path is CUDA only (warp size 32, cudaStreamCreate)
++struct alignas(128) top_k_fused_sync {
++    int arrived;
++    int greater_count;
++};
++
++#define GGML_CUDA_TOP_K_FUSED_MAX_ROWS 8
++
++// LLAMA_TOPK_ROWHIST=1 (indexer/topk-rowhist, local long-context mod, off by default, needs LLAMA_TOPK_FUSED): after each
++// radix pass the fused kernel above has every block re-read all blocks_per_row block histograms of its row, a serial
++// chain of blocks_per_row volatile L2 loads per thread (42 at a 240k-cell 4-row verify, 59-64 for one row): 1.6-2.9 us
++// of each pass. ROWHIST: each block adds its non-empty bins to one histogram of the row (L2 atomics) before the barrier
++// and reads one value per bin after it. Same counts, so the same threshold, rank and ties: the same picks (the greater
++// picks in their unordered atomicAdd slots, the tie slots in ascending column order). The row histograms live after the
++// row states and are zeroed again by the last block of the row, like the row state.
++// LLAMA_TOPK_ROWHIST_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1): the stock fused result stays in the node, the ROWHIST
++// result and a host reference are compared with it on every call (top_k_fused_check).
++template<int BLOCK_SIZE, int RADIX_BITS, bool ROWHIST>
++static __global__ void top_k_radix_fused(
++        const float * src,
++        int * dst,
++        int * block_histograms,
++        top_k_fused_sync * sync,
++        int ncols,
++        int block_cols,
++        int k,
++        int blocks_per_row) {
++    constexpr int NBINS     = 1 << RADIX_BITS;
++    constexpr int warp_size = 32;
++    constexpr int nwarps    = BLOCK_SIZE / warp_size;
++    static_assert(NBINS == BLOCK_SIZE, "one thread per bin");
++    __shared__ int histogram[NBINS];
++    __shared__ int warp_sums[nwarps];
++    __shared__ int sel_bin;
++    __shared__ int sel_rank;
++
++    ggml_cuda_pdl_lc();
++
++    const int row       = blockIdx.x / blocks_per_row;
++    const int row_block = blockIdx.x % blocks_per_row;
++    const int tid       = threadIdx.x;
++    const int lane      = tid % warp_size;
++    const int warp      = tid / warp_size;
++    const float * row_src = src + (size_t) row * ncols;
++    int *         row_dst = dst + (size_t) row * k;
++    // one histogram buffer per pass: a block that is already in pass p+1 must not overwrite the pass p histogram that a
++    // slower block of the row is still summing. Layout [pass][row][block][bin].
++    constexpr int NPASSES = 32 / RADIX_BITS;
++    static_assert(!ROWHIST || (NPASSES == 32 / 8 && NBINS == 256), "the row histograms are sized for 8-bit passes");
++    const size_t pass_stride = (size_t) gridDim.x * NBINS;
++    int *         my_hist0 = block_histograms + ((size_t) row * blocks_per_row + row_block) * NBINS;
++    // the histograms and the counter are written by other blocks of this grid: volatile loads
++    const volatile int * row_hist0 = block_histograms + (size_t) row * blocks_per_row * NBINS;
++    const volatile int * row_hist  = row_hist0;
++    const volatile int * arrived  = &sync[row].arrived;
++
++    // each warp reads a contiguous part of the contiguous range of the block (as top_k_radix_gather)
++    const int     warp_cols  = block_cols / nwarps;
++    const int64_t warp_begin = (int64_t) row_block * block_cols + warp * warp_cols;
++    const int64_t warp_end   = min(warp_begin + warp_cols, (int64_t) ncols);
++
++    uint32_t prefix      = 0;
++    uint32_t prefix_mask = 0;
++    int      rank        = k;
++
++    ggml_cuda_pdl_sync();
++
++    for (int pass = 0; pass < 32 / RADIX_BITS; ++pass) {
++        const int shift = 32 - RADIX_BITS * (pass + 1);
++        histogram[tid] = 0;
++        __syncthreads();
++        for (int64_t col = warp_begin + lane; col < warp_end; col += warp_size) {
++            const uint32_t key = top_k_float_to_ordered(row_src[col]);
++            if ((key & prefix_mask) == prefix) {
++                atomicAdd(&histogram[(key >> shift) & (NBINS - 1)], 1);
++            }
++        }
++        __syncthreads();
++        row_hist = row_hist0 + pass * pass_stride;
++        int * row_sum = (int *) (sync + GGML_CUDA_TOP_K_FUSED_MAX_ROWS) + ((size_t) pass * GGML_CUDA_TOP_K_FUSED_MAX_ROWS + row) * NBINS;
++        if constexpr (ROWHIST) {
++            if (histogram[tid] != 0) {
++                atomicAdd(&row_sum[tid], histogram[tid]);
++            }
++        }
++        if (!ROWHIST || pass == NPASSES - 1) { // ROWHIST: the gather reads the last pass's block histograms (tie counts)
++            my_hist0[pass * pass_stride + tid] = histogram[tid];
++        }
++        __threadfence();
++        __syncthreads();
++        if (tid == 0) {
++            atomicAdd(&sync[row].arrived, 1);
++            while (*arrived < (pass + 1) * blocks_per_row) {
++            }
++        }
++        __syncthreads();
++
++        // top_k_radix_select, in every block of the row: the highest bin whose count reaches the rank that is left
++        // after the bins above it, else bin 0
++        int count = 0;
++        if constexpr (ROWHIST) {
++            count = __ldcg(&row_sum[tid]);
++        } else {
++            for (int b = 0; b < blocks_per_row; ++b) {
++                count += row_hist[b * NBINS + tid];
++            }
++        }
++        int above = count; // this bin and the bins above it in the warp
++#pragma unroll
++        for (int d = 1; d < warp_size; d *= 2) {
++            const int v = __shfl_down_sync(0xffffffff, above, d);
++            if (lane + d < warp_size) {
++                above += v;
++            }
++        }
++        if (lane == 0) {
++            warp_sums[warp] = above;
++        }
++        __syncthreads();
++        above -= count;
++        for (int w = warp + 1; w < nwarps; ++w) {
++            above += warp_sums[w];
++        }
++        if ((above < rank && above + count >= rank) || (tid == 0 && above + count < rank)) {
++            sel_bin  = tid;
++            sel_rank = rank - above;
++        }
++        __syncthreads();
++        prefix      |= (uint32_t) sel_bin << shift;
++        prefix_mask |= (uint32_t) (NBINS - 1) << shift;
++        rank         = sel_rank;
++    }
++
++    // top_k_radix_gather
++    const uint32_t threshold = prefix;
++    int nties = 0;
++    for (int64_t col = warp_begin + lane; col < warp_end; col += warp_size) {
++        const uint32_t key = top_k_float_to_ordered(row_src[col]);
++        if (key > threshold) {
++            const int pos = atomicAdd(&sync[row].greater_count, 1);
++            row_dst[pos] = col;
++        } else if (key == threshold) {
++            nties++;
++        }
++    }
++
++    // the ties fill the last rank slots in column order, the lowest columns win.
++    // the histograms of the last pass count the ties of each block in the bin of the threshold.
++    const volatile int * block_ties = row_hist + (threshold & (NBINS - 1));
++    int pos = 0;
++    for (int b = lane; b < row_block; b += warp_size) {
++        pos += block_ties[b * NBINS];
++    }
++    pos = warp_reduce_sum<warp_size>(pos);
++    if (pos < rank && block_ties[row_block * NBINS] != 0) { // the same result in all threads of the block
++        nties = warp_reduce_sum<warp_size>(nties);
++        if (lane == 0) {
++            warp_sums[warp] = nties;
++        }
++        __syncthreads();
++        for (int w = 0; w < warp; ++w) {
++            pos += warp_sums[w];
++        }
++
++        // pos is the same in all lanes of the warp, so the lanes leave the loop together
++        const int pos_end = min(pos + nties, rank);
++        for (int64_t tile = warp_begin; tile < warp_end && pos < pos_end; tile += warp_size) {
++            const int64_t col    = tile + lane;
++            const bool    is_tie = col < warp_end && top_k_float_to_ordered(row_src[col]) == threshold;
++
++            const uint32_t ties    = __ballot_sync(0xffffffff, is_tie);
++            const int      tie_pos = pos + __popc(ties & (((uint32_t) 1 << lane) - 1));
++            if (is_tie && tie_pos < pos_end) {
++                row_dst[k - rank + tie_pos] = col;
++            }
++            pos += __popc(ties);
++        }
++    }
++
++    // the last block of the row to finish clears the row state for the next launch
++    __threadfence();
++    __syncthreads();
++    if constexpr (ROWHIST) {
++        // and the row histograms: every block of the row has read them before it arrives here
++        if (tid == 0) {
++            sel_bin = atomicAdd(&sync[row].arrived, 1) == (NPASSES + 1) * blocks_per_row - 1;
++        }
++        __syncthreads();
++        if (sel_bin) {
++            int * row_sums = (int *) (sync + GGML_CUDA_TOP_K_FUSED_MAX_ROWS);
++            for (int p = 0; p < NPASSES; ++p) {
++                row_sums[((size_t) p * GGML_CUDA_TOP_K_FUSED_MAX_ROWS + row) * NBINS + tid] = 0;
++            }
++            if (tid == 0) {
++                sync[row].greater_count = 0;
++                sync[row].arrived       = 0;
++            }
++        }
++        return;
++    }
++    if (tid == 0 && atomicAdd(&sync[row].arrived, 1) == (NPASSES + 1) * blocks_per_row - 1) {
++        sync[row].greater_count = 0;
++        sync[row].arrived       = 0;
++    }
++}
++
++static bool top_k_env(const char * name) {
++    const char * e = getenv(name);
++    return e != nullptr && atoi(e) != 0;
++}
++
++// zeroed row states that live as long as the process, one set per stream (captured CUDA graphs keep the pointer)
++static top_k_fused_sync * top_k_fused_sync_get(cudaStream_t stream) {
++    static std::mutex mutex;
++    static std::unordered_map<cudaStream_t, top_k_fused_sync *> map;
++    std::lock_guard<std::mutex> lock(mutex);
++    auto it = map.find(stream);
++    if (it == map.end()) {
++        // zero on a stream of its own: the caller's stream may be capturing a graph
++        // + the LLAMA_TOPK_ROWHIST row histograms, [pass][row][bin] for 8-bit passes
++        const size_t size = GGML_CUDA_TOP_K_FUSED_MAX_ROWS * sizeof(top_k_fused_sync) + (32 / 8) * GGML_CUDA_TOP_K_FUSED_MAX_ROWS * 256 * sizeof(int);
++        void *       ptr  = nullptr;
++        cudaStream_t init = nullptr;
++        CUDA_CHECK(cudaMalloc(&ptr, size));
++        CUDA_CHECK(cudaStreamCreate(&init));
++        CUDA_CHECK(cudaMemsetAsync(ptr, 0, size, init));
++        CUDA_CHECK(cudaStreamSynchronize(init));
++        CUDA_CHECK(cudaStreamDestroy(init));
++        it = map.emplace(stream, (top_k_fused_sync *) ptr).first;
++        GGML_LOG_WARN("top_k_fused: on, row states at %p for stream %p\n", ptr, (void *) stream);
++    }
++    return it->second;
++}
++
++static void top_k_radix_fused_cuda(
++        ggml_cuda_pool & pool,
++        const float * src, int * dst, int ncols, int nrows, int k, int blocks_per_row, cudaStream_t stream, bool rowhist) {
++    constexpr int BLOCK_SIZE = 256;
++    constexpr int RADIX_BITS = 8;
++    constexpr int NBINS = 1 << RADIX_BITS;
++    const int block_cols = (int) (((int64_t) ncols + blocks_per_row * BLOCK_SIZE - 1) / (blocks_per_row * BLOCK_SIZE) * BLOCK_SIZE);
++
++    ggml_cuda_pool_alloc<int> histograms_alloc(pool, (size_t) (32 / RADIX_BITS) * nrows * blocks_per_row * NBINS);
++    const ggml_cuda_kernel_launch_params launch_params(dim3(blocks_per_row * nrows), dim3(BLOCK_SIZE), 0, stream);
++    if (rowhist) {
++        ggml_cuda_kernel_launch(top_k_radix_fused<BLOCK_SIZE, RADIX_BITS, true>, launch_params,
++            src, dst, histograms_alloc.get(), top_k_fused_sync_get(stream), ncols, block_cols, k, blocks_per_row);
++        return;
++    }
++    ggml_cuda_kernel_launch(top_k_radix_fused<BLOCK_SIZE, RADIX_BITS, false>, launch_params,
++        src, dst, histograms_alloc.get(), top_k_fused_sync_get(stream), ncols, block_cols, k, blocks_per_row);
++}
++
++static uint32_t top_k_float_to_ordered_host(float value) {
++    uint32_t bits;
++    memcpy(&bits, &value, sizeof(bits));
++    return bits ^ ((uint32_t) (-(int32_t) (bits >> 31)) | 0x80000000U);
++}
++
++// stock and fused picks against a host reference: sorted picks above the threshold word for word, tie slots word for
++// word in order, and the two sorted rows against each other
++static void top_k_fused_check(
++        const float * src, const int * dst_stock, const int * dst_fused, int ncols, int nrows, int k, cudaStream_t stream) {
++    static int64_t ncalls = 0, total_diff = 0;
++    std::vector<float> s((size_t) ncols * nrows);
++    std::vector<int>   a((size_t) k * nrows), b((size_t) k * nrows);
++    CUDA_CHECK(cudaMemcpyAsync(s.data(), src,       s.size() * sizeof(float), cudaMemcpyDeviceToHost, stream));
++    CUDA_CHECK(cudaMemcpyAsync(a.data(), dst_stock, a.size() * sizeof(int),   cudaMemcpyDeviceToHost, stream));
++    CUDA_CHECK(cudaMemcpyAsync(b.data(), dst_fused, b.size() * sizeof(int),   cudaMemcpyDeviceToHost, stream));
++    CUDA_CHECK(cudaStreamSynchronize(stream));
++
++    int64_t diff = 0;
++    int     rank_last = 0;
++    for (int r = 0; r < nrows; ++r) {
++        std::vector<uint32_t> key(ncols);
++        for (int c = 0; c < ncols; ++c) {
++            key[c] = top_k_float_to_ordered_host(s[(size_t) r * ncols + c]);
++        }
++        std::vector<uint32_t> sorted = key;
++        std::nth_element(sorted.begin(), sorted.begin() + (k - 1), sorted.end(), std::greater<uint32_t>());
++        const uint32_t threshold = sorted[k - 1];
++        std::vector<int> ref; // picks above the threshold ascending, then the lowest tie columns ascending
++        for (int c = 0; c < ncols; ++c) {
++            if (key[c] > threshold) {
++                ref.push_back(c);
++            }
++        }
++        const int ngreater = (int) ref.size();
++        for (int c = 0; c < ncols && (int) ref.size() < k; ++c) {
++            if (key[c] == threshold) {
++                ref.push_back(c);
++            }
++        }
++        rank_last = k - ngreater;
++        std::vector<int> ra(a.begin() + (size_t) r * k, a.begin() + (size_t) (r + 1) * k);
++        std::vector<int> rb(b.begin() + (size_t) r * k, b.begin() + (size_t) (r + 1) * k);
++        std::sort(ra.begin(), ra.begin() + ngreater);
++        std::sort(rb.begin(), rb.begin() + ngreater);
++        for (int i = 0; i < k; ++i) {
++            diff += (ra[i] != ref[i]) + (rb[i] != ref[i]); // head sorted, tie slots as written
++        }
++        std::sort(ra.begin(), ra.end());
++        std::sort(rb.begin(), rb.end());
++        for (int i = 0; i < k; ++i) {
++            diff += ra[i] != rb[i];
++        }
++    }
++    total_diff += diff;
++    ncalls++;
++    if (diff != 0 || ncalls <= 4 || ncalls % 1000 == 0) {
++        GGML_LOG_WARN("topk_fused check: call %lld rows %d ncols %d k %d ties(last row) %d words %lld diff %lld total diff %lld\n",
++            (long long) ncalls, nrows, ncols, k, rank_last, (long long) 3 * k * nrows, (long long) diff, (long long) total_diff);
++    }
++    GGML_ASSERT(diff == 0 && "topk_fused check: fused picks differ from stock / host reference");
++}
++
++#endif // !GGML_USE_HIP && !GGML_USE_MUSA
++
++static void top_k_radix_stock_cuda(
+         ggml_cuda_pool & pool,
+         const float * src, int * dst, int ncols, int64_t nrows, int k, cudaStream_t stream) {
+     constexpr int BLOCK_SIZE = 256;
+@@ -289,6 +622,40 @@ static void top_k_radix_cuda(
+     }
+ }
+ 
++static void top_k_radix_cuda(
++        ggml_cuda_pool & pool,
++        const float * src, int * dst, int ncols, int64_t nrows, int k, cudaStream_t stream) {
++    const int blocks_per_row = (int) std::min<int64_t>(((int64_t) ncols + 1023) / 1024, 64);
++
++#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
++    // LLAMA_TOPK_FUSED: decode-sized calls only, every block of the grid resident at once
++    static const bool fused       = top_k_env("LLAMA_TOPK_FUSED");
++    static const bool fused_check = top_k_env("LLAMA_TOPK_FUSED_CHECK");
++    static const bool rowhist       = top_k_env("LLAMA_TOPK_ROWHIST");
++    static const bool rowhist_check = top_k_env("LLAMA_TOPK_ROWHIST_CHECK");
++    const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
++    if ((fused || fused_check || rowhist_check) && nrows <= GGML_CUDA_TOP_K_FUSED_MAX_ROWS && nrows <= nsm) {
++        const int fused_blocks_per_row = std::min<int>(blocks_per_row, nsm / (int) nrows);
++        if (!fused_check && !rowhist_check) {
++            top_k_radix_fused_cuda(pool, src, dst, ncols, (int) nrows, k, fused_blocks_per_row, stream, rowhist);
++            return;
++        }
++        ggml_cuda_pool_alloc<int> check_alloc(pool, (size_t) k * nrows);
++        if (rowhist_check) {
++            // the stock fused result stays in the node
++            top_k_radix_fused_cuda(pool, src, check_alloc.get(), ncols, (int) nrows, k, fused_blocks_per_row, stream, true);
++            top_k_radix_fused_cuda(pool, src, dst, ncols, (int) nrows, k, fused_blocks_per_row, stream, false);
++        } else {
++            top_k_radix_fused_cuda(pool, src, check_alloc.get(), ncols, (int) nrows, k, fused_blocks_per_row, stream, rowhist);
++            top_k_radix_stock_cuda(pool, src, dst, ncols, nrows, k, stream);
++        }
++        top_k_fused_check(src, dst, check_alloc.get(), ncols, (int) nrows, k, stream);
++        return;
++    }
++#endif // !GGML_USE_HIP && !GGML_USE_MUSA
++    top_k_radix_stock_cuda(pool, src, dst, ncols, nrows, k, stream);
++}
++
+ static void top_k_argsort_cuda(
+         ggml_cuda_pool & pool,
+         const float * src, int * dst, int ncols, int64_t nrows, int k, bool use_cub, cudaStream_t stream) {
+diff --git a/src/llama-memory-hybrid-idx.cpp b/src/llama-memory-hybrid-idx.cpp
+index 3866d5980..ad9a79ab2 100644
+--- a/src/llama-memory-hybrid-idx.cpp
++++ b/src/llama-memory-hybrid-idx.cpp
+@@ -39,7 +39,8 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
+                             /* layer filters */
+     const layer_filter_cb & filter_attn,
+     const layer_filter_cb & filter_recr,
+-    const layer_filter_cb & filter_idx) :
++    const layer_filter_cb & filter_idx,
++                 uint32_t   n_ubatch) :
+     llama_memory_hybrid(
+         model,
+         no_alloc,
+@@ -65,11 +66,110 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
+ 
+         LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
+ 
++        // mem-levers C: the pooled-only store keeps no per-cell rows, the cache below keeps only the cell bookkeeping
++        const bool pooled = idx_pooled_wanted(model, n_seq_max, n_ubatch);
++        const layer_filter_cb no_layers = [](uint32_t) { return false; };
++
+         return new llama_kv_cache(
+             model, no_alloc, hparams_idx, type_k, type_v, v_trans, offload, unified,
+             kv_size, n_seq_max, n_swa, swa_type,
+-            nullptr, filter_idx, nullptr, nullptr, "idx_");
+-    }()) {}
++            nullptr, pooled ? no_layers : filter_idx, nullptr, nullptr, "idx_");
++    }()) {
++    if (mem_idx == nullptr || !idx_pooled_wanted(model, n_seq_max, n_ubatch)) {
++        return;
++    }
++
++    // mem-levers C: per indexer layer, a raw-key ring (rank % ring_size) and a pool-indexed pooled store, both of type_k
++    const uint32_t kpool   = model.hparams.indexer_kpool;
++    const int64_t  idx_dim = model.hparams.indexer_head_size;
++
++    idx_pooled       = true;
++    idx_pooled_check = getenv("LLAMA_IDX_POOLED_CHECK") && atoi(getenv("LLAMA_IDX_POOLED_CHECK")) != 0;
++    // a ubatch writes at most n_ubatch ranks and reads at most kpool - 1 older ones; the slack covers a speculative rollback
++    ring_size  = n_ubatch + 4*kpool;
++    // every pool the cache can hold, plus distinct scatter rows for the padded new-pool entries (see set_input_kpool)
++    pool_slots = kv_size/kpool + n_ubatch/kpool + 2;
++    ring_owner.assign(ring_size, -1);
++
++    std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
++    for (uint32_t il = 0; il < model.hparams.n_layer_all; ++il) {
++        if (!model.hparams.has_kv(il) || !filter_idx(il)) {
++            continue;
++        }
++        ggml_backend_buffer_type_t buft = offload ? ggml_backend_dev_buffer_type(model.dev_layer(il)) : ggml_backend_cpu_buffer_type();
++        auto it = ctx_map.find(buft);
++        if (it == ctx_map.end()) {
++            ggml_init_params params = { size_t(4*model.hparams.n_layer_all*ggml_tensor_overhead()), NULL, true };
++            ggml_context * ctx = ggml_init(params);
++            GGML_ASSERT(ctx != nullptr);
++            pooled_ctxs.emplace_back(ctx);
++            it = ctx_map.emplace(buft, ctx).first;
++        }
++        ggml_tensor * ring = ggml_new_tensor_2d(it->second, type_k, idx_dim, ring_size);
++        ggml_tensor * pool = ggml_new_tensor_2d(it->second, type_k, idx_dim, pool_slots);
++        ggml_format_name(ring, "cache_idx_ring_l%u", il);
++        ggml_format_name(pool, "cache_idx_pool_l%u", il);
++        pooled_layers[(int32_t) il] = { ring, pool };
++    }
++
++    size_t total = 0;
++    for (auto & [buft, ctx] : ctx_map) {
++        if (no_alloc) {
++            continue;
++        }
++        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
++        GGML_ASSERT(buf != nullptr && "failed to allocate the pooled indexer store");
++        ggml_backend_buffer_clear(buf, 0);
++        total += ggml_backend_buffer_get_size(buf);
++        pooled_bufs.emplace_back(buf);
++    }
++
++    LLAMA_LOG_WARN("%s: LLAMA_IDX_POOLED: indexer stores pooled keys only: %zu layers, %u pool slots + %u ring rows, %s, %.2f MiB%s\n",
++            __func__, pooled_layers.size(), pool_slots, ring_size, ggml_type_name(type_k), total/1024.0/1024.0,
++            idx_pooled_check ? " (check on)" : "");
++}
++
++bool llama_memory_hybrid_idx::idx_pooled_wanted(const llama_model & model, uint32_t n_seq_max, uint32_t n_ubatch) {
++    static const bool env = getenv("LLAMA_IDX_POOLED") && atoi(getenv("LLAMA_IDX_POOLED")) != 0;
++    if (!env) {
++        return false;
++    }
++    const bool ok = model.hparams.indexer_kpool > 0 && model.hparams.indexer_kpool_by_order && n_seq_max == 1 && n_ubatch > 0;
++    if (!ok) {
++        LLAMA_LOG_WARN("%s: LLAMA_IDX_POOLED ignored: needs an order k-pool indexer, one sequence and a known n_ubatch "
++                "(kpool %u, by_order %d, n_seq_max %u, n_ubatch %u): stock indexer cache\n", __func__,
++                model.hparams.indexer_kpool, (int) model.hparams.indexer_kpool_by_order, n_seq_max, n_ubatch);
++    }
++    return ok;
++}
++
++ggml_tensor * llama_memory_hybrid_idx::pooled_ring(int32_t il) const {
++    auto it = pooled_layers.find(il);
++    GGML_ASSERT(it != pooled_layers.end());
++    return it->second.first;
++}
++
++ggml_tensor * llama_memory_hybrid_idx::pooled_pool(int32_t il) const {
++    auto it = pooled_layers.find(il);
++    GGML_ASSERT(it != pooled_layers.end());
++    return it->second.second;
++}
++
++void llama_memory_hybrid_idx::ring_note_write(int64_t rank) {
++    GGML_ASSERT(rank >= 0);
++    ring_owner[(size_t) (rank % ring_size)] = rank;
++}
++
++int64_t llama_memory_hybrid_idx::ring_slot_checked(int64_t rank) const {
++    const int64_t slot = rank % ring_size;
++    if (rank < 0 || ring_owner[(size_t) slot] != rank) {
++        GGML_ABORT("LLAMA_IDX_POOLED: raw indexer key of rank %lld is no longer in the ring (slot %lld holds %lld); "
++                "a re-pool reached further back than the ring keeps - run without LLAMA_IDX_POOLED",
++                (long long) rank, (long long) slot, (long long) (rank < 0 ? -1 : ring_owner[(size_t) slot]));
++    }
++    ++n_ring_reads;
++    return slot;
++}
+ 
+ llama_memory_context_ptr llama_memory_hybrid_idx::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
+     // note: repeats llama_memory_hybrid::init_batch, as the indexer needs the attention slot infos that the base context hides
+@@ -188,6 +288,10 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
+ 
+     if (mem_idx) {
+         const llama_pos stale = mem_idx_stale_pos(seq_id, p0);
++        // mem-levers C: a removal inside the sequence renumbers the later ranks, so the ring can no longer vouch for any rank
++        if (idx_pooled && p1 >= 0 && (seq_id < 0 || p1 <= mem_idx->seq_pos_max(seq_id))) {
++            std::fill(ring_owner.begin(), ring_owner.end(), -1);
++        }
+         mem_idx->seq_rm(seq_id, p0, p1);
+         mem_idx_stale_set(seq_id, stale);
+     }
+@@ -225,6 +329,9 @@ void llama_memory_hybrid_idx::seq_add(llama_seq_id seq_id, llama_pos p0, llama_p
+     if (mem_idx) {
+         // a negative shift moves the cells below p0, so they regroup as well
+         const llama_pos stale = mem_idx_stale_pos(seq_id, shift < 0 ? p0 + shift : p0);
++        if (idx_pooled) {
++            std::fill(ring_owner.begin(), ring_owner.end(), -1); // mem-levers C: positions moved under the ring
++        }
+         mem_idx->seq_add(seq_id, p0, p1, shift);
+         mem_idx_stale_set(seq_id, stale);
+     }
+@@ -235,6 +342,9 @@ void llama_memory_hybrid_idx::seq_div(llama_seq_id seq_id, llama_pos p0, llama_p
+ 
+     if (mem_idx) {
+         mem_idx->seq_div(seq_id, p0, p1, d);
++        if (idx_pooled) {
++            std::fill(ring_owner.begin(), ring_owner.end(), -1); // mem-levers C
++        }
+         mem_idx_stale_set(seq_id, 0);
+     }
+ }
+@@ -248,6 +358,10 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_hybrid_idx::memory_bre
+         }
+     }
+ 
++    for (const auto & buf : pooled_bufs) {
++        mb[ggml_backend_buffer_get_type(buf.get())] += ggml_backend_buffer_get_size(buf.get());
++    }
++
+     return mb;
+ }
+ 
+@@ -258,6 +372,40 @@ void llama_memory_hybrid_idx::state_write(llama_io_write_i & io, llama_seq_id se
+     if (mem_idx) {
+         mem_idx->state_write(io, seq_id, flags);
+     }
++
++    // mem-levers C: a context checkpoint restore truncates to a position whose tail pool was written long before, so
++    // the raw keys of the last 2*kpool ranks travel with the state; a rank the ring no longer held is restored as absent
++    if (idx_pooled) {
++        const uint32_t kpool = get_kpool();
++        const int64_t  n     = seq_id <= 0 ? (int64_t) mem_idx->get_cells(0).seq_pos_get(0).size() : 0;
++        const uint32_t cnt   = (uint32_t) std::min<int64_t>(n, 2*kpool);
++        const uint32_t magic = 0x49445850; // "IDXP"
++        io.write(&magic, sizeof(magic));
++        io.write(&cnt,   sizeof(cnt));
++        for (int64_t r = n - cnt; r < n; ++r) {
++            const int64_t slot = r % ring_size;
++            const uint8_t ok   = ring_owner[(size_t) slot] == r;
++            io.write(&r,  sizeof(r));
++            io.write(&ok, sizeof(ok));
++            for (const auto & [il, rp] : pooled_layers) {
++                ggml_tensor * ring = rp.first;
++                io.write_tensor(ring, (size_t) slot*ring->nb[1], ring->nb[1]);
++            }
++        }
++        // a full state (prompt cache, slot save) also carries the pooled keys of the complete pools: the restore
++        // rebuilds the cell layout, and the pools, being sequence-order ordinals, keep their keys
++        const uint32_t n_pool_w = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) ? 0u : (uint32_t) (n / kpool);
++        io.write(&n_pool_w, sizeof(n_pool_w));
++        if (n_pool_w > 0) {
++            for (const auto & [il, rp] : pooled_layers) {
++                ggml_tensor * pool = rp.second;
++                io.write_tensor(pool, 0, (size_t) n_pool_w*pool->nb[1]);
++            }
++        }
++        if (idx_pooled_check && io.n_bytes() > 0) {
++            ++n_tail_saved;
++        }
++    }
+ }
+ 
+ void llama_memory_hybrid_idx::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+@@ -284,6 +432,46 @@ void llama_memory_hybrid_idx::state_read(llama_io_read_i & io, llama_seq_id seq_
+             }
+         }
+ 
++        // mem-levers C: must mirror state_write
++        if (idx_pooled) {
++            uint32_t magic = 0, cnt = 0;
++            io.read(&magic, sizeof(magic));
++            io.read(&cnt,   sizeof(cnt));
++            if (magic != 0x49445850) {
++                throw std::runtime_error("LLAMA_IDX_POOLED: state has no pooled indexer tail");
++            }
++            for (uint32_t i = 0; i < cnt; ++i) {
++                int64_t r  = 0;
++                uint8_t ok = 0;
++                io.read(&r,  sizeof(r));
++                io.read(&ok, sizeof(ok));
++                const int64_t slot = r % ring_size;
++                for (const auto & [il, rp] : pooled_layers) {
++                    ggml_tensor * ring = rp.first;
++                    io.read_tensor(ring, (size_t) slot*ring->nb[1], ring->nb[1]);
++                }
++                ring_owner[(size_t) slot] = ok ? r : -1;
++            }
++            uint32_t n_pool_w = 0;
++            io.read(&n_pool_w, sizeof(n_pool_w));
++            if (n_pool_w > 0) {
++                GGML_ASSERT(n_pool_w <= pool_slots);
++                for (const auto & [il, rp] : pooled_layers) {
++                    ggml_tensor * pool = rp.second;
++                    io.read_tensor(pool, 0, (size_t) n_pool_w*pool->nb[1]);
++                }
++                // the layout rebuilds (stale from 0), but the restored pools need no re-pool
++                if (!sinfos_attn.empty()) {
++                    pools_restored = true;
++                }
++            }
++            ++n_tail_restored;
++            if (idx_pooled_check) {
++                LLAMA_LOG_WARN("%s: LLAMA_IDX_POOLED_CHECK: restored %u tail raw keys (restore %llu, %llu ring reads verified)\n",
++                        __func__, cnt, (unsigned long long) n_tail_restored, (unsigned long long) n_ring_reads);
++            }
++        }
++
+     } catch (...) {
+         // a half-restored context is the one state the indexer cannot fix by itself: attention holds new cells, the indexer old ones
+         // drop what was being restored from all of them, which is a state they do agree on.
+@@ -500,6 +688,10 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(llama_memory_hy
+         st.n_pool_real = std::max(st.n_pool_real, uint32_t(n_pool_max));
+         st.n_pool_ub   = st.n_pool_real;
+         st.n_new   = st.n_pool_real;
++        // mem-levers C: a re-pool can only reach the ring, so the reserve needs no full-cache re-pool
++        if (mem->get_idx_pooled()) {
++            st.n_new = std::min(st.n_new, mem->get_ring_size()/mem->get_kpool() + 1);
++        }
+         st.n_new_g = std::max(st.n_new, 1u);
+         kpool_st = std::make_unique<kpool_state>(std::move(st));
+         i_kpool  = 0;
+@@ -609,10 +801,25 @@ ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::gather_pooled(ggml_
+     return ggml_get_rows(ctx, pooled, idxs);
+ }
+ 
++ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::view_pooled(int64_t n_rows) const {
++    if (n_rows > pooled->ne[1]) {
++        return nullptr; // more (padded) pools than store rows: the caller keeps the copy, whose padded entries read row 0
++    }
++    return ggml_view_2d(ctx, pooled, pooled->ne[0], n_rows, pooled->nb[1], 0);
++}
++
++ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::scatter_raw(ggml_tensor * values, ggml_tensor * idxs) const {
++    return ggml_set_rows(ctx, key_gate, values, idxs);
++}
++
+ llama_memory_hybrid_idx_context::kpool_access llama_memory_hybrid_idx_context::get_kpool_access(
+         ggml_context * ctx, int32_t il, int64_t n_embd) const {
+     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
+ 
++    if (mem->get_idx_pooled()) {
++        return kpool_access(ctx, mem->pooled_ring(il), mem->pooled_pool(il));
++    }
++
+     return kpool_access(ctx, mem->get_mem_idx()->get_k_storage(il), n_embd);
+ }
+ 
+@@ -676,7 +883,9 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
+         ip += (uint32_t) sq.pools.size();
+ 
+         // A sequence edit invalidates only pools ending after the edited position.
+-        const llama_pos stale_from = i_cur == 0 ?
++        // mem-levers C: a full restore brought the pooled keys back, so its stale-from-0 only rebuilds the layout
++        const bool restored = i_cur == 0 && s == 0 && mem->get_idx_pooled() && mem->pools_restored_take();
++        const llama_pos stale_from = i_cur == 0 && !restored ?
+             mem_idx_stale_batch[s] : llama_memory_hybrid_idx::POS_CLEAN;
+         if (stale_from == llama_memory_hybrid_idx::POS_CLEAN) {
+             continue;
+@@ -749,7 +958,7 @@ uint32_t llama_memory_hybrid_idx_context::get_n_kpool_new() const {
+ 
+ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, ggml_tensor * pool_idxs, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
+         ggml_tensor * sel_mask, ggml_tensor * new_pool_idxs, ggml_tensor * new_pool_rep,
+-        const llama_ubatch * ubatch, ggml_tensor * new_pool_pos) const {
++        const llama_ubatch * ubatch, ggml_tensor * new_pool_pos, ggml_tensor * k_idxs) const {
+     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
+     GGML_ASSERT(ggml_backend_buffer_is_host(pool_cells->buffer));
+     GGML_ASSERT(ggml_backend_buffer_is_host(pool_idxs->buffer));
+@@ -823,6 +1032,19 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells,
+         }
+     }
+ 
++    // mem-levers C: this ubatch's raw keys go to ring slot rank % ring_size, written before any read in the graph
++    const bool pooled = mem->get_idx_pooled();
++    if (pooled) {
++        GGML_ASSERT(by_order && k_idxs != nullptr && k_idxs->type == GGML_TYPE_I64);
++        GGML_ASSERT(ggml_backend_buffer_is_host(k_idxs->buffer) && ggml_nelements(k_idxs) == (int64_t) n_tokens);
++        int64_t * kd = (int64_t *) k_idxs->data;
++        for (uint32_t i = 0; i < n_tokens; ++i) {
++            GGML_ASSERT(ubatch->seq_id[i][0] == 0 && ubatch->n_seq_id[i] == 1);
++            mem->ring_note_write(rank[i]);
++            kd[i] = rank[i] % mem->get_ring_size();
++        }
++    }
++
+     // padding and absent cells point at the n_kv sentinel row, one past the live cells
+     const int32_t sentinel = (int32_t) n_kv;
+ 
+@@ -868,7 +1090,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells,
+         for (size_t pi = 0; pi < sq.pools.size(); ++pi, ++ip_all) {
+             const uint32_t j = sq.pools[pi];
+ 
+-            // The pooled key lives in the last member's row.
++            // The pooled key lives in the last member's row (mem-levers C: in pool slot ip, one sequence).
+             const uint32_t rep = sq.cells[j + kpool - 1].second;
+             if (!is_rep.empty()) {
+                 is_rep[gcell(sq, rep)] = 1;
+@@ -877,9 +1099,12 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells,
+             if (st.is_new[ip_all] == st.generation) {
+                 GGML_ASSERT(i_new < n_new);
+                 for (uint32_t k = 0; k < kpool; ++k) {
+-                    nidx[(size_t) i_new*kpool + k] = (int32_t) gcell(sq, sq.cells[j + k].second);
++                    nidx[(size_t) i_new*kpool + k] = pooled ? (int32_t) mem->ring_slot_checked((int64_t) j + k) :
++                                                              (int32_t) gcell(sq, sq.cells[j + k].second);
+                 }
+-                nrep[i_new] = gcell(sq, rep);
++                // mem-levers C: pool slot = the pool's place in the whole list (upstream #32519 lists only the ubatch's
++                // sequences; pooled asserts one sequence, so every pool is listed and ip_all is its row)
++                nrep[i_new] = pooled ? (int64_t) ip_all : gcell(sq, rep);
+                 if (npos != nullptr) {
+                     // a pooled key is rotated to the M-RoPE position of its first member
+                     const uint32_t c = sq.cells[j].second;
+@@ -899,7 +1124,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells,
+             const uint32_t ip = (uint32_t) pool_end.size();
+             GGML_ASSERT(ip + 1 < n_pool);
+ 
+-            pcell[ip] = (int32_t) gcell(sq, rep);
++            pcell[ip] = pooled ? (int32_t) ip : (int32_t) gcell(sq, rep);
+             for (uint32_t k = 0; k < kpool; ++k) {
+                 pidx[(size_t) ip*kpool + k] = (int32_t) sq.cells[j + k].second;
+             }
+@@ -910,9 +1135,28 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells,
+     GGML_ASSERT(i_new == n_new);
+     GGML_ASSERT(ip_all == st.n_pool_real && pool_end.size() == st.n_pool_ub);
+ 
++    if (pooled && mem->idx_pooled_check_on()) {
++        static uint64_t n_calls = 0;
++        ++n_calls;
++        if ((n_calls & (n_calls - 1)) == 0) {
++            LLAMA_LOG_WARN("%s: LLAMA_IDX_POOLED_CHECK: %llu ubatches, %llu raw ring reads verified, pools %zu\n", __func__,
++                    (unsigned long long) n_calls, (unsigned long long) mem->ring_reads(), pool_end.size());
++        }
++    }
++
+     // Padded entries re-pool cells whose pooled slot is never read: only the reps of complete pools are read.
+     // Each entry takes its own cell, entries sharing one would write it from several threads in the scatter.
+-    if (n_new_g > n_new) {
++    if (pooled && n_new_g > n_new) {
++        // mem-levers C: pool slots past the live pools are never read; ring slot 0 is any finite row
++        for (uint32_t i = n_new; i < n_new_g; ++i) {
++            const int64_t slot = (int64_t) pool_end.size() + (i - n_new);
++            GGML_ASSERT(slot < (int64_t) mem->get_pool_slots());
++            for (uint32_t k = 0; k < kpool; ++k) {
++                nidx[(size_t) i*kpool + k] = 0;
++            }
++            nrep[i] = slot;
++        }
++    } else if (n_new_g > n_new) {
+         int64_t pad_cell = 0;
+         for (uint32_t i = n_new; i < n_new_g; ++i, ++pad_cell) {
+             while (pad_cell < n_cells && is_rep[pad_cell]) {
+@@ -928,7 +1172,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells,
+ 
+     const uint32_t n_pool_real = (uint32_t) pool_end.size();
+     for (uint32_t ip = n_pool_real; ip < n_pool; ++ip) {
+-        pcell[ip] = (int32_t) dummy_cell; // pool_cells always addresses the K storage
++        pcell[ip] = pooled ? 0 : (int32_t) dummy_cell; // pool_cells always addresses the K storage (C: the pool store)
+         for (uint32_t k = 0; k < kpool; ++k) {
+             pidx[(size_t) ip*kpool + k] = sentinel;
+         }
+diff --git a/src/llama-memory-hybrid-idx.h b/src/llama-memory-hybrid-idx.h
+index ebd082ab5..22ae68876 100644
+--- a/src/llama-memory-hybrid-idx.h
++++ b/src/llama-memory-hybrid-idx.h
+@@ -2,8 +2,11 @@
+ 
+ #include "llama-memory-hybrid.h"
+ 
++#include "ggml-cpp.h"
++
+ #include <array>
+ #include <limits>
++#include <map>
+ #include <memory>
+ #include <vector>
+ 
+@@ -40,7 +43,9 @@ public:
+     const layer_filter_cb & filter_attn,
+     const layer_filter_cb & filter_recr,
+                             /* the indexer cache exists only if this is given */
+-    const layer_filter_cb & filter_idx);
++    const layer_filter_cb & filter_idx,
++                            /* mem-levers C: sizes the raw-key ring of the pooled-only indexer store */
++                 uint32_t   n_ubatch = 0);
+ 
+     // Defined out of line because kpool_layout is incomplete here.
+     ~llama_memory_hybrid_idx();
+@@ -107,6 +112,21 @@ public:
+     }
+ 
+     const stale_pos_t & mem_idx_stale_get() const { return mem_idx_stale; }
++
++    // mem-levers C (opt-in, LLAMA_IDX_POOLED=1): the indexer cache keeps one pooled key per pool (pool-indexed) and the
++    // raw keys only in a small ring indexed by rank % ring_size, instead of raw | pooled per cell. The llama_kv_cache
++    // above then holds only the cell bookkeeping. Single sequence, order pools (qwen4exp) only.
++    bool     get_idx_pooled() const { return idx_pooled; }
++    uint32_t get_ring_size()  const { return ring_size; }
++    uint32_t get_pool_slots() const { return pool_slots; }
++    ggml_tensor * pooled_ring(int32_t il) const;
++    ggml_tensor * pooled_pool(int32_t il) const;
++    // host-side record of which rank each ring slot holds: a read of a rank the ring no longer holds aborts
++    void ring_note_write(int64_t rank);
++    int64_t ring_slot_checked(int64_t rank) const;
++    bool     idx_pooled_check_on() const { return idx_pooled_check; }
++    uint64_t ring_reads() const { return n_ring_reads; }
++    bool     pools_restored_take() { const bool r = pools_restored; pools_restored = false; return r; }
+     void mem_idx_stale_clear() { mem_idx_stale.fill(POS_CLEAN); }
+ 
+ private:
+@@ -130,6 +150,19 @@ private:
+     llama_pos mem_idx_stale_pos(llama_seq_id seq_id, llama_pos p0) const;
+ 
+     stale_pos_t mem_idx_stale = stale_pos_clean();
++
++    // mem-levers C
++    static bool idx_pooled_wanted(const llama_model & model, uint32_t n_seq_max, uint32_t n_ubatch);
++    bool     idx_pooled       = false;
++    bool     idx_pooled_check = false;
++    uint32_t ring_size        = 0;
++    uint32_t pool_slots       = 0;
++    std::map<int32_t, std::pair<ggml_tensor *, ggml_tensor *>> pooled_layers; // il -> (raw ring, pooled store)
++    std::vector<ggml_context_ptr>        pooled_ctxs;
++    std::vector<ggml_backend_buffer_ptr> pooled_bufs;
++    std::vector<int64_t>                 ring_owner;
++    bool                                 pools_restored = false;
++    mutable uint64_t n_ring_reads = 0, n_tail_saved = 0, n_tail_restored = 0;
+ };
+ 
+ class llama_memory_hybrid_idx_context : public llama_memory_hybrid_context {
+@@ -139,11 +172,14 @@ public:
+         ggml_tensor * gather_key_gate(ggml_tensor * idxs) const;
+         ggml_tensor * scatter_pooled(ggml_tensor * values, ggml_tensor * idxs) const;
+         ggml_tensor * gather_pooled(ggml_tensor * idxs) const;
++        ggml_tensor * view_pooled(int64_t n_rows) const; // LLAMA_IDX_INPLACE: the first n_rows pooled keys in place
++        ggml_tensor * scatter_raw(ggml_tensor * values, ggml_tensor * idxs) const; // mem-levers C: into the raw ring
+ 
+     private:
+         friend class llama_memory_hybrid_idx_context;
+ 
+         kpool_access(ggml_context * ctx, ggml_tensor * k, int64_t n_embd);
++        kpool_access(ggml_context * ctx, ggml_tensor * ring, ggml_tensor * pool) : ctx(ctx), key_gate(ring), pooled(pool) {}
+ 
+         ggml_context * ctx;
+         ggml_tensor  * key_gate;
+@@ -194,11 +230,13 @@ public:
+     uint32_t get_n_kpool    () const; // Padded pool count, where the last pool is always unused.
+     uint32_t get_n_kpool_new() const; // Pools to re-pool this ubatch, padded to a stable bound, never below 1.
+     kpool_access get_kpool_access(ggml_context * ctx, int32_t il, int64_t n_embd) const;
++    // mem-levers C: whether the raw keys go to the ring (written with set_rows at the ring slots set_input_kpool puts in k_idxs)
++    bool get_idx_pooled() const { return mem != nullptr && mem->get_idx_pooled(); }
+     // sel_mask (F32 [n_sel, 1, 1, n_tokens], can be null): 0 for the live selection slots, -inf for the dead ones
+     // new_pool_pos (I32 [4*n_new]): M-RoPE position of each new pool's first member, for pooled keys rotated at pooling time
+     void set_input_kpool(ggml_tensor * pool_cells, ggml_tensor * pool_idxs, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
+                          ggml_tensor * sel_mask, ggml_tensor * new_pool_idxs, ggml_tensor * new_pool_rep,
+-                         const llama_ubatch * ubatch, ggml_tensor * new_pool_pos = nullptr) const;
++                         const llama_ubatch * ubatch, ggml_tensor * new_pool_pos = nullptr, ggml_tensor * k_idxs = nullptr) const;
+ 
+ private:
+     llama_memory_hybrid_idx * mem = nullptr;
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index b20459646..9f969965b 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -3586,7 +3586,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                             /* unified           */ cparams.kv_unified,
+                             /* filter_attn       */ std::move(filter_attn),
+                             /* filter_recr       */ std::move(filter_recr),
+-                            /* filter_idx        */ std::move(filter_idx));
++                            /* filter_idx        */ std::move(filter_idx),
++                            /* n_ubatch          */ cparams.n_ubatch);
+                     } else {
+                         res = new llama_memory_hybrid(
+                             /* model             */ *this,
+diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
+index f77e6f509..23ae3c3de 100644
+--- a/src/models/qwen4exp.cpp
++++ b/src/models/qwen4exp.cpp
+@@ -723,8 +723,9 @@ public:
+ 
+     void set_input(const llama_ubatch * ubatch) override {
+         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
++        // mem-levers C: with the pooled-only store, set_input_kpool rewrites k_idxs to raw-ring slots
+         mctx->set_input_kpool(pool_cells, pool_idxs, pool_mask, tail_idxs, nullptr, new_pool_idxs, new_pool_rep,
+-                              ubatch, new_pool_pos);
++                              ubatch, new_pool_pos, mctx->get_idx_pooled() ? k_idxs : nullptr);
+     }
+ 
+     bool can_reuse(const llm_graph_params & params) override {
+@@ -830,13 +831,19 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
+     ggml_tensor * k_raw = build_lora_mm(model.layers[il].index_k_proj, cur);
+     cb(k_raw, "indexer_k_raw", il);
+ 
+-    ggml_tensor * pzero  = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, idx_dim, n_tokens), 0.0f);
+-    ggml_tensor * packed = ggml_reshape_3d(ctx0, ggml_concat(ctx0, k_raw, pzero, 0), 2*idx_dim, 1, n_tokens);
+-    ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, packed, inp_kpool->k_idxs, il));
+-
+     // the raw keys and the persistent pooled slots, see llama_memory_hybrid_idx::mem_idx_stale
+     auto kpool_cache = mctx_hyb->get_kpool_access(ctx0, il, idx_dim);
+ 
++    if (mctx_hyb->get_idx_pooled()) {
++        // mem-levers C: raw keys go to the ring at the slots set_input_kpool put in k_idxs; same type, same quantization
++        GGML_UNUSED(mctx_idx);
++        ggml_build_forward_expand(gf, kpool_cache.scatter_raw(ggml_reshape_2d(ctx0, k_raw, idx_dim, n_tokens), inp_kpool->k_idxs));
++    } else {
++        ggml_tensor * pzero  = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, idx_dim, n_tokens), 0.0f);
++        ggml_tensor * packed = ggml_reshape_3d(ctx0, ggml_concat(ctx0, k_raw, pzero, 0), 2*idx_dim, 1, n_tokens);
++        ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, packed, inp_kpool->k_idxs, il));
++    }
++
+     // pool only the blocks this ubatch completes or regroups
+     ggml_tensor * rows = kpool_cache.gather_key_gate(inp_kpool->new_pool_flat);
+     rows = ggml_reshape_3d(ctx0, rows, idx_dim, kpool, n_new);
+@@ -858,8 +865,23 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
+     // scatter the fresh pooled keys into their rep rows, then gather all n_pool of them by cell:
+     // the older pools come from the rows earlier ubatches wrote
+     ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
++    // LLAMA_IDX_INPLACE=1 (local long-context mod, off by default): with the pooled-only store (LLAMA_IDX_POOLED) pool i
++    // lives in row i, so the indexer reads the q8_0 rows in place instead of a q8_0 -> f32 copy of every pooled key.
++    // Only below the tile kernel's batch (decode: verify, catch-up, draft): there the vector kernel dequantizes to the
++    // same f32 values the copy holds and runs the same dot, so the scores are the stock scores bit for bit.
++    // Padded pools then read their own (never written, finite) row instead of row 0; pool_mask makes both -inf.
++    // LLAMA_IDX_INPLACE_CHECK=1 (with GGML_CUDA_DISABLE_GRAPHS=1) also builds the stock score, compared on every call.
++    static const bool idx_inplace       = getenv("LLAMA_IDX_INPLACE")       && atoi(getenv("LLAMA_IDX_INPLACE"))       != 0;
++    static const bool idx_inplace_check = getenv("LLAMA_IDX_INPLACE_CHECK") && atoi(getenv("LLAMA_IDX_INPLACE_CHECK")) != 0;
++    ggml_tensor * pooled_view = idx_inplace && mctx_hyb->get_idx_pooled() && n_tokens < 8 ? kpool_cache.view_pooled(n_pool) : nullptr;
++    const bool inplace = pooled_view != nullptr && pooled_view->type == GGML_TYPE_Q8_0;
++
+     ggml_tensor * pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
+     pooled = ggml_reshape_3d(ctx0, pooled, idx_dim, 1, n_pool);
++    ggml_tensor * pooled_ref = pooled; // the stock f32 copy: unused (and never computed) unless the check is on
++    if (inplace) {
++        pooled = ggml_reshape_3d(ctx0, pooled_view, idx_dim, 1, n_pool);
++    }
+     cb(pooled, "indexer_k", il);
+ 
+     ggml_tensor * q = build_lora_mm(model.layers[il].index_q_proj, cur);
+@@ -872,6 +894,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
+     // which is the lightning indexer with every head weight set to that scale
+     ggml_tensor * weights = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_idx_h, n_tokens), 1.0f/sqrtf((float) idx_dim));
+     ggml_tensor * score = ggml_lightning_indexer(ctx0, q, pooled, weights, inp_kpool->pool_mask); // [n_pool, n_tokens]
++    if (inplace && idx_inplace_check) {
++        // the backend compares its output with src[4] bit for bit
++        score->src[4] = ggml_lightning_indexer(ctx0, q, pooled_ref, weights, inp_kpool->pool_mask);
++    }
+     cb(score, "indexer_score", il);
+ 
+     const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool);
