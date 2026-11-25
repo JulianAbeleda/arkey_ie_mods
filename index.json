@@ -3832,9 +3832,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -3901,9 +3901,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -3968,9 +3968,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -4037,9 +4037,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -4108,9 +4108,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -4175,9 +4175,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -4247,9 +4247,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -4319,9 +4319,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -4363,7 +4363,7 @@
    "engine": "llama.cpp",
    "version": "b12681",
    "name": "grammar-backend",
-   "title": "a lazy tool-call grammar keeps backend (GPU) sampling on until it triggers",
+   "title": "a tool-call grammar keeps backend (GPU) sampling on (lazy: until it triggers)",
    "state": "series",
    "order": 30,
    "applier": "git_apply",
@@ -4388,9 +4388,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -4459,9 +4459,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -4528,9 +4528,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -4598,9 +4598,9 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/host.patch",
-   "sha256": "09239f4dfbfdb9211c556b4e6ac7fba464b6c26423104870ea7590a002ba2612",
+   "sha256": "221ca48cd1621a2d21369fdf6d02e1d5d1f0725c85c3e8bfe94281f7c6a1b487",
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {

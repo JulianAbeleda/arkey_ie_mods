@@ -178,7 +178,7 @@
     "tools/server/server-queue.h"
    ],
    "lines": {
-    "added": 1101,
+    "added": 1102,
     "removed": 9
    },
    "budget": {
@@ -187,7 +187,21 @@
    },
    "static": {
     "hunks_removing_stock_lines": 9
-   }
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 1160,
+      "removed": 9
+     },
+     "to": {
+      "added": 1160,
+      "removed": 9
+     },
+     "why": "grammar-backend: +1 line (a non-lazy grammar kept with grammar-backend-triggered on; b12681's tool-call grammars for several chat formats are no longer lazy, so the b12521 test never held); budget unchanged (budget_rule of 1102)",
+     "date": "2026-11-24"
+    }
+   ]
   }
  ],
  "mods": [
@@ -1594,7 +1608,7 @@
   },
   {
    "name": "grammar-backend",
-   "title": "a lazy tool-call grammar keeps backend (GPU) sampling on until it triggers",
+   "title": "a tool-call grammar keeps backend (GPU) sampling on (lazy: until it triggers)",
    "module": "host",
    "engine": "llama.cpp",
    "base": "b12681",
@@ -1620,7 +1634,7 @@
     "label": "identical",
     "evidence": {
      "run": "boltbeam-runs/gsamp-20261122 (r2-xml, r2-npy)",
-     "numbers": "On b12681 (boltbeam-runs/port-b126xx-20261124, count-only, the dev session, 57 turns to ~80k): every switch unset = stock b12681, replies 57/57 and draft schedules 57/57 (g4, -c 86016 -ncmoe 2); the owner's 256k line with this folder's switches and kernel list on = the same line with only the quality-gated switches and the memory switches the line needs to load (mtp-share-head, kv-stream + sparse-direct + graph-cap, idx-pooled, cublas-shared), replies 57/57 and draft schedules 57/57 (g5); -c 86016 -ncmoe 2 all on = the gated set only, 57/57 and 57/57 (g6); check modes of every switch on the line, turns 1-34 to 54,325 cells (past kv-stream's N 52,848): 0 differences (g7, partial). Earlier, on b12521: on b12521 + the 6 modules (tree storage-tmp/gsamp/tree, this commit), the live 256k server command (-bs, LLAMA_RBUDGET_BACKEND=1, --reasoning-budget 32768, temp 0, MTP k 3): session-ab replays of two live Codex recordings (/v1/responses, 9 tools, tool_choice auto), arms switch off / on / on + check: daycare-xml-illegal 57/57 replies equal across the 3 arms (text and token ids) and 171/171 equal to the live recording; daycare-numpy-floats (held out) 17/17 and 51/51. Logs: off arms 'not compatible with grammar' on 57/57 and 17/17 requests; on arms 'kept with a lazy grammar' on every request and 'triggered' on 56/57 and 16/17. Check mode: 33,280 + 3,840 backend picks compared with the CPU path, 0 differ, 0 ties or NaN",
+     "numbers": "On b12681 (boltbeam-runs/port-b126xx-20261124, count-only, the dev session, 57 turns to ~80k): every switch unset = stock b12681, replies 57/57 and draft schedules 57/57 (g4, -c 86016 -ncmoe 2); the owner's 256k line with this folder's switches and kernel list on = the same line with only the quality-gated switches and the memory switches the line needs to load (mtp-share-head, kv-stream + sparse-direct + graph-cap, idx-pooled, cublas-shared), replies 57/57 and draft schedules 57/57 (g5); -c 86016 -ncmoe 2 all on = the gated set only, 57/57 and 57/57 (g6); check modes of every switch on the line, turns 1-34 to 54,325 cells (past kv-stream's N 52,848): 0 differences (g7, partial). Earlier, on b12521: on b12521 + the 6 modules (tree storage-tmp/gsamp/tree, this commit), the live 256k server command (-bs, LLAMA_RBUDGET_BACKEND=1, --reasoning-budget 32768, temp 0, MTP k 3): session-ab replays of two live Codex recordings (/v1/responses, 9 tools, tool_choice auto), arms switch off / on / on + check: daycare-xml-illegal 57/57 replies equal across the 3 arms (text and token ids) and 171/171 equal to the live recording; daycare-numpy-floats (held out) 17/17 and 51/51. Logs: off arms 'not compatible with grammar' on 57/57 and 17/17 requests; on arms 'kept with a lazy grammar' on every request and 'triggered' on 56/57 and 16/17. Check mode: 33,280 + 3,840 backend picks compared with the CPU path, 0 differ, 0 ties or NaN Fix for b12681's non-lazy tool-call grammar (boltbeam-runs/port-grammar-backend-20261124, count-only, the dev session, -c 86016 -ncmoe 2; before it the port's g5-g7 on arms logged 'not compatible with grammar' on every request, the module inert): the port's ON line vs the same line with LLAMA_GRAMMAR_BACKEND* off: replies 57/57, draft schedules 57/57; the module's line on 57/57 requests; 59,837 backend picks the grammar accepted, 3 rejected (CPU); check mode turns 1-8: 3,584 compared, 0 differ.",
      "match": {
       "what": "reply text + token ids per turn, switch off vs on, same build (r2-xml 57 turns, r2-npy 17 turns)",
       "equal": 74,
@@ -1628,9 +1642,9 @@
      }
     }
    },
-   "exercised_by": "a server request with a lazy grammar (tools with tool_choice auto) and backend sampling (-bs), greedy (temp 0, n_probs 0, neutral penalties); with a reasoning budget only together with rbudget-backend",
+   "exercised_by": "a server request with a tool-call grammar (tools with tool_choice auto) and backend sampling (-bs), greedy (temp 0, n_probs 0, neutral penalties): a lazy grammar with this switch alone, a grammar that scans for its own triggers (not lazy, the b12681 form for several chat formats) only together with grammar-backend-triggered; with a reasoning budget only together with rbudget-backend",
    "limits": [
-    "acts only on a request that keeps backend sampling (-bs) with a lazy llama grammar and a greedy chain: temp 0, n_probs 0, neutral penalties, no logit-bias token listed twice, top-k not 1, top-p above 0.5, the temperature sampler last and once, every earlier sampler with a backend part (an active dry, typical, xtc or top-n-sigma keeps the stock off); anything else keeps the stock behaviour (backend sampling off)",
+    "acts only on a request that keeps backend sampling (-bs) with a lazy llama grammar (or a non-lazy llama grammar with grammar-backend-triggered on: every pick is then tested against it) and a greedy chain: temp 0, n_probs 0, neutral penalties, no logit-bias token listed twice, top-k not 1, top-p above 0.5, the temperature sampler last and once, every earlier sampler with a backend part (an active dry, typical, xtc or top-n-sigma keeps the stock off); anything else keeps the stock behaviour (backend sampling off)",
     "the backend runs the chain up to the final temp 0 and copies out its candidates; the pick is their unique max, any tie, NaN or -inf goes to the CPU path on the raw logits: exact by construction given that the logits of the graph with sampler ops equal those of the graph without (the same LM-head tensor; measured: check mode 0 differ in 37,120 picks)",
     "after the trigger every sampled position reads its raw logits row from the device on demand (one n_vocab D2H per position, synchronous) while the backend chain keeps running: correct, not the cheapest; the request stays on that path until it ends",
     "with the switch on, libllama copies device-held logits rows to the host before a later ubatch of the same decode or an output reorder (multi-sequence or multi-ubatch decodes with backend sampling): a speed cost there, none for -np 1 verify and prompt decodes",
@@ -1670,7 +1684,7 @@
     "label": "identical",
     "evidence": {
      "run": "boltbeam-runs/gsamp-20261122 (r3-xml, r3-npy)",
-     "numbers": "On b12681 (boltbeam-runs/port-b126xx-20261124, count-only, the dev session, 57 turns to ~80k): every switch unset = stock b12681, replies 57/57 and draft schedules 57/57 (g4, -c 86016 -ncmoe 2); the owner's 256k line with this folder's switches and kernel list on = the same line with only the quality-gated switches and the memory switches the line needs to load (mtp-share-head, kv-stream + sparse-direct + graph-cap, idx-pooled, cublas-shared), replies 57/57 and draft schedules 57/57 (g5); -c 86016 -ncmoe 2 all on = the gated set only, 57/57 and 57/57 (g6); check modes of every switch on the line, turns 1-34 to 54,325 cells (past kv-stream's N 52,848): 0 differences (g7, partial). Earlier, on b12521: tree storage-tmp/gsamp/tree (mods 6318937 + this row), the live 256k server command: session-ab replays of two live Codex recordings, arms off / on (LLAMA_GRAMMAR_BACKEND=1 LLAMA_GRAMMAR_BACKEND_TRIGGERED=1) / on + check: daycare-xml-illegal 57/57 equal across arms (text and token ids), 171/171 equal to the live recording; daycare-numpy-floats (held out) 17/17, 51/51. Sampled positions (on arm, a count of calls): xml 33,273 backend with the grammar inert, 12,164 backend with the grammar accepting, 3 CPU (rejected); npy 3,887 / 2,320 / 1. Check mode: 45,312 + 6,144 backend picks compared with the CPU path (inert and post-trigger), 0 differ, 0 ties",
+     "numbers": "On b12681 (boltbeam-runs/port-b126xx-20261124, count-only, the dev session, 57 turns to ~80k): every switch unset = stock b12681, replies 57/57 and draft schedules 57/57 (g4, -c 86016 -ncmoe 2); the owner's 256k line with this folder's switches and kernel list on = the same line with only the quality-gated switches and the memory switches the line needs to load (mtp-share-head, kv-stream + sparse-direct + graph-cap, idx-pooled, cublas-shared), replies 57/57 and draft schedules 57/57 (g5); -c 86016 -ncmoe 2 all on = the gated set only, 57/57 and 57/57 (g6); check modes of every switch on the line, turns 1-34 to 54,325 cells (past kv-stream's N 52,848): 0 differences (g7, partial). Earlier, on b12521: tree storage-tmp/gsamp/tree (mods 6318937 + this row), the live 256k server command: session-ab replays of two live Codex recordings, arms off / on (LLAMA_GRAMMAR_BACKEND=1 LLAMA_GRAMMAR_BACKEND_TRIGGERED=1) / on + check: daycare-xml-illegal 57/57 equal across arms (text and token ids), 171/171 equal to the live recording; daycare-numpy-floats (held out) 17/17, 51/51. Sampled positions (on arm, a count of calls): xml 33,273 backend with the grammar inert, 12,164 backend with the grammar accepting, 3 CPU (rejected); npy 3,887 / 2,320 / 1. Check mode: 45,312 + 6,144 backend picks compared with the CPU path (inert and post-trigger), 0 differ, 0 ties Fix for b12681's non-lazy tool-call grammar (boltbeam-runs/port-grammar-backend-20261124, count-only, the dev session, -c 86016 -ncmoe 2; before it the port's g5-g7 on arms logged 'not compatible with grammar' on every request, the module inert): the port's ON line vs the same line with LLAMA_GRAMMAR_BACKEND* off: replies 57/57, draft schedules 57/57; the module's line on 57/57 requests; 59,837 backend picks the grammar accepted, 3 rejected (CPU); check mode turns 1-8: 3,584 compared, 0 differ.",
      "match": {
       "what": "reply text + token ids per turn, switch off vs on, same build (r3-xml 57 turns, r3-npy 17 turns)",
       "equal": 74,
@@ -1678,11 +1692,12 @@
      }
     }
    },
-   "exercised_by": "a request on which grammar-backend keeps backend sampling, after its lazy grammar triggers (tool-call spans), with grammar_first false (every server sample call)",
+   "exercised_by": "a request on which grammar-backend keeps backend sampling: after its lazy grammar triggers (tool-call spans), or from the first token for a grammar that is not lazy (it scans for its own triggers), with grammar_first false (every server sample call)",
    "limits": [
     "exactness: stock common_sampler_sample with grammar_first false takes its chain's pick when a one-token grammar test accepts it, else applies the grammar to every candidate and resamples; the backend's unique candidate max is that pick (grammar-backend's argument), the test is the same call on the same grammar state, and a rejection, tie, NaN or missing candidate list runs the stock CPU path on the raw logits",
     "a rejection costs the one-token test twice plus the raw-logits read (3 of 45,440 and 1 of 6,208 positions on the two recordings)",
-    "the positions log line (with the switch on) counts calls: positions a checkpoint restore replays count again; in the check mode 'backend' means the pick the backend would have returned"
+    "the positions log line (with the switch on) counts calls: positions a checkpoint restore replays count again; in the check mode 'backend' means the pick the backend would have returned",
+    "a non-lazy grammar also applies while a reasoning budget forces its message: rbudget-backend returns the forced token without the grammar test, the stock CPU path would resample if the grammar rejected it (derived: the tool-call grammars accept any text inside the reasoning block, so a forced message is accepted; not measured on a forced turn)"
    ]
   },
   {
@@ -1899,8 +1914,8 @@
  "tested_trees": [
   {
    "id": "modules-port-b12681",
-   "path": "storage-tmp/port126/tree",
-   "what": "b12681 + the 6 module patches of this folder (port r2, commit c13c38fb1 of the port clone, exported with git archive). Built (llama-server + test-backend-ops, CUDA 13.2.86 sm_120, Release, the live engine's cmake line, build commit pinned to d141011c) and run on the GPU: boltbeam-runs/port-b126xx-20261124 (checks: test-backend-ops 20,923/20,923; g1-g7)",
+   "path": "storage-tmp/grambk/tree",
+   "what": "b12681 (d141011c2) + the 6 module patches of this folder applied with git apply to the port's base checkout (boltbeam-engines/llama.cpp/port-b12681-20261124/src); equal to the port r2 tree storage-tmp/port126/tree except common/sampling.cpp (the grammar-backend fix). Built (llama-server + test-backend-ops, CUDA 13.2.86 sm_120, Release, the port's cmake line) as boltbeam-engines/llama.cpp/port-b12681-grambk-20261124 and run on the GPU: boltbeam-runs/port-grammar-backend-20261124; the port tree's runs: boltbeam-runs/port-b126xx-20261124 (checks, g1-g7)",
    "contains": "the 6 modules on b12681 (rs-one-copy and the 4 k-pool rows dropped)",
    "apply": [
     "patches/kv.patch",
