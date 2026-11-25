@@ -50,24 +50,41 @@
    "point": "the hybrid indexer memory, its scorer and top-k kernels and the graph inputs they feed (llama-memory-hybrid-idx, lightning-indexer, top-k)",
    "patch": "patches/indexer.patch",
    "files": [
+    "ggml/src/ggml-cpu/ops.cpp",
     "ggml/src/ggml-cuda/lightning-indexer.cu",
     "ggml/src/ggml-cuda/top-k.cu",
+    "ggml/src/ggml.c",
+    "src/llama-context.cpp",
     "src/llama-memory-hybrid-idx.cpp",
     "src/llama-memory-hybrid-idx.h",
     "src/llama-model.cpp",
     "src/models/qwen4exp.cpp"
    ],
    "lines": {
-    "added": 924,
-    "removed": 20
+    "added": 1433,
+    "removed": 79
    },
    "budget": {
-    "added": 980,
-    "removed": 20
+    "added": 1510,
+    "removed": 79
    },
    "static": {
-    "hunks_removing_stock_lines": 15
-   }
+    "hunks_removing_stock_lines": 33
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 980,
+      "removed": 20
+     },
+     "to": {
+      "added": 1510,
+      "removed": 79
+     },
+     "why": "kpool-input-device, kpool-async-upload, kpool-mask-range, kpool-pad-pow2 back in the b12681 series (+509 -59 lines): the port r1 re-derivation onto upstream #32519's pool-list loop (port tree 37aa19ddc), dropped from r2 by decision without a timing; the session map (boltbeam-runs/port-gap-20261124) puts ~0.34 ms of the port's 0.40 ms/step decode gap and its +0.31 s prompt time on the host-built k-pool inputs these rows remove; budget = budget_rule of 1433",
+     "date": "2026-11-25"
+    }
+   ]
   },
   {
    "name": "kernels",
@@ -712,6 +729,184 @@
     "same picks as the stock fused kernel; the greater picks keep the stock's unordered slots, the tie slots stay in ascending column order"
    ],
    "rule_exceptions": []
+  },
+  {
+   "name": "kpool-input-device",
+   "title": "k-pool inputs live on the device",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12681",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_INPUT_DEVICE",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_INPUT_CHECK",
+    "needs": []
+   },
+   "reads": [],
+   "marker": "LLAMA_KPOOL_INPUT_DEVICE",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/port-gap-20261124 (id2-c86016-m2-full, chk-c86016-m2-t1-8, chk-c86016-m2-full, trace/)",
+     "numbers": "On b12681 (count-only, the dev session, -c 86016 -ncmoe 2, own history, 57 turns to 80,421 cells): the owner's port line with kpool-input-device + kpool-async-upload + kpool-mask-range on (FIX) = the same line with them off (PORTL) = the quality-gated set only (HELD): replies 57/57 and draft schedules 57/57 (id2); FIX log: kpool_dev_init LLAMA_KPOOL_INPUT_DEVICE line for both memories (target and MTP context), 11 entries loaded 0 dropped. Check mode turns 1-8 (chk-c86016-m2-t1-8, graphs off): LLAMA_KPOOL_INPUT_CHECK ok on every report (30 reports, to 5,000 forwards a context, device rows read back), replies 8/8 = recorded. Full session in check mode (chk-c86016-m2-full: turns 1-57 to 80,421 cells, recorded history, graphs off, every check mode of these rows): LLAMA_KPOOL_INPUT_CHECK ok on all 137 reports (to 21,000 forwards a context, n_pool 20,288), no abort. Earlier, on b12521: see engines/llama.cpp/b12521/mods.json kpool-input-device.",
+     "match": {
+      "what": "reply sha256 and (predicted, drafted, accepted) per turn, FIX vs PORTL (id2)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "exercised_by": "graphs with the hybrid indexer and k-pool attention (engine architecture file qwen4exp); measured on one MoE model with an MTP draft head",
+   "limits": [
+    "ported onto upstream #32519 (only the ubatch's sequences' pools are listed, n_pool_ub): the device path runs with one sequence only, where every pool is listed (n_seq_max 1, else warns and runs stock)",
+    "covers the k-pool inputs (pool_cells, pool_idxs); pool_mask stays a host input",
+    "apply order needs patch 03 (same functions); at run time it works with either switch on or off (measured with LLAMA_IDX_POOLED unset: 8/8 turns identical)"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "kpool-mask-range",
+   "title": "indexer pool mask as each token's visible range, not a dense F16 mask",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12681",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_MASK_RANGE",
+    "on": "1"
+   },
+   "check": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_MASK_RANGE_CHECK",
+    "needs": [
+     "GGML_CUDA_DISABLE_GRAPHS"
+    ]
+   },
+   "reads": [],
+   "marker": "LLAMA_KPOOL_MASK_RANGE",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/port-gap-20261124 (id2-c86016-m2-full, chk-c86016-m2-t1-8, chk-c86016-m2-full)",
+     "numbers": "On b12681: FIX (this switch with kpool-input-device and kpool-async-upload) = PORTL (off) = HELD, replies 57/57 and draft schedules 57/57 over the 57-turn dev session to 80,421 cells (id2, -c 86016 -ncmoe 2). Check mode turns 1-8 (graphs off): LLAMA_KPOOL_MASK_RANGE_CHECK 0 F16 values differ on every report (to 8,192 ubatches, up to 4,224 pools), idx_inplace check 0 score bit patterns differ. Full session in check mode (chk-c86016-m2-full, turns 1-57 to 80,421 cells, graphs off): LLAMA_KPOOL_MASK_RANGE_CHECK 0 F16 values differ on all 19 reports (to 131,072 ubatches, 15,296 pools), no abort. Earlier, on b12521: see engines/llama.cpp/b12521/mods.json kpool-mask-range.",
+     "match": {
+      "what": "reply sha256 and draft schedule per turn, FIX vs PORTL (id2)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "exercised_by": "every lightning-indexer call on the qwen4exp graph (prefill, catch-up, verify, draft): the host k-pool fill and the mask upload it removes grow with context (13.7 / 30.7 ms of host fill a prefill turn at 100k / 230k, 124 MB a 1,024-token pass at 240k)",
+   "limits": [
+    "ported onto upstream #32519: the range covers the ubatch's sequences' pools (n_pool_ub); measured with one sequence",
+    "CUDA and the CPU op read the I32 range; Vulkan does not check the mask type in supports_op and would read it as F16 (wrong scores); Metal, SYCL and OpenCL reject it and fall back to the CPU op. Measured on CUDA only",
+    "check mode shares score->src[4] with LLAMA_IDX_INPLACE_CHECK (the in-place check wins where both apply); it compares only in the CUDA backend, an indexer placed on another backend is not compared",
+    "check mode needs VRAM for a second F16 mask and a second indexer output: at 262k on a 32 GB card with the shipped plan it aborts in cublasCreate; run it at 128k",
+    "the switch is read once per process (graph reuse relies on it not changing)"
+   ],
+   "rule_exceptions": []
+  },
+  {
+   "name": "kpool-pad-pow2",
+   "title": "decode ubatches pad the k-pool list like kv-pad-pow2 pads n_kv",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12681",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_PAD_POW2",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_KPOOL_PAD_POW2",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "kv-pad-pow2"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/port-gap-20261124",
+     "numbers": "On b12681: carried with the r1 re-derivation (the same functions as kpool-input-device); NOT on the measured line and not run on b12681 (its run dependency kv-pad-pow2 is off on the owner's line). With it unset the pool list is upstream's kpool_pad(n_pool_ub) (FIX = PORTL 57/57). Earlier, on b12521: see engines/llama.cpp/b12521/mods.json kpool-pad-pow2.",
+     "match": {
+      "what": "switch unset: FIX vs PORTL (id2)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "exercised_by": "the QSA k-pool inputs (pool_cells / pool_idxs / pool_mask) of every ubatch of 1-8 tokens: max(64, the largest power of 2 <= n_pool / 64) pools, never past the reserved list",
+   "limits": [
+    "unproven on b12681 with the switch on: not run on this base",
+    "ubatches above 8 tokens keep the stock 64",
+    "the padded pools are masked like the stock padding; their rows are filled and (kpool-input-device) uploaded every forward: up to 1,023 extra rows at 256k"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode of its own: LLAMA_KPOOL_INPUT_CHECK (kpool-input-device) compares every padded row too; identity rests on the reply pairs"
+    }
+   ]
+  },
+  {
+   "name": "kpool-async-upload",
+   "title": "k-pool device rows upload on the compute stream, no host sync",
+   "module": "indexer",
+   "engine": "llama.cpp",
+   "base": "b12681",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_KPOOL_ASYNC_UPLOAD",
+    "on": "1"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_KPOOL_ASYNC_UPLOAD",
+   "depends_on": {
+    "apply": [],
+    "run": [
+     "kpool-input-device"
+    ]
+   },
+   "output": {
+    "label": "identical",
+    "evidence": {
+     "run": "boltbeam-runs/port-gap-20261124 (id2-c86016-m2-full)",
+     "numbers": "On b12681: on in FIX (log line kpool_set_backends LLAMA_KPOOL_ASYNC_UPLOAD: k-pool rows upload on the compute stream, both memories); FIX = PORTL = HELD replies 57/57 and draft schedules 57/57 (id2, -c 86016 -ncmoe 2). Its check is kpool-input-device's (LLAMA_KPOOL_INPUT_CHECK synchronizes before the read-back): chk-c86016-m2-t1-8 ok on every report. Full session in check mode (chk-c86016-m2-full): LLAMA_KPOOL_INPUT_CHECK ok on all 137 reports with this switch on. Earlier, on b12521: see engines/llama.cpp/b12521/mods.json kpool-async-upload.",
+     "match": {
+      "what": "reply sha256 and draft schedule per turn, FIX vs PORTL (id2)",
+      "equal": 57,
+      "of": 57
+     }
+    }
+   },
+   "exercised_by": "kpool-input-device's per-forward upload of rows [lo, n_pool) (2 pageable ggml_backend_tensor_set + 2 syncs each forward): 2 set_tensor_async from a pinned stage, an event guards the stage",
+   "limits": [
+    "ported unchanged onto b12681 (its hunk is outside the #32519 loop); measured only with kpool-input-device on",
+    "needs LLAMA_KPOOL_INPUT_DEVICE; a memory shared by two contexts keeps the sync copy",
+    "LLAMA_KPOOL_INPUT_CHECK syncs the stream before its read-back"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode of its own: LLAMA_KPOOL_INPUT_CHECK reads back every uploaded row (device vs host) and aborts on a difference"
+    }
+   ]
   },
   {
    "name": "ext-kernels",
@@ -1926,8 +2121,8 @@
  "tested_trees": [
   {
    "id": "modules-port-b12681",
-   "path": "storage-tmp/grambk/tree",
-   "what": "b12681 (d141011c2) + the 6 module patches of this folder applied with git apply to the port's base checkout (boltbeam-engines/llama.cpp/port-b12681-20261124/src); equal to the port r2 tree storage-tmp/port126/tree except common/sampling.cpp (the grammar-backend fix). Built (llama-server + test-backend-ops, CUDA 13.2.86 sm_120, Release, the port's cmake line) as boltbeam-engines/llama.cpp/port-b12681-grambk-20261124 and run on the GPU: boltbeam-runs/port-grammar-backend-20261124; the port tree's runs: boltbeam-runs/port-b126xx-20261124 (checks, g1-g7)",
+   "path": "storage-tmp/portgap/tree",
+   "what": "b12681 (d141011c2) + the 6 module patches of this folder applied with git apply to the port's base checkout (boltbeam-engines/llama.cpp/port-b12681-20261124/src); = the grammar-backend tree storage-tmp/grambk/tree plus the indexer module's k-pool rows (the r2 -> r1 diff of the port tree, 7 files). Built (llama-server + test-backend-ops, CUDA 13.2.86 sm_120, Release, the port's cmake line) as boltbeam-engines/llama.cpp/port-b12681-gap-20261124 (storage-tmp/portgap/tree is a copy of its tree without .git) and run on the GPU: boltbeam-runs/port-gap-20261124",
    "contains": "the 6 modules on b12681 (rs-one-copy and the 4 k-pool rows dropped)",
    "apply": [
     "patches/kv.patch",

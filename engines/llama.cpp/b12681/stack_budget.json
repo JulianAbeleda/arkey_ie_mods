@@ -4,13 +4,22 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5275,
+   "cap": 5703,
    "set": {
     "measured": 5119,
     "mods": 33,
     "date": "2026-11-24"
    },
-   "raised": []
+   "raised": [
+    {
+     "from": 5275,
+     "to": 5703,
+     "measured": 5703,
+     "why": "indexer: kpool-input-device, kpool-async-upload, kpool-mask-range, kpool-pad-pow2 back on b12681 (+509 -59, the port r1 re-derivation onto upstream #32519): the session map (boltbeam-runs/port-gap-20261124) puts ~0.34 ms of the port's 0.40 ms/step decode gap against b12521 and its +0.31 s prompt time on the host-built k-pool inputs they remove; FIX = PORTL 57/57 replies + draft schedules; owner standing rule: raise by the measured remainder after review (review by the coordinator pending)",
+     "date": "2026-11-25",
+     "approved": "Owner-approved 2026-11-21"
+    }
+   ]
   },
   "mods_per_file": {
    "cap": 4,
