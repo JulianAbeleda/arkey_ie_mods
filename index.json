@@ -537,7 +537,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SPARSE_DIRECT",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_SPARSE_DIRECT_CHECK",
@@ -599,7 +601,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_FATTN_VEC_SKIP",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_FATTN_VEC_SKIP_CHECK",
@@ -661,7 +665,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KV_STREAM",
-    "on": "N: cells per layer kept in VRAM (a multiple of 4, >= 4096, below the context)"
+    "on": "N: cells per layer kept in VRAM (a multiple of 4, >= 4096, below the context)",
+    "default_run": "off",
+    "default_run_why": "off: quality-gated, its output can differ from stock (boltbeam-runs/mods-modules-20261118 (ab-kv2); boltbeam-runs/kv-stream-20261118/b12521 (ident, zero128); boltbeam-runs/rental-20261118/out (kvs11, kvs13, kvs14, kvs20: measured on 1.0.0, the same patch text); boltbeam-runs/graph-cap-20261119; boltbeam-runs/kvs-align-20261120 (control-block alignment: probe-n52852, probe-n65292, ident128, speed256q)); a consumer sets it only where its plan spends the memory it frees"
    },
    "switch_null_why": null,
    "check": "LLAMA_KV_STREAM_CHECK",
@@ -725,7 +731,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SPARSE_SPLIT",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/sparse-chain-20261119 (ident128-b12521; bench.out, check/, screen/, confirm/ measured on 1.0.0 with the same code)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_SPARSE_SPLIT_CHECK",
@@ -787,7 +795,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KV_PAD_POW2",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "switch_null_why": null,
    "check": null,
@@ -851,7 +861,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_IDX_POOLED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_IDX_POOLED_CHECK",
@@ -906,7 +918,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_INPUT_DEVICE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_KPOOL_INPUT_CHECK",
@@ -961,7 +975,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_IDX_INPLACE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_IDX_INPLACE_CHECK",
@@ -1020,7 +1036,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_TOPK_FUSED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_TOPK_FUSED_CHECK",
@@ -1078,7 +1096,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_IDX_KEYS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/indexer-topk-20261119 (bench4.out, ident128/, screen/, confirm/)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_IDX_KEYS_CHECK",
@@ -1138,7 +1158,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_TOPK_ROWHIST",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/indexer-topk-20261119 (bench4.out, ident128/, screen/, confirm/)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_TOPK_ROWHIST_CHECK",
@@ -1198,7 +1220,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_MASK_RANGE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/prefill-256k-20261119 (gate-kp-ident/, gate-kp-screen/, gate-kp-confirm/)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_KPOOL_MASK_RANGE_CHECK",
@@ -1255,7 +1279,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_PAD_POW2",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "switch_null_why": null,
    "check": null,
@@ -1314,7 +1340,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_ASYNC_UPLOAD",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "switch_null_why": null,
    "check": null,
@@ -1373,7 +1401,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_EXT_KERNELS",
-    "on": "/path/manifest.json"
+    "on": "/path/manifest.json",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-xcheck)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "GGML_CUDA_EXT_KERNELS_CHECK",
@@ -1482,7 +1512,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_GRAPH_MAX_KEYS",
-    "on": "2"
+    "on": "2",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/graph-cap-20261119); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": null,
@@ -1537,7 +1569,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_CONCAT_ROWS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/concat-launch-shape-20261120 (ident128/, confirm/; README.md '2026-11-20 7:22-7:29 AM EST' and '7:29-8:06 AM EST')); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "GGML_CUDA_CONCAT_ROWS_CHECK",
@@ -1591,7 +1625,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_GRAPH_CPY_KERNEL",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: ships off by default (commit 617b227): no speed gain resolved in boltbeam-runs/graph-fix-20261121 (diag/, ident128/, time256k/)"
    },
    "switch_null_why": null,
    "check": null,
@@ -1694,7 +1730,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_MOE_INPLACE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/prefill-expert-inplace-20261115; boltbeam-runs/guardrails-20261118 (ab-mods3)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_MOE_INPLACE_CHECK",
@@ -1751,7 +1789,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_CUBLAS_SHARED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": null,
@@ -1808,7 +1848,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_DRAFT_ROUTE_COUNT",
-    "on": "a file path"
+    "on": "a file path",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/conversation-server-design-20261117 (S2a: ID0, RC; P7a: HA0); boltbeam-runs/guardrails-20261118 (ab-mods3)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": null,
@@ -1865,7 +1907,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_MTP_SHARE_HEAD",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: quality-gated, the draft's proposals can differ (boltbeam-runs/quality-gate-x16-20261114 (dgate.out), stack-margin-20261114; boltbeam-runs/guardrails-20261118 (ab-xcheck, ab-screen2); boltbeam-runs/pending-row-fix-20261120 (det/, ident128/, confirm/); boltbeam-runs/reply-determinism-20261120); a consumer sets it only where its plan needs the memory"
    },
    "switch_null_why": null,
    "check": null,
@@ -1925,7 +1969,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_GRAPH_SLOTS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": null,
@@ -1986,7 +2032,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_RS_ONE_COPY",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: quality-gated (boltbeam-runs/conversation-server-design-20261117 (OC1, ab-OC3, OC6, RT; BUILD.md); boltbeam-runs/guardrails-20261118 (ab-xcheck, ab-screen2)); it pays only where the plan spends the memory it frees"
    },
    "switch_null_why": null,
    "check": "LLAMA_RS_ONE_COPY_CHECK",
@@ -2047,7 +2095,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_CKPT_PINNED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_CKPT_PINNED_CHECK",
@@ -2109,7 +2159,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_TOKENIZE_INCR",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "LLAMA_TOKENIZE_INCR_CHECK",
@@ -2173,7 +2225,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_PLE_PREFETCH_TURN",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": null,
@@ -2237,7 +2291,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_PLE_PREFETCH_STEP",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/ple-cache-20261119 (step-ident, step-screen, step-evscreen, step-evconfirm; README.md section 7)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": null,
@@ -2301,7 +2357,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_SCHED_ASYNC_INPUTS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/host-idle-b-20261118 (ab-chk20, ab-confirm20); boltbeam-runs/host-idle-a-20261118 (ab-ident, 1.0.0)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "switch_null_why": null,
    "check": "GGML_SCHED_ASYNC_INPUTS_CHECK",
@@ -2365,7 +2423,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_RBUDGET_BACKEND",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: ships off by default (commit f35a44d): its gain was measured on one chip and shape only (boltbeam-runs/eng-night-20261121 (ab-rb-256k, force-b64, ident-rb-b64))"
    },
    "switch_null_why": null,
    "check": null,
@@ -2429,7 +2489,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_SCHED_PACK_INPUTS",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "switch_null_why": null,
    "check": "GGML_SCHED_ASYNC_INPUTS_CHECK",
@@ -2497,7 +2559,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SPEC_PROMPT_REF",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "switch_null_why": null,
    "check": "LLAMA_SPEC_PROMPT_REF_CHECK",
@@ -2561,7 +2625,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_PLE_PREFETCH_TURN",
-    "on": "2"
+    "on": "2",
+    "default_run": "off",
+    "default_run_why": "off: parked, not part of the series (boltbeam-runs/prefill-256k-20261119 (gate-ident, gate-screen, gate-confirm; README.md 'Test #1'))"
    },
    "switch_null_why": null,
    "check": null,
@@ -2615,7 +2681,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SPARSE_DIRECT",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_SPARSE_DIRECT_CHECK",
@@ -2677,7 +2745,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_FATTN_VEC_SKIP",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_FATTN_VEC_SKIP_CHECK",
@@ -2739,7 +2809,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KV_STREAM",
-    "on": "N: cells per layer kept in VRAM (a multiple of 4, >= 4096, below the context)"
+    "on": "N: cells per layer kept in VRAM (a multiple of 4, >= 4096, below the context)",
+    "default_run": "off",
+    "default_run_why": "off: quality-gated, its output can differ from stock; a consumer sets it only where its plan spends the memory it frees (b12681: its check mode ok in boltbeam-runs/port-b126xx-20261124 g7 CHK; gate evidence carried from b12521: boltbeam-runs/mods-modules-20261118 (ab-kv2); boltbeam-runs/kv-stream-20261118/b12521 (ident, zero128); boltbeam-runs/rental-20261118/out (kvs11, kvs13, kvs14, kvs20: measured on 1.0.0, the same patch text); boltbeam-runs/graph-cap-20261119; boltbeam-runs/kvs-align-20261120 (control-block alignment: probe-n52852, probe-n65292, ident128, speed256q))"
    },
    "switch_null_why": null,
    "check": "LLAMA_KV_STREAM_CHECK",
@@ -2803,7 +2875,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SPARSE_SPLIT",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_SPARSE_SPLIT_CHECK",
@@ -2865,7 +2939,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KV_PAD_POW2",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); no proof on b12681 (in no arm of the port runs); evidence carried from b12521: boltbeam-runs/hostidle-patches-20261122"
    },
    "switch_null_why": null,
    "check": null,
@@ -2927,7 +3003,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_IDX_POOLED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK) (ring reads verified); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_IDX_POOLED_CHECK",
@@ -2982,7 +3060,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_IDX_INPLACE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_IDX_INPLACE_CHECK",
@@ -3041,7 +3121,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_TOPK_FUSED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_TOPK_FUSED_CHECK",
@@ -3099,7 +3181,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_IDX_KEYS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_IDX_KEYS_CHECK",
@@ -3159,7 +3243,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_TOPK_ROWHIST",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: checked through the topk-fused comparison with its check on (boltbeam-runs/port-b126xx-20261124 g7 CHK); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_TOPK_ROWHIST_CHECK",
@@ -3219,7 +3305,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_INPUT_DEVICE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: LLAMA_KPOOL_INPUT_CHECK ok on 137 reports over the full session; port line = with it = held 57/57 (boltbeam-runs/port-gap-20261124 chk-c86016-m2-full, id2-c86016-m2-full)"
    },
    "switch_null_why": null,
    "check": "LLAMA_KPOOL_INPUT_CHECK",
@@ -3274,7 +3362,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_MASK_RANGE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: LLAMA_KPOOL_MASK_RANGE_CHECK 0 F16 values differ on 19 reports over the full session; port line = with it = held 57/57 (boltbeam-runs/port-gap-20261124 chk-c86016-m2-full, id2-c86016-m2-full)"
    },
    "switch_null_why": null,
    "check": "LLAMA_KPOOL_MASK_RANGE_CHECK",
@@ -3331,7 +3421,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_PAD_POW2",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); carried with its switch off, never run on b12681 (boltbeam-runs/port-gap-20261124)"
    },
    "switch_null_why": null,
    "check": null,
@@ -3390,7 +3482,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_ASYNC_UPLOAD",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); b12681: covered by LLAMA_KPOOL_INPUT_CHECK and varied with the k-pool rows (boltbeam-runs/port-gap-20261124 id2-c86016-m2-full)"
    },
    "switch_null_why": null,
    "check": null,
@@ -3449,7 +3543,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_EXT_KERNELS",
-    "on": "/path/manifest.json"
+    "on": "/path/manifest.json",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: GGML_CUDA_EXT_KERNELS_CHECK 0 differ for every entry that fired (boltbeam-runs/port-b126xx-20261124 g7 CHK); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "GGML_CUDA_EXT_KERNELS_CHECK",
@@ -3564,7 +3660,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_GRAPH_MAX_KEYS",
-    "on": "2"
+    "on": "2",
+    "default_run": "off",
+    "default_run_why": "off: no proof on b12681 yet: on in both held and on arms, never varied over a full session (boltbeam-runs/port-b126xx-20261124 g1: 3 turns). Missing: a full-session arm off vs on (evidence carried from b12521: boltbeam-runs/graph-cap-20261119)"
    },
    "switch_null_why": null,
    "check": null,
@@ -3622,7 +3720,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_CONCAT_ROWS",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: no proof on b12681 yet: its path never fires on b12681 (check mode on, no line, boltbeam-runs/port-b126xx-20261124 g7 CHK; upstream #31669 made the conv concat contiguous). Missing: a run where it fires, its check 0 differ (evidence carried from b12521: boltbeam-runs/concat-launch-shape-20261120 (ident128/, confirm/; README.md '2026-11-20 7:22-7:29 AM EST' and '7:29-8:06 AM EST'))"
    },
    "switch_null_why": null,
    "check": "GGML_CUDA_CONCAT_ROWS_CHECK",
@@ -3679,7 +3779,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_GRAPH_CPY_KERNEL",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: ships off by default (commit 617b227): no speed gain resolved; no proof on b12681 (in no arm of the port runs); evidence carried from b12521: boltbeam-runs/graph-fix-20261121 (diag/, ident128/, time256k/)"
    },
    "switch_null_why": null,
    "check": null,
@@ -3788,7 +3890,13 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_MMQ_FEW_RING2",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "off by default in the engine; on for a consumer: identical (check mode 0 differ, turns 1-6; full session on = off 57/57, boltbeam-runs/exact-patches-20261124 (rta, ii-chk-t1-6, iii-offon-t1-57, iv-trace-*)); measured not slower on one RTX 5090 (compute capability 1200, 170 SMs: default_run_where) in two gated pairs (boltbeam-runs/overnight-pairs-20261125 p2, p3: +6.5 and +7.6 tok/s warm, intervals include 0, the dev session only, timed together with the other exact items). Keyed in the engine to compute capability 1200 (GGML_CUDA_CC_BLACKWELL, exact match), Q6_K, one column group (2-8 tokens), a grid of at least one 16-row tile per SM; any other launch is the stock one",
+    "default_run_where": {
+     "compute_capability": 1200,
+     "sm_count": 170
+    }
    },
    "switch_null_why": null,
    "check": "GGML_CUDA_MMQ_FEW_RING2_CHECK",
@@ -3845,7 +3953,13 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_MMVQ_ACTIVE_WARPS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "off by default in the engine; on for a consumer: identical (check mode 0 differ, turns 1-6; full session on = off 57/57, boltbeam-runs/exact-patches-20261124 (rta, ii-chk-t1-6, iii-offon-t1-57, iv-trace-*)); measured not slower on one RTX 5090 (compute capability 1200, 170 SMs: default_run_where) in two gated pairs (boltbeam-runs/overnight-pairs-20261125 p2, p3: +6.5 and +7.6 tok/s warm, intervals include 0, the dev session only, timed together with the other exact items). Keyed in the engine to compute capability 1200, IQ4_NL or IQ4_XS, 2-4 columns, no ids, 1-3 warps holding K blocks; any other launch is the stock one",
+    "default_run_where": {
+     "compute_capability": 1200,
+     "sm_count": 170
+    }
    },
    "switch_null_why": null,
    "check": "GGML_CUDA_MMVQ_ACTIVE_WARPS_CHECK",
@@ -3902,7 +4016,13 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_MMVQ_MOE_ROW1",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "off by default in the engine; on for a consumer: identical (check mode 0 differ, turns 1-6; full session on = off 57/57, boltbeam-runs/exact-patches-20261124 (rta, ii-chk-t1-6, iii-offon-t1-57, iv-trace-*)); measured not slower on one RTX 5090 (compute capability 1200, 170 SMs: default_run_where) in two gated pairs (boltbeam-runs/overnight-pairs-20261125 p2, p3: +6.5 and +7.6 tok/s warm, intervals include 0, the dev session only, timed together with the other exact items). Keyed in the engine to compute capability 1200, the fused gate/up launch of IQ2_S, IQ3_XXS or IQ3_S; any other launch is the stock one",
+    "default_run_where": {
+     "compute_capability": 1200,
+     "sm_count": 170
+    }
    },
    "switch_null_why": null,
    "check": "GGML_CUDA_MMVQ_MOE_ROW1_CHECK",
@@ -3959,7 +4079,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_MOE_INPLACE",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: no proof on b12681 yet: its switch was in no arm of the port runs. Missing: an identity arm with it on and its check (evidence carried from b12521: boltbeam-runs/prefill-expert-inplace-20261115; boltbeam-runs/guardrails-20261118 (ab-mods3))"
    },
    "switch_null_why": null,
    "check": "LLAMA_MOE_INPLACE_CHECK",
@@ -4016,7 +4138,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_CUBLAS_SHARED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: no check mode; varied in the full-session identity arms (on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)); its log line shows it ran"
    },
    "switch_null_why": null,
    "check": null,
@@ -4073,7 +4197,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_DRAFT_ROUTE_COUNT",
-    "on": "a file path"
+    "on": "a file path",
+    "default_run": "off",
+    "default_run_why": "off: no proof on b12681 yet: its switch was in no arm of the port runs. Missing: an identity arm with it on (evidence carried from b12521: boltbeam-runs/conversation-server-design-20261117 (S2a: ID0, RC; P7a: HA0); boltbeam-runs/guardrails-20261118 (ab-mods3))"
    },
    "switch_null_why": null,
    "check": null,
@@ -4130,7 +4256,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_MTP_SHARE_HEAD",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: quality-gated, the draft's proposals can differ; a consumer sets it only where its plan needs the memory (b12681: never varied over a full session; gate evidence carried from b12521: boltbeam-runs/quality-gate-x16-20261114 (dgate.out), stack-margin-20261114; boltbeam-runs/guardrails-20261118 (ab-xcheck, ab-screen2); boltbeam-runs/pending-row-fix-20261120 (det/, ident128/, confirm/); boltbeam-runs/reply-determinism-20261120)"
    },
    "switch_null_why": null,
    "check": null,
@@ -4183,7 +4311,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_GRAPH_SLOTS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: no check mode; varied in the full-session identity arms (on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)); its log line shows it ran"
    },
    "switch_null_why": null,
    "check": null,
@@ -4237,7 +4367,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_CKPT_PINNED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK) (0 differing bytes); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_CKPT_PINNED_CHECK",
@@ -4304,7 +4436,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_TOKENIZE_INCR",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK) (prompts equal); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "LLAMA_TOKENIZE_INCR_CHECK",
@@ -4373,7 +4507,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_PLE_PREFETCH_TURN",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: no proof on b12681 yet: varied in the identity arms (boltbeam-runs/port-b126xx-20261124 g5/g6) but no check mode and no line shows its path ran. Missing: evidence the path ran (evidence carried from b12521: boltbeam-runs/guardrails-20261118 (ab-ident2))"
    },
    "switch_null_why": null,
    "check": null,
@@ -4442,7 +4578,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_PLE_PREFETCH_STEP",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: no proof on b12681 yet: varied in the identity arms (boltbeam-runs/port-b126xx-20261124 g5/g6) but no check mode and no line shows its path ran. Missing: evidence the path ran (evidence carried from b12521: boltbeam-runs/ple-cache-20261119 (step-ident, step-screen, step-evscreen, step-evconfirm; README.md section 7))"
    },
    "switch_null_why": null,
    "check": null,
@@ -4511,7 +4649,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_SCHED_ASYNC_INPUTS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: its check mode 0 differ over turns 1-34 (boltbeam-runs/port-b126xx-20261124 g7 CHK) (0 copies differ); on = held replies and draft schedules 57/57 at 256k and 86k (boltbeam-runs/port-b126xx-20261124 g5, g6), all switches off = stock 57/57 (g4)"
    },
    "switch_null_why": null,
    "check": "GGML_SCHED_ASYNC_INPUTS_CHECK",
@@ -4580,7 +4720,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_RBUDGET_BACKEND",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: ships off by default (commit f35a44d): its gain was measured on one chip and shape only; b12681: forced path ran at budget 256 with its switch on in both arms (boltbeam-runs/port-grammar-backend-20261124 rb256); evidence carried from b12521: boltbeam-runs/eng-night-20261121 (ab-rb-256k, force-b64, ident-rb-b64)"
    },
    "switch_null_why": null,
    "check": null,
@@ -4649,7 +4791,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_SCHED_PACK_INPUTS",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); b12681: the async-inputs check 0 differ with it on (boltbeam-runs/port-b126xx-20261124 g7 CHK; one-entry packs)"
    },
    "switch_null_why": null,
    "check": "GGML_SCHED_ASYNC_INPUTS_CHECK",
@@ -4722,7 +4866,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SPEC_PROMPT_REF",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); b12681: its abort-only check on, 0 aborts (boltbeam-runs/port-b126xx-20261124 g7 CHK)"
    },
    "switch_null_why": null,
    "check": "LLAMA_SPEC_PROMPT_REF_CHECK",
@@ -4791,7 +4937,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_GRAMMAR_BACKEND",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: LLAMA_GRAMMAR_BACKEND_CHECK 3,584 + 3,840 picks 0 differ, on = held 57/57 on r1 and r2 (boltbeam-runs/port-grammar-backend-20261124); varied together with grammar-backend-triggered"
    },
    "switch_null_why": null,
    "check": "LLAMA_GRAMMAR_BACKEND_CHECK",
@@ -4860,7 +5008,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_GRAMMAR_BACKEND_TRIGGERED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical on b12681: LLAMA_GRAMMAR_BACKEND_CHECK 3,584 + 3,840 picks 0 differ, on = held 57/57 on r1 and r2 (boltbeam-runs/port-grammar-backend-20261124); varied together with grammar-backend"
    },
    "switch_null_why": null,
    "check": "LLAMA_GRAMMAR_BACKEND_CHECK",
@@ -4933,7 +5083,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_YIELD_RELEASE",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: no proof on b12681 yet: varied in the identity arms (boltbeam-runs/port-b126xx-20261124 g5/g6) but no check mode and no line shows its path ran. Missing: evidence the path ran (evidence carried from b12521: boltbeam-runs/hostb-20261123 (r1-xml, r1-npy; prof1-prof5 GP/GPY pairs))"
    },
    "switch_null_why": null,
    "check": null,
@@ -5002,7 +5154,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SAMPLER_RESERVE_REUSE",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: no proof on b12681 yet: its path ran (4 lines, boltbeam-runs/port-grammar-backend-20261124 on), but its switch was on in held too and its check mode in no arm. Missing: its check mode on, or an arm varying it alone (evidence carried from b12521: boltbeam-runs/hostc-20261123 (s2b3 trace-A / trace-RR, s2b4 xml-RRC / npy-A / npy-RR / npy-RRC; screen s2b/xml))"
    },
    "switch_null_why": null,
    "check": "LLAMA_SAMPLER_RESERVE_REUSE_CHECK",

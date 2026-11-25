@@ -512,7 +512,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SPARSE_DIRECT",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -556,7 +558,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_FATTN_VEC_SKIP",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -601,7 +605,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KV_STREAM",
-    "on": "N: cells per layer kept in VRAM (a multiple of 4, >= 4096, below the context)"
+    "on": "N: cells per layer kept in VRAM (a multiple of 4, >= 4096, below the context)",
+    "default_run": "off",
+    "default_run_why": "off: quality-gated, its output can differ from stock (boltbeam-runs/mods-modules-20261118 (ab-kv2); boltbeam-runs/kv-stream-20261118/b12521 (ident, zero128); boltbeam-runs/rental-20261118/out (kvs11, kvs13, kvs14, kvs20: measured on 1.0.0, the same patch text); boltbeam-runs/graph-cap-20261119; boltbeam-runs/kvs-align-20261120 (control-block alignment: probe-n52852, probe-n65292, ident128, speed256q)); a consumer sets it only where its plan spends the memory it frees"
    },
    "check": {
     "kind": "env",
@@ -661,7 +667,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SPARSE_SPLIT",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/sparse-chain-20261119 (ident128-b12521; bench.out, check/, screen/, confirm/ measured on 1.0.0 with the same code)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -712,7 +720,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KV_PAD_POW2",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "check": null,
    "reads": [],
@@ -758,7 +768,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_IDX_POOLED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -800,7 +812,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_INPUT_DEVICE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -842,7 +856,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_IDX_INPLACE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -888,7 +904,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_TOPK_FUSED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -939,7 +957,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_IDX_KEYS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/indexer-topk-20261119 (bench4.out, ident128/, screen/, confirm/)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -994,7 +1014,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_TOPK_ROWHIST",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/indexer-topk-20261119 (bench4.out, ident128/, screen/, confirm/)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -1049,7 +1071,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_MASK_RANGE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/prefill-256k-20261119 (gate-kp-ident/, gate-kp-screen/, gate-kp-confirm/)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -1101,7 +1125,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_PAD_POW2",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "check": null,
    "reads": [],
@@ -1145,7 +1171,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_KPOOL_ASYNC_UPLOAD",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "check": null,
    "reads": [],
@@ -1189,7 +1217,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_EXT_KERNELS",
-    "on": "/path/manifest.json"
+    "on": "/path/manifest.json",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-xcheck)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -1292,7 +1322,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_GRAPH_MAX_KEYS",
-    "on": "2"
+    "on": "2",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/graph-cap-20261119); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": null,
    "reads": [
@@ -1338,7 +1370,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_CONCAT_ROWS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/concat-launch-shape-20261120 (ident128/, confirm/; README.md '2026-11-20 7:22-7:29 AM EST' and '7:29-8:06 AM EST')); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -1392,7 +1426,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_CUDA_GRAPH_CPY_KERNEL",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: ships off by default (commit 617b227): no speed gain resolved in boltbeam-runs/graph-fix-20261121 (diag/, ident128/, time256k/)"
    },
    "check": null,
    "reads": [],
@@ -1485,7 +1521,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_MOE_INPLACE",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/prefill-expert-inplace-20261115; boltbeam-runs/guardrails-20261118 (ab-mods3)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -1531,7 +1569,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_CUBLAS_SHARED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": null,
    "reads": [],
@@ -1576,7 +1616,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_DRAFT_ROUTE_COUNT",
-    "on": "a file path"
+    "on": "a file path",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/conversation-server-design-20261117 (S2a: ID0, RC; P7a: HA0); boltbeam-runs/guardrails-20261118 (ab-mods3)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": null,
    "reads": [],
@@ -1620,7 +1662,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_MTP_SHARE_HEAD",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: quality-gated, the draft's proposals can differ (boltbeam-runs/quality-gate-x16-20261114 (dgate.out), stack-margin-20261114; boltbeam-runs/guardrails-20261118 (ab-xcheck, ab-screen2); boltbeam-runs/pending-row-fix-20261120 (det/, ident128/, confirm/); boltbeam-runs/reply-determinism-20261120); a consumer sets it only where its plan needs the memory"
    },
    "check": null,
    "reads": [],
@@ -1666,7 +1710,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_GRAPH_SLOTS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": null,
    "reads": [
@@ -1714,7 +1760,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_RS_ONE_COPY",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: quality-gated (boltbeam-runs/conversation-server-design-20261117 (OC1, ab-OC3, OC6, RT; BUILD.md); boltbeam-runs/guardrails-20261118 (ab-xcheck, ab-screen2)); it pays only where the plan spends the memory it frees"
    },
    "check": {
     "kind": "env",
@@ -1764,7 +1812,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_CKPT_PINNED",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -1809,7 +1859,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_TOKENIZE_INCR",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -1854,7 +1906,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_PLE_PREFETCH_TURN",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/guardrails-20261118 (ab-ident2)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": null,
    "reads": [],
@@ -1899,7 +1953,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_PLE_PREFETCH_STEP",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/ple-cache-20261119 (step-ident, step-screen, step-evscreen, step-evconfirm; README.md section 7)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": null,
    "reads": [],
@@ -1952,7 +2008,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_SCHED_ASYNC_INPUTS",
-    "on": "1"
+    "on": "1",
+    "default_run": "on",
+    "default_run_why": "on: identical (boltbeam-runs/host-idle-b-20261118 (ab-chk20, ab-confirm20); boltbeam-runs/host-idle-a-20261118 (ab-ident, 1.0.0)); part of the series a consumer runs where it has granted the mod on the chip"
    },
    "check": {
     "kind": "env",
@@ -1998,7 +2056,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_RBUDGET_BACKEND",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: ships off by default (commit f35a44d): its gain was measured on one chip and shape only (boltbeam-runs/eng-night-20261121 (ab-rb-256k, force-b64, ident-rb-b64))"
    },
    "check": null,
    "reads": [],
@@ -2050,7 +2110,9 @@
    "switch": {
     "kind": "env",
     "name": "GGML_SCHED_PACK_INPUTS",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "check": {
     "kind": "env",
@@ -2097,7 +2159,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_SPEC_PROMPT_REF",
-    "on": "1"
+    "on": "1",
+    "default_run": "off",
+    "default_run_why": "off: the host-idle row ships off by default (commit f013df8, \"each off by default\"); its identity evidence is boltbeam-runs/hostidle-patches-20261122"
    },
    "check": {
     "kind": "env",
@@ -2142,7 +2206,9 @@
    "switch": {
     "kind": "env",
     "name": "LLAMA_PLE_PREFETCH_TURN",
-    "on": "2"
+    "on": "2",
+    "default_run": "off",
+    "default_run_why": "off: parked, not part of the series (boltbeam-runs/prefill-256k-20261119 (gate-ident, gate-screen, gate-confirm; README.md 'Test #1'))"
    },
    "check": null,
    "reads": [],

@@ -10,7 +10,8 @@
     "a check mode that runs the stock path beside the mod and aborts on a difference",
     "output bit-identical to stock, or labelled (quality-gated / untested) with the evidence",
     "a line budget per patch (measured size, rounded up a little); over budget fails",
-    "gains stated against the same engine's stock build only"
+    "gains stated against the same engine's stock build only",
+    "switch.default_run (\"on\" | \"off\", with default_run_why) is advice to a consumer that sets switches for a build; it changes nothing in the engine, where every switch stays off by default (unset = the stock path). on: proven exact (identical) for the hardware its key admits and measured not slower there: set it. off: built, but leave it unless the user names it. It never overrides the consumer's own chip grant: a consumer sets a switch only where it has granted the mod on that chip. Once one row of a version states it, every switched row of that version does. switch.default_run_where (on only): the device facts the proof covers, by the names the kernel manifests use (compute_capability as ggml numbers it, sm_count); \"on\" then means on where every named fact equals the device's; elsewhere, or where the consumer does not know a named fact, it treats the row as off and says it was measured on that device only. A row states it when its proof is from one device and its engine key reads a device fact finer than the consumer's chip (an SM count: grid against SMs, residency); a row without it relies on the consumer's chip grant alone, which may be coarser than its evidence (tools/check.py checks the field's shape, not this judgment)"
   ],
   "appliers": {
     "git_apply": {

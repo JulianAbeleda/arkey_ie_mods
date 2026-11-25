@@ -17,7 +17,9 @@ Per folder
   5b rows     known keys only; a series mod has a one-line title (parked may); output label in {identical, quality-gated, untested} with its evidence (identical:
               a counted match, quality-gated: a gate); a rule_exceptions entry for every missing check, missing
               switch or switch that is on by default; no model name and no other engine's name in a row or a patch
-              header or added line (engines.json lint)
+              header or added line (engines.json lint); switch.default_run in {on, off} with its why, on only for
+              identical, and stated by every switched row of a version once one row states it; default_run_where
+              (on only) names known device facts (compute_capability, sm_count) with integer values
   6 tree      base + the listed patches is byte-equal to each tested tree on the touched files, no other base file
               differs, and the tree holds no extra file the base does not ignore; a folder with mods has tested
               trees or an explicit tested_trees_none {why}
@@ -393,12 +395,41 @@ def check_row(m, spec, engine_row, lint, rel):
         bad.append(f"rule_exceptions missing {sorted(need - have)}")
     if m.get("switch") and m["switch"].get("kind") not in (engine_row.get("switch_kinds") or {}):
         bad.append(f"switch kind {m['switch'].get('kind')} not in the engine's switch_kinds")
+    bad += default_run_bad(m, spec)
     if not m.get("marker"):
         bad.append("no marker")
     title = m.get("title")
     if title is not None and (not isinstance(title, str) or not title.strip() or "\n" in title or len(title) > TITLE_MAX):
         bad.append(f"title must be one line of 1-{TITLE_MAX} characters")
     bad += [f"row text: {x}" for s in strings({k: v for k, v in m.items() if k not in ("files", "patch", "scrubbed_from")}) for x in lint.text(spec["engine"], s)][:3]
+    return bad
+
+
+DEFAULT_RUN = ("on", "off")  # switch.default_run: what a consumer that sets switches for a build does with this one (engines.json rules)
+WHERE_FACTS = ("compute_capability", "sm_count")  # switch.default_run_where: the device facts an "on" covers (kernel manifests' sm_count)
+
+
+def default_run_bad(m, spec):
+    """switch.default_run: once any row of a version states it, every switched series or parked row does, with its why;
+    "on" only for an identical row (a consumer never turns on by itself a switch whose output may differ)."""
+    sw = m.get("switch") or {}
+    stated = any("default_run" in (r.get("switch") or {}) for r in spec.get("mods", []) + spec.get("parked", []))
+    if not m.get("switch"):
+        return ["default_run on a row with no switch"] if "default_run" in sw else []
+    if "default_run" not in sw:  # a retired row is linted, never run: it need not state it
+        live = any(r is m for r in spec.get("mods", []) + spec.get("parked", []))
+        return ["switch.default_run missing (another row of this version states it)"] if stated and live else []
+    bad = [] if sw["default_run"] in DEFAULT_RUN else [f"switch.default_run {sw['default_run']!r} not one of {list(DEFAULT_RUN)}"]
+    if not str(sw.get("default_run_why") or "").strip():
+        bad.append("switch.default_run without switch.default_run_why")
+    if sw["default_run"] == "on" and (m.get("output") or {}).get("label") != "identical":
+        bad.append("switch.default_run on for a row that is not identical")
+    if "default_run_where" in sw:
+        w = sw["default_run_where"]
+        if sw["default_run"] != "on":
+            bad.append("switch.default_run_where on a row whose default_run is not on")
+        if not isinstance(w, dict) or not w or set(w) - set(WHERE_FACTS) or not all(isinstance(v, int) and not isinstance(v, bool) for v in w.values()):
+            bad.append(f"switch.default_run_where must name one or more of {list(WHERE_FACTS)} with integer values")
     return bad
 
 

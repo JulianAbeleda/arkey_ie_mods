@@ -493,3 +493,41 @@ class KernelBudget(Fixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefaultRunTest(unittest.TestCase):
+    """switch.default_run: on/off with its why, on only for identical, every switched row once one row states it."""
+
+    def mod(self, name, label="identical", **sw):
+        return {"name": name, "switch": {"kind": "env", "name": name.upper(), "on": "1", **sw}, "output": {"label": label}}
+
+    def test_absent_everywhere_is_fine(self):
+        spec = {"mods": [self.mod("a"), self.mod("b")]}
+        self.assertEqual(c.default_run_bad(spec["mods"][0], spec), [])
+
+    def test_one_row_stating_it_needs_every_switched_row(self):
+        a, b = self.mod("a", default_run="on", default_run_why="w"), self.mod("b")
+        spec = {"mods": [a, b, {"name": "n", "switch": None}]}
+        self.assertEqual(c.default_run_bad(a, spec), [])
+        self.assertIn("switch.default_run missing", c.default_run_bad(b, spec)[0])
+        self.assertEqual(c.default_run_bad(spec["mods"][2], spec), [])  # a switchless row states nothing
+        self.assertEqual(c.default_run_bad(self.mod("old"), {**spec, "retired": [self.mod("old")]}), [])  # retired: not run
+
+    def test_unknown_value_missing_why_and_on_for_a_gated_row_fail(self):
+        bad = self.mod("a", default_run="maybe", default_run_why="w")
+        self.assertTrue(any("not one of" in x for x in c.default_run_bad(bad, {"mods": [bad]})))
+        nowhy = self.mod("a", default_run="off")
+        self.assertIn("switch.default_run without switch.default_run_why", c.default_run_bad(nowhy, {"mods": [nowhy]}))
+        gated = self.mod("a", label="quality-gated", default_run="on", default_run_why="w")
+        self.assertIn("switch.default_run on for a row that is not identical", c.default_run_bad(gated, {"mods": [gated]}))
+        off = self.mod("a", label="quality-gated", default_run="off", default_run_why="w")
+        self.assertEqual(c.default_run_bad(off, {"mods": [off]}), [])
+
+    def test_where_names_known_facts_on_an_on_row_only(self):
+        ok = self.mod("a", default_run="on", default_run_why="w", default_run_where={"compute_capability": 1200, "sm_count": 170})
+        self.assertEqual(c.default_run_bad(ok, {"mods": [ok]}), [])
+        for w in ({"gpu": "5090"}, {}, {"sm_count": "170"}, [170], {"sm_count": True}):
+            bad = self.mod("a", default_run="on", default_run_why="w", default_run_where=w)
+            self.assertTrue(any("default_run_where must name" in x for x in c.default_run_bad(bad, {"mods": [bad]})), w)
+        off = self.mod("a", default_run="off", default_run_why="w", default_run_where={"sm_count": 170})
+        self.assertIn("switch.default_run_where on a row whose default_run is not on", c.default_run_bad(off, {"mods": [off]}))
