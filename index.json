@@ -5245,7 +5245,7 @@
    "hook": "llama.cpp/b12681/ext-kernels-window",
    "dir": "engines/llama.cpp/b12681/kernels/region-chain-k2560-k10240/",
    "files": {
-    "manifest.json": "e93303234c768b0d7b684be91d60b5050073c9eff77addfb47b4a42c1f9af30a",
+    "manifest.json": "8002ea0c02412c5327d38c4d293e5ca7b78d2552044c0941b5ddbfe9b9210e8e",
     "region_down_tail.cu": "4ed8d8f558784bc9fd1467ac72084758705f9ac36b1fc2240895994f54bd7768",
     "region_down_tail.cubin": "2d01a29c402dd1b28b74fcc1258d69e91a863790f43964d607bfb9ef7b8c68a6",
     "region_inject_tail.cu": "463d38c68ef68b7cfe88693176d2ac97c7fc58365021decd43587d80be74e94a",
@@ -5271,11 +5271,15 @@
     "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cu": "54d351e0afdc3cf21f61f7a7455bb166acec018908f14afab5d933468d32ed11",
     "sparse_q8_exact2_t4_h24_2_d256_l2051_r10.cubin": "80c576ba88a6864026ec02e4c511129736543b51b86e182417c36a19829b1bce",
     "region_ff96d2ea18a8.cu": "4a71b1ce06a5a23e49cee482713130dd48a18ad2cb8947b802f9b71b6d042d47",
-    "region_ff96d2ea18a8.cubin": "5d59f3a058ce0f5346b67e2164a4e7ddcd0b16af2798e3f7c343fec7054f2bcf"
+    "region_ff96d2ea18a8.cubin": "5d59f3a058ce0f5346b67e2164a4e7ddcd0b16af2798e3f7c343fec7054f2bcf",
+    "region_down_silu_c2r4u5.cu": "403f3ec8ec53850fb84ab9e609dad9cdac39ba56771d32c5cd9fc0ae0b22e0fe",
+    "region_down_silu_c2r4u5.cubin": "f0e056c7368157f549109b2267a7e26bed4b2362dd09c4d2ce459984006c8f76",
+    "src1q_hc_pre_t4_e2560.cu": "ad0c75ffd0e9f4c1297331f4312a07ed31bf23302ce2f42a0ceee7590e4c30fc",
+    "src1q_hc_pre_t4_e2560.cubin": "2a7d602390e0793ff51f3111007fd72a66c08a69371f7b532cf63b68f141906e"
    },
    "output": "identical",
-   "lines": 3592,
-   "budget": 3780
+   "lines": 4043,
+   "budget": 4250
   },
   {
    "id": "llama.cpp/b12681/kernels/bf16-gemv-k2560-t4",

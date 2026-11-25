@@ -8,6 +8,176 @@
  },
  "entries": [
   {
+   "id": "region_down_silu_c2r4u5",
+   "target": "nvidia_sm120",
+   "sm_count": 170,
+   "sm_count_min": 54,
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_MUL_MAT",
+      "type": "f32",
+      "ne": [
+       320,
+       4
+      ],
+      "src_types": [
+       "bf16",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        10240,
+        320
+       ],
+       [
+        10240,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "ext": "x0"
+       },
+       {
+        "ext": "x1"
+       }
+      ]
+     },
+     {
+      "op": "GGML_OP_SCALE",
+      "type": "f32",
+      "ne": [
+       320,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        320,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 0
+       }
+      ],
+      "op_params_f32": [
+       0.25,
+       0.0
+      ]
+     },
+     {
+      "op": "GGML_OP_UNARY",
+      "type": "f32",
+      "ne": [
+       320,
+       4
+      ],
+      "src_types": [
+       "f32"
+      ],
+      "src_ne": [
+       [
+        320,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "src": [
+       {
+        "node": 1
+       }
+      ],
+      "unary": "GGML_UNARY_OP_SILU"
+     }
+    ],
+    "outputs": [
+     2
+    ],
+    "alias_ok": []
+   },
+   "kernel": {
+    "file": "region_down_silu_c2r4u5.cubin",
+    "sha256": "f0e056c7368157f549109b2267a7e26bed4b2362dd09c4d2ce459984006c8f76",
+    "symbol": "region_down_silu_c2r4u5",
+    "format": "cubin"
+   },
+   "launch": {
+    "grid": [
+     80,
+     2,
+     1
+    ],
+    "block": [
+     256,
+     1,
+     1
+    ],
+    "shared_bytes": 0,
+    "pdl": true
+   },
+   "args": [
+    {
+     "node": 2,
+     "src": -1
+    },
+    {
+     "node": 0,
+     "src": 1
+    },
+    {
+     "node": 0,
+     "src": 0
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "scheduler",
+    "family": "region_chain.v1",
+    "region_id": "8b75fd135e01cf1830637e616642ed6f380acf84ec883281783a73f6ebeb5933",
+    "order": "llama.cpp.mmvf.bf16_f32.b256",
+    "opts": [
+     "Opt(op=OptOps.UNROLL, axis=0, arg=2)",
+     "Opt(op=OptOps.GROUP, axis=0, arg=256)",
+     "Opt(op=OptOps.UPCAST, axis=0, arg=2)",
+     "Opt(op=OptOps.UPCAST, axis=1, arg=4)",
+     "Opt(op=OptOps.UNROLL, axis=1, arg=5)"
+    ],
+    "compile_flags": [
+     "-O3",
+     "-use_fast_math",
+     "-fmad=false"
+    ],
+    "checks": {
+     "outputs": 8,
+     "shared_values": 8,
+     "loops": 1,
+     "fmul": 16,
+     "mma": 0,
+     "ffma": 88,
+     "shfl": 40,
+     "ok": false,
+     "why": [
+      "FMUL / MMA present",
+      "an output's combine tree differs from the order",
+      "output reads 0 level-0 slots, the order has 8"
+     ],
+     "gate": false
+    },
+    "generator": {
+     "repo": "diwa-gen",
+     "commit": "d13e8279f",
+     "recipe": "tests/fixtures/region_chain/gemv_tail_windows.json:down_silu (launch_shape c2r4u5)"
+    }
+   }
+  },
+  {
    "id": "region_shexp_gate",
    "target": "nvidia_sm120",
    "match": {
@@ -1874,6 +2044,152 @@
      "file": "region_ff96d2ea18a8.cubin",
      "sha256": "5d59f3a058ce0f5346b67e2164a4e7ddcd0b16af2798e3f7c343fec7054f2bcf",
      "symbol": "region_ff96d2ea18a8"
+    }
+   }
+  },
+  {
+   "id": "region_src1q_hc_pre_t4",
+   "target": "nvidia_sm120",
+   "sm_count": 170,
+   "match": {
+    "ops": [
+     {
+      "op": "GGML_OP_DSV4_HC_PRE",
+      "type": "f32",
+      "ne": [
+       2560,
+       4
+      ],
+      "src_types": [
+       "f32",
+       "f32"
+      ],
+      "src_ne": [
+       [
+        2560,
+        4,
+        4
+       ],
+       [
+        2560,
+        4,
+        4
+       ]
+      ],
+      "contiguous": true,
+      "op_params_hex": "0000803e01",
+      "src": [
+       {
+        "ext": "x"
+       },
+       {
+        "ext": "gate"
+       }
+      ]
+     }
+    ],
+    "outputs": [
+     0
+    ],
+    "alias_ok": []
+   },
+   "launches": [
+    {
+     "kernel": {
+      "file": "src1q_hc_pre_t4_e2560.cubin",
+      "sha256": "2a7d602390e0793ff51f3111007fd72a66c08a69371f7b532cf63b68f141906e",
+      "symbol": "src1q_hc_pre_t4_e2560",
+      "format": "cubin",
+      "source_sha256": "ad0c75ffd0e9f4c1297331f4312a07ed31bf23302ce2f42a0ceee7590e4c30fc"
+     },
+     "launch": {
+      "grid": [
+       4,
+       10,
+       1
+      ],
+      "block": [
+       16,
+       4,
+       2
+      ],
+      "shared_bytes": 0,
+      "pdl": false
+     },
+     "args": [
+      {
+       "node": 0,
+       "src": -1
+      },
+      {
+       "scratch": 0
+      },
+      {
+       "scratch": 1
+      },
+      {
+       "scratch": 2
+      },
+      {
+       "node": 0,
+       "src": 0
+      },
+      {
+       "node": 0,
+       "src": 1
+      }
+     ]
+    }
+   ],
+   "scratch": [
+    {
+     "slot": 0,
+     "bytes": 23040
+    },
+    {
+     "slot": 1,
+     "bytes": 23040
+    },
+    {
+     "slot": 2,
+     "bytes": 11520
+    }
+   ],
+   "src1_q8_1": [
+    {
+     "node": 0,
+     "layout": "mmq_few_d4",
+     "scratch": 0,
+     "bytes": 23040
+    },
+    {
+     "node": 0,
+     "layout": "mmq_few_ds4",
+     "scratch": 1,
+     "bytes": 23040
+    },
+    {
+     "node": 0,
+     "layout": "q8_1",
+     "scratch": 2,
+     "bytes": 11520
+    }
+   ],
+   "tolerance": 0,
+   "evidence": {
+    "author": "generator",
+    "family": "region_chain.quantize_outputs.v1",
+    "order": "llama.cpp.serial_fma.f32 (dsv4-hc.cu hc_pre) as its explicit chain; quantize q8_1 / mmq_few_d4 / mmq_few_ds4 (order-free) in the same kernel",
+    "compile_flags": [
+     "-O3",
+     "-use_fast_math",
+     "-fmad=false"
+    ],
+    "checks": "gen7-20261123 check-t4.json, mutants-hand-t4.json",
+    "generator": {
+     "repo": "diwa-gen",
+     "commit": "bdb8c0363 (tool first committed db2c49ce2; the gen7 render was uncommitted, bdb8c0363 renders the same source byte for byte)",
+     "recipe": "diwa_gen/tools/region_src1q.py --tokens 4"
     }
    }
   },
