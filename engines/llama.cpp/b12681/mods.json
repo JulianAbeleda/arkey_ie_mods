@@ -159,7 +159,7 @@
   {
    "name": "state",
    "title": "MTP draft head share and graph slots",
-   "point": "what a context keeps between steps: the draft head, its graphs and the recurrent state (llama-context, llama-graph, llama-memory-recurrent, and the draft's pending hidden row in common/speculative) (on b12681 without rs-one-copy: upstream #31669 rs_replay does it in stock)",
+   "point": "what a context keeps between steps: the draft head (shared, or over a listed subset of ids), its graphs and the recurrent state (llama-context, llama-graph, llama-memory-recurrent, and the draft's pending hidden row in common/speculative) (on b12681 without rs-one-copy: upstream #31669 rs_replay does it in stock)",
    "patch": "patches/state.patch",
    "files": [
     "common/speculative.cpp",
@@ -169,16 +169,30 @@
     "src/models/qwen4exp.cpp"
    ],
    "lines": {
-    "added": 157,
+    "added": 222,
     "removed": 4
    },
    "budget": {
-    "added": 170,
+    "added": 240,
     "removed": 4
    },
    "static": {
     "hunks_removing_stock_lines": 2
-   }
+   },
+   "budget_raised": [
+    {
+     "from": {
+      "added": 170,
+      "removed": 4
+     },
+     "to": {
+      "added": 240,
+      "removed": 4
+     },
+     "why": "draft-vocab-subset: +65 lines (the draft head reads a gathered copy of listed output rows; logits of other ids -inf); budget by budget_rule from the measured +222",
+     "date": "2026-11-25"
+    }
+   ]
   },
   {
    "name": "host",
@@ -1625,6 +1639,56 @@
    ]
   },
   {
+   "name": "draft-vocab-subset",
+   "title": "draft head computes logits for a listed subset of token ids only",
+   "module": "state",
+   "engine": "llama.cpp",
+   "base": "b12681",
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_DRAFT_VOCAB_SUBSET",
+    "on": "/path/ids: whitespace-separated token ids (16 to n_vocab - 1), written by boltbeam derive vocab-subset",
+    "default_run": "off",
+    "default_run_why": "off: the owner's choice for his own machine, not a default for others; the draft proposes only listed ids, so long outputs are not text-neutral (boltbeam-runs/vast-second-5090-20261125: public-lcb24 ON = OFF 9/24), and at the 256k line it fits only with LLAMA_KV_STREAM=42848 (boltbeam-runs/vocab-subset-stack-20261125)"
+   },
+   "check": null,
+   "reads": [],
+   "marker": "LLAMA_DRAFT_VOCAB_SUBSET",
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "output": {
+    "label": "quality-gated",
+    "evidence": {
+     "run": "boltbeam-runs/vocab-subset-build-20261124; boltbeam-runs/vocab-subset-stack-20261125; boltbeam-runs/vast-second-5090-20261125; boltbeam-runs/vocab-subset-gate-20261125",
+     "numbers": "On b12681 (boltbeam-runs/vocab-subset-build-20261124, build boltbeam-engines/llama.cpp/port-b12681-vsubset-20261124; count-only, -c 86016 -ncmoe 2, the port's switches and kernel list): switch unset = the grambk build's replies 57/57 and draft counts 57/57 on the dev session; graph check (headcheck, the model's real Q6_K output.weight through this graph vs the stock mul_mat on the same libggml-cuda, 64 vectors, 1 and 4 columns, 63,488- and 93,184-id lists): every listed id's logit bit-equal (49.9M compared, 0 differ), every other id -inf. With a 93,184-id list (186.6 MiB) vs off: tokens a step -0.000% to -0.076% on five sessions (dev 57 turns, numpy 14, prose 1-28, C++ 1-22, Rust 1-23; bootstrap upper bound <= 0.21%), replies identical 144/144 turns, loop flags unchanged. With a 36,864-id list (73.8 MiB): -0.04% to -2.83% (prose; C++ -2.06%), replies 141/144 (3 turns fork at one word, mid-reply), loop flags unchanged. At the owner's 256k line on this port the 186.6 MiB copy does not fit (out of memory at the first decode; lowest free memory off over a 259k session 76 MiB). On the full b12681 stack (build boltbeam-engines/llama.cpp/port-b12681-vsubx-20261125, the owner's 256k line, 93,184-id list): it fits only with LLAMA_KV_STREAM=42848, lowest free memory over a 259,923-token prose session 155.3 MiB vs 27.3 MiB at 52848 (vram-map; boltbeam-runs/vocab-subset-stack-20261125); switch off = the stack without the module, replies and per-turn draft counts 57/57; dev replay 57 turns, like-state timed pair 247.9 -> 260.4 tok/s (-0.572 ms/step, realized fraction 1.00 of the kernel-level saving); replies identical with it on vs off on five recorded sessions at 256k (dev 57/57, C++ 76/76, Rust 67/67, prose 89/89, numpy 14/14; same loop flags). Not text-neutral on long outputs: public-lcb24 at 256k ON = OFF on 9/24 replies (boltbeam-runs/vast-second-5090-20261125). A second RTX 5090 reproduces home ON and OFF each 24/24 (replies and draft schedules). 100-problem LiveCodeBench gate (boltbeam-runs/vocab-subset-gate-20261125): OFF 84 pass / 2 loops, ON 84 / 2, 0 discordant problems, pass_rate and loop_rate within the margins derived from the run's own noise pair",
+     "gate": {
+      "name": "lossy-kernel gate (100 paired problems, margin from a numerics noise pair, KLD vs stock at the real shape)",
+      "run": "boltbeam-runs/vocab-subset-gate-20261125",
+      "verdict": "pass on pass_rate (0.0164 <= margin 0.0540) and loop_rate (0.0164 <= 0.0681), truncation 0%, 0 discordant problems of 100 (judged.json). The divergence section (KLD vs stock at the real shape) was NOT measured: the owner ruled on 2026-11-25 that the by-construction argument covers it. The argument: at a fixed context and batch shape the module changes no target-model computation (it gathers output rows for the MTP draft head only; the target graph, the verify pass and the final sampling are the stock lines), so a teacher-forced KLD of the target ON vs OFF reads 0 by construction; what it changes is which tokens the draft proposes, which moves acceptance and therefore which text a greedy run reaches (public-lcb24 ON = OFF 9/24), and that the 100-problem section measures. Refuting test (not run): teacher-forced target distributions ON vs OFF at the owner's 256k line with the T=4 verify shape over a recorded session; any nonzero KL or any differing top-20 row refutes the argument and the label returns to untested"
+     }
+    }
+   },
+   "exercised_by": "an MTP draft context (context type MTP) of the qwen4exp graph whose head is the target's Q6_K output projection (with mtp-share-head) on one CUDA GPU (sm_120); measured on one MoE model with an MTP draft head, one sequence, backend top-k draft sampling",
+   "limits": [
+    "MTP draft contexts of the qwen4exp graph only; the target model and its verify pass are never changed",
+    "the draft proposes only listed ids: a token outside the list is never drafted (its logit is -inf, p = 0), so acceptance drops where the target writes one; the target still writes it",
+    "the gathered rows are an extra device buffer on the head's buffer type (N x the head's row bytes; 2,100 B a row for Q6_K [2560]); not counted by the memory fit",
+    "a head with a scale tensor (output_s) or a non-contiguous head is refused at load (throws), as is an id file with a non-integer, an id outside the vocabulary, fewer than 16 or all ids",
+    "logits keep the full vocabulary width (fill + set_rows each draft pass) so samplers, p_min and grammar paths see true token ids; the full-width top-k after the head is unchanged",
+    "the gathered rows are read from the head's buffer with ggml_backend_tensor_get: a head in a split / tensor-parallel or CPU repack buffer is untested (a split buffer's get_tensor asserts a zero offset)",
+    "a LoRA on the output projection is not applied to the gathered rows; a non-qwen4exp or non-MTP context ignores the switch without a log line",
+    "p_min reads probabilities renormalised over the listed ids (a top-k over -inf elsewhere), so a draft whose full-vocabulary top token is unlisted can pass p_min with an inflated p; no effect at p_min 0"
+   ],
+   "rule_exceptions": [
+    {
+     "rule": "check",
+     "why": "no check mode: by design the draft's logits outside the list differ from stock (-inf); inside it they are bit-equal to the stock head's (headcheck, boltbeam-runs/vocab-subset-build-20261124), which a stock-beside-mod check could only repeat"
+    }
+   ]
+  },
+  {
    "name": "graph-slots",
    "title": "draft context keeps a graph per small ubatch size",
    "module": "state",
@@ -2550,10 +2614,10 @@
  ],
  "tested_trees": [
   {
-   "id": "release-kpool-exact-b12681",
-   "path": "storage-tmp/release1125/tree",
-   "what": "the tree that was timed (boltbeam-runs/overnight-pairs-20261125 p2, p3: GAPEXACT): port-b12681-gap-20261124/tree (b12681 d141011c2 + the 6 module patches with the k-pool indexer rows + the grammar-backend fix) with this folder's mmq-few.cu and mmvq.cu (mmq-few-ring2, mmvq-active-warps, mmvq-moe-row1). storage-tmp/release1125/tree is a link to boltbeam-engines/llama.cpp/port-b12681-gapexact-20261124/tree; built as boltbeam-engines/llama.cpp/port-b12681-gapexact-20261124/build; identity: boltbeam-runs/exact-patches-20261124 (v-gapexact-t1-57), boltbeam-runs/port-gap-20261124",
-   "contains": "the 6 modules on b12681 with the k-pool indexer rows and the three launch-shape rows in kernels",
+   "id": "release-vsubset-b12681",
+   "path": "storage-tmp/vsub-everyday/tree",
+   "what": "the tree that was timed and gated with the draft vocab subset (boltbeam-runs/vocab-subset-stack-20261125 OFF42/ON42, boltbeam-runs/vocab-subset-gate-20261125, boltbeam-runs/vast-second-5090-20261125): port-b12681-gapexact-20261124/tree (release-kpool-exact-b12681, 7aa3ad8) plus the state module's draft-vocab-subset hunks (src/llama-context.cpp, src/llama-context.h, src/llama-cparams.h, src/models/qwen4exp.cpp). storage-tmp/vsub-everyday/tree is a byte-equal copy (diff -r, .git excluded) of boltbeam-engines/llama.cpp/port-b12681-vsubx-20261125/tree; built as boltbeam-engines/llama.cpp/port-b12681-vsubx-20261125/build",
+   "contains": "the 6 modules on b12681 with the k-pool indexer rows, the three launch-shape rows in kernels and draft-vocab-subset in state",
    "apply": [
     "patches/kv.patch",
     "patches/indexer.patch",

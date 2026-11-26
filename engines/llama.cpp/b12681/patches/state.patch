@@ -20,7 +20,7 @@ index b40eb5535..6a2a50cb2 100644
          auto * ctx_dft = this->params.ctx_dft;
  
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 4caca65f3..c2d675c8b 100644
+index 4caca65f3..cf052c059 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -256,6 +256,20 @@ llama_context::llama_context(
@@ -44,7 +44,62 @@ index 4caca65f3..c2d675c8b 100644
      if (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
          cparams.rope_scaling_type = hparams.rope_scaling_type_train;
      }
-@@ -402,6 +416,16 @@ llama_context::llama_context(
+@@ -307,6 +321,54 @@ llama_context::llama_context(
+ 
+     cparams.yarn_attn_factor *= hparams.rope_attn_factor;
+ 
++    // LOCAL (draft-vocab-subset): LLAMA_DRAFT_VOCAB_SUBSET=<file of token ids> - an MTP head reads a gathered copy of those rows
++    // of its output projection (same type) and its logits of every other id are -inf, so the draft proposes ids of the file
++    // only; the target and its verify pass are untouched. Unset = the full head.
++    if (const char * vsub_path = getenv("LLAMA_DRAFT_VOCAB_SUBSET");
++            vsub_path && *vsub_path && model.arch == LLM_ARCH_QWEN4EXP && params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
++        const llama_model * mh = model.output ? &model : cparams.model_head_src;
++        const ggml_tensor * w  = mh ? mh->output : nullptr;
++        std::vector<int32_t> ids;
++        bool bad = w == nullptr || mh->output_s != nullptr || !ggml_is_contiguous(w);
++        FILE * fp = fopen(vsub_path, "r");
++        long long t = 0;
++        while (!bad && fp && fscanf(fp, "%lld", &t) == 1) {
++            bad = t < 0 || t >= w->ne[1];
++            ids.push_back((int32_t) t);
++        }
++        bad = bad || !fp || !feof(fp);
++        if (fp) { fclose(fp); }
++        std::sort(ids.begin(), ids.end());
++        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
++        if (bad || ids.size() < 16 || (int64_t) ids.size() >= w->ne[1]) {
++            throw std::runtime_error(format("LLAMA_DRAFT_VOCAB_SUBSET %s: needs 16 to n_vocab-1 token ids of a head with no scale tensor (%zu read)",
++                    vsub_path, ids.size()));
++        }
++        if (w->data != nullptr) { // no weights while memory fitting
++            const size_t rb = w->nb[1];
++            std::vector<uint8_t> rows(ids.size() * rb);
++            for (size_t i = 0, j = 0; i < ids.size(); i = j) {
++                for (j = i + 1; j < ids.size() && ids[j] == ids[j - 1] + 1; ++j) {}
++                ggml_backend_tensor_get(w, rows.data() + i * rb, (size_t) ids[i] * rb, (j - i) * rb);
++            }
++            ctx_vsub.reset(ggml_init({ 2 * ggml_tensor_overhead(), nullptr, true }));
++            cparams.vsub_w   = ggml_new_tensor_2d(ctx_vsub.get(), w->type, w->ne[0], (int64_t) ids.size());
++            cparams.vsub_ids = ggml_new_tensor_1d(ctx_vsub.get(), GGML_TYPE_I32, (int64_t) ids.size());
++            ggml_set_name(cparams.vsub_w, "output_vsub.weight");
++            ggml_set_name(cparams.vsub_ids, "output_vsub.ids");
++            buf_vsub.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_vsub.get(), ggml_backend_buffer_get_type(w->buffer)));
++            if (!buf_vsub) {
++                throw std::runtime_error("LLAMA_DRAFT_VOCAB_SUBSET: the gathered head does not fit");
++            }
++            ggml_backend_buffer_set_usage(buf_vsub.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++            ggml_backend_tensor_set(cparams.vsub_w, rows.data(), 0, rows.size());
++            ggml_backend_tensor_set(cparams.vsub_ids, ids.data(), 0, ids.size() * sizeof(int32_t));
++            LLAMA_LOG_WARN("%s: LLAMA_DRAFT_VOCAB_SUBSET: the MTP head reads %zu of %" PRId64 " rows (%s, %.2f MiB on %s) from %s\n", __func__,
++                    ids.size(), w->ne[1], ggml_type_name(w->type), ggml_backend_buffer_get_size(buf_vsub.get()) / 1048576.0,
++                    ggml_backend_buffer_name(buf_vsub.get()), vsub_path);
++        }
++    }
++
+     if (cparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
+         if (hparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
+             cparams.pooling_type = LLAMA_POOLING_TYPE_NONE;
+@@ -402,6 +464,16 @@ llama_context::llama_context(
          if (graph_reuse_disable) {
              LLAMA_LOG_WARN("%s: graph reuse disabled\n", __func__);
          }
@@ -61,7 +116,7 @@ index 4caca65f3..c2d675c8b 100644
      }
  
      {
-@@ -643,6 +667,10 @@ llama_context::~llama_context() {
+@@ -643,6 +715,10 @@ llama_context::~llama_context() {
      // wait for any pending asynchronous copies into the output buffers before they are freed
      synchronize();
  
@@ -72,7 +127,7 @@ index 4caca65f3..c2d675c8b 100644
      // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
      if (!model.no_alloc() && !opt_ctx) {
          for (size_t i = 0; i < backend_ptrs.size(); ++i) {
-@@ -788,6 +816,45 @@ void llama_context::sched_new(const sched_params & params) {
+@@ -788,6 +864,45 @@ void llama_context::sched_new(const sched_params & params) {
      sched_params_cur = params;
  }
  
@@ -118,7 +173,7 @@ index 4caca65f3..c2d675c8b 100644
  void llama_context::sched_reserve() {
      if (!sched_need_reserve) {
          return;
-@@ -799,6 +866,14 @@ void llama_context::sched_reserve() {
+@@ -799,6 +914,14 @@ void llama_context::sched_reserve() {
  
      synchronize();
  
@@ -133,7 +188,7 @@ index 4caca65f3..c2d675c8b 100644
      const int64_t t_start_us = ggml_time_us();
  
      const uint32_t n_seqs = cparams.n_seq_max;
-@@ -1060,6 +1135,10 @@ bool llama_context::memory_update(bool optimize) {
+@@ -1060,6 +1183,10 @@ bool llama_context::memory_update(bool optimize) {
  
          // reset the previous graph results to make sure that they won't be reused
          // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
@@ -144,7 +199,7 @@ index 4caca65f3..c2d675c8b 100644
          for (auto & res : gf_res_prev) {
              res->reset();
          }
-@@ -1824,6 +1903,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1824,6 +1951,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
          return nullptr;
      }
  
@@ -155,7 +210,7 @@ index 4caca65f3..c2d675c8b 100644
      auto * res = get_gf_res_prev();
      auto * gf  = res->get_gf();
  
-@@ -1867,6 +1950,16 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1867,6 +1998,16 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
              return nullptr;
          }
  
@@ -172,7 +227,7 @@ index 4caca65f3..c2d675c8b 100644
          gf_res_prev_active = res;
      }
  
-@@ -3003,6 +3096,10 @@ ggml_cgraph * llama_context::graph_reserve(
+@@ -3003,6 +3144,10 @@ ggml_cgraph * llama_context::graph_reserve(
          LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
      }
  
@@ -183,7 +238,7 @@ index 4caca65f3..c2d675c8b 100644
      ggml_backend_sched_reset(sched.get());
  
      // when the scheduler is reset, we cannot reuse old graphs, so we reset the previous graph results
-@@ -4304,6 +4401,9 @@ void llama_context::opt_epoch_iter(
+@@ -4304,6 +4449,9 @@ void llama_context::opt_epoch_iter(
              const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
  
              // the optimizer graph is allocated outside sched, so the next decode must rebuild
@@ -194,10 +249,10 @@ index 4caca65f3..c2d675c8b 100644
              res->reset();
  
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 3e3921c7d..943b8b4d8 100644
+index 3e3921c7d..508bc43cd 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -456,6 +456,22 @@ private:
+@@ -456,9 +456,29 @@ private:
  
      llm_graph_result * gf_res_prev_active = nullptr;
  
@@ -220,11 +275,29 @@ index 3e3921c7d..943b8b4d8 100644
      // host buffer for the model output (logits and embeddings)
      ggml_backend_buffer_ptr buf_output;
  
++    // LLAMA_DRAFT_VOCAB_SUBSET: the gathered draft head rows (cparams.vsub_w) and their token ids (cparams.vsub_ids)
++    ggml_context_ptr        ctx_vsub;
++    ggml_backend_buffer_ptr buf_vsub;
++
+     // device buffer with enabled layer inputs, [n_layer_inp*n_embd, n_batch], row = batch index
+     ggml_context_ptr        ctx_layer_inp_dev;
+     ggml_backend_buffer_ptr buf_layer_inp_dev;
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index c71582a3c..fe1efc7cb 100644
+index c71582a3c..e82ef461a 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
-@@ -73,4 +73,7 @@ struct llama_cparams {
+@@ -22,6 +22,10 @@ struct llama_cparams {
+ 
+     int32_t  nextn_layer_offset = 0;
+ 
++    // LLAMA_DRAFT_VOCAB_SUBSET: an MTP head's gathered output rows and their token ids (nullptr = the full head)
++    struct ggml_tensor * vsub_w   = nullptr;
++    struct ggml_tensor * vsub_ids = nullptr;
++
+     float rope_freq_base;
+     float rope_freq_scale;
+ 
+@@ -73,4 +77,7 @@ struct llama_cparams {
  
      // context whose h_nextn device buffer holds the state rows of a batch, see llama_set_ctx_state_src()
      llama_context * ctx_state_src;
@@ -233,7 +306,7 @@ index c71582a3c..fe1efc7cb 100644
 +    const struct llama_model * model_head_src;
  };
 diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
-index f77e6f509..2261750d4 100644
+index f77e6f509..80c649397 100644
 --- a/src/models/qwen4exp.cpp
 +++ b/src/models/qwen4exp.cpp
 @@ -5,6 +5,7 @@
@@ -268,7 +341,7 @@ index f77e6f509..2261750d4 100644
      }
  
      // flat [ple_head_dim, n_rows] gather target
-@@ -665,7 +677,19 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llm_graph_params & params) :
+@@ -665,7 +677,28 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llm_graph_params & params) :
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
  
@@ -285,7 +358,16 @@ index f77e6f509..2261750d4 100644
 +                "the target's output projection does not match the MTP head");
 +    }
 +
-+    cur = build_lora_mm(output, cur, output_s);
++    if (cparams.vsub_w != nullptr) {
++        // LOCAL (draft-vocab-subset): the gathered rows' logits scattered into a row of -inf, ids unchanged for the samplers
++        ggml_tensor * sub = build_lora_mm(cparams.vsub_w, cur); // [n_subset, n_outputs]
++        ggml_tensor * all = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, output->ne[1], sub->ne[1]), -INFINITY);
++        ggml_set_output(all); // t_logits below is a view of it: keep its memory past the samplers (host reads raw logits after them)
++        cur = ggml_set_rows(ctx0, all, ggml_reshape_3d(ctx0, sub, 1, sub->ne[0], sub->ne[1]), cparams.vsub_ids);
++        cur = ggml_reshape_2d(ctx0, cur, output->ne[1], sub->ne[1]);
++    } else {
++        cur = build_lora_mm(output, cur, output_s);
++    }
      cb(cur, "result_output", -1);
      res->t_logits = cur;
  }

@@ -4,7 +4,7 @@
  "margin_rule": "cap = measured + ceil(measured / series mods): room for one more average mod, from set {measured, mods}. In a folder with modules the metrics are measured on the module patches and mods counts the feature rows",
  "caps": {
   "total_lines": {
-   "cap": 5881,
+   "cap": 5946,
    "set": {
     "measured": 5119,
     "mods": 33,
@@ -24,6 +24,14 @@
      "to": 5881,
      "measured": 5881,
      "why": "kernels: mmq-few-ring2, mmvq-active-warps, mmvq-moe-row1 (+165 -13 in mmq-few.cu and mmvq.cu) on top of the k-pool indexer rows; the measured total of the merged series (boltbeam-runs/exact-patches-20261124); owner standing rule: raise by the measured remainder",
+     "date": "2026-11-25",
+     "approved": "Owner-approved 2026-11-21"
+    },
+    {
+     "from": 5881,
+     "to": 5946,
+     "measured": 5946,
+     "why": "state: draft-vocab-subset (+66 -1 in src/llama-context.cpp, llama-context.h, llama-cparams.h, models/qwen4exp.cpp), the owner's everyday draft head (boltbeam-runs/vocab-subset-stack-20261125: +12.5 tok/s like-state; boltbeam-runs/vocab-subset-gate-20261125: 100-problem gate pass on pass rate and loops); owner standing rule: raise by the measured remainder",
      "date": "2026-11-25",
      "approved": "Owner-approved 2026-11-21"
     }

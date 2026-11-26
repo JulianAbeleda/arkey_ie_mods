@@ -150,7 +150,7 @@
    "applier": "git_apply",
    "verified": {
     "state": "tree",
-    "why": "release-kpool-exact-b12681: the 6 modules on b12681 with the k-pool indexer rows and the three launch-shape rows in kernels",
+    "why": "release-vsubset-b12681: the 6 modules on b12681 with the k-pool indexer rows, the three launch-shape rows in kernels and draft-vocab-subset in state",
     "entries": []
    }
   },
@@ -4269,13 +4269,68 @@
    ],
    "output": "quality-gated",
    "patch": "engines/llama.cpp/b12681/patches/state.patch",
-   "sha256": "32287303be9d651d153247d89cc566ffd60970b1c53fbe6419c6732d289d5994",
+   "sha256": "05387ff7a37a5f2d9d08f9228230e8040d522417f47fb826902a9fc38705b616",
    "lines": {
-    "added": 157,
+    "added": 222,
     "removed": 4
    },
    "budget": {
-    "added": 170,
+    "added": 240,
+    "removed": 4
+   },
+   "files": [
+    "common/speculative.cpp",
+    "src/llama-context.cpp",
+    "src/llama-context.h",
+    "src/llama-cparams.h",
+    "src/models/qwen4exp.cpp"
+   ],
+   "depends_on": {
+    "apply": [],
+    "run": []
+   },
+   "rule_exceptions": [
+    "check"
+   ],
+   "module": "state"
+  },
+  {
+   "id": "llama.cpp/b12681/draft-vocab-subset",
+   "engine": "llama.cpp",
+   "version": "b12681",
+   "name": "draft-vocab-subset",
+   "title": "draft head computes logits for a listed subset of token ids only",
+   "state": "series",
+   "order": 28,
+   "applier": "git_apply",
+   "base": {
+    "kind": "git_commit",
+    "commit": "d141011c25781519123be51019441cd710260cb2",
+    "tag": "b12681"
+   },
+   "switch": {
+    "kind": "env",
+    "name": "LLAMA_DRAFT_VOCAB_SUBSET",
+    "on": "/path/ids: whitespace-separated token ids (16 to n_vocab - 1), written by boltbeam derive vocab-subset",
+    "default_run": "off",
+    "default_run_why": "off: the owner's choice for his own machine, not a default for others; the draft proposes only listed ids, so long outputs are not text-neutral (boltbeam-runs/vast-second-5090-20261125: public-lcb24 ON = OFF 9/24), and at the 256k line it fits only with LLAMA_KV_STREAM=42848 (boltbeam-runs/vocab-subset-stack-20261125)"
+   },
+   "switch_null_why": null,
+   "check": null,
+   "check_needs": [],
+   "marker": "LLAMA_DRAFT_VOCAB_SUBSET",
+   "knobs": [
+    "LLAMA_DRAFT_VOCAB_SUBSET"
+   ],
+   "output": "quality-gated",
+   "patch": "engines/llama.cpp/b12681/patches/state.patch",
+   "sha256": "05387ff7a37a5f2d9d08f9228230e8040d522417f47fb826902a9fc38705b616",
+   "lines": {
+    "added": 222,
+    "removed": 4
+   },
+   "budget": {
+    "added": 240,
     "removed": 4
    },
    "files": [
@@ -4301,7 +4356,7 @@
    "name": "graph-slots",
    "title": "draft context keeps a graph per small ubatch size",
    "state": "series",
-   "order": 28,
+   "order": 29,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4325,13 +4380,13 @@
    ],
    "output": "identical",
    "patch": "engines/llama.cpp/b12681/patches/state.patch",
-   "sha256": "32287303be9d651d153247d89cc566ffd60970b1c53fbe6419c6732d289d5994",
+   "sha256": "05387ff7a37a5f2d9d08f9228230e8040d522417f47fb826902a9fc38705b616",
    "lines": {
-    "added": 157,
+    "added": 222,
     "removed": 4
    },
    "budget": {
-    "added": 170,
+    "added": 240,
     "removed": 4
    },
    "files": [
@@ -4357,7 +4412,7 @@
    "name": "ckpt-pinned",
    "title": "context checkpoints in a pinned pool",
    "state": "series",
-   "order": 29,
+   "order": 30,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4426,7 +4481,7 @@
    "name": "tokenize-incr",
    "title": "server tokenizes only the prompt's new part",
    "state": "series",
-   "order": 30,
+   "order": 31,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4497,7 +4552,7 @@
    "name": "ple-prefetch",
    "title": "per-layer embedding rows read ahead on a thread",
    "state": "series",
-   "order": 31,
+   "order": 32,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4568,7 +4623,7 @@
    "name": "ple-prefetch-step",
    "title": "per-layer embedding rows read ahead as each draft token is known",
    "state": "series",
-   "order": 32,
+   "order": 33,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4639,7 +4694,7 @@
    "name": "sched-async-inputs",
    "title": "scheduler uploads host inputs on the split's stream, no host sync",
    "state": "series",
-   "order": 33,
+   "order": 34,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4710,7 +4765,7 @@
    "name": "rbudget-backend",
    "title": "a reasoning budget keeps backend (GPU) sampling on",
    "state": "series",
-   "order": 34,
+   "order": 35,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4781,7 +4836,7 @@
    "name": "sched-pack-inputs",
    "title": "a split's staged host inputs go as one packed copy + one scatter kernel",
    "state": "series",
-   "order": 35,
+   "order": 36,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4856,7 +4911,7 @@
    "name": "spec-prompt-ref",
    "title": "the drafter reads the slot tokens in place, no per-step prompt copy",
    "state": "series",
-   "order": 36,
+   "order": 37,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4927,7 +4982,7 @@
    "name": "grammar-backend",
    "title": "a tool-call grammar keeps backend (GPU) sampling on (lazy: until it triggers)",
    "state": "series",
-   "order": 37,
+   "order": 38,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -4998,7 +5053,7 @@
    "name": "grammar-backend-triggered",
    "title": "after the trigger, keep the backend's greedy pick when the grammar accepts it",
    "state": "series",
-   "order": 38,
+   "order": 39,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -5073,7 +5128,7 @@
    "name": "yield-release",
    "title": "the server ends a yield without waiting for its idle worker's hand-back",
    "state": "series",
-   "order": 39,
+   "order": 40,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
@@ -5144,7 +5199,7 @@
    "name": "sampler-reserve-reuse",
    "title": "a per-request backend sampler keeps the last reserve when its graphs match",
    "state": "series",
-   "order": 40,
+   "order": 41,
    "applier": "git_apply",
    "base": {
     "kind": "git_commit",
