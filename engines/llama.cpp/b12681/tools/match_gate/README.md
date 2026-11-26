@@ -16,6 +16,13 @@ what changed is only where that tree differs:
   `drive_session.py` starts its 300 s health wait once the queued server has started; `match_gate.sh` runs the dry run
   as its own process group, stops it when the drive fails (a server still queued included) and waits for it to end
   before the replay reads the recording.
+- `cudastub.cpp`: the loader checks every `launches` entry against cuFuncGetAttribute / cuDeviceGetAttribute launch
+  limits, and the stub answered 0 to all of them, so a dry run (on b12521 too) dropped every launches entry the device
+  keeps. The stub now answers the RTX 5090's device limits (sm_120, 101,376 B opt-in shared, 1,024 threads, grid
+  2^31-1 x 65,535 x 65,535) and, per function, what the cubin states: static shared (`.nv.shared.<name>` less the 1 KB
+  reserved), registers (`.nv.info` REGCOUNT) and the launch bound (`.nv.info.<name>` MAX_THREADS, capped by the
+  registers). Equal to the driver's cuFuncGetAttribute on 16 of 16 kernels compared (tools/test_check.py,
+  `MatchGateTools`). A cubin it cannot read gives 0 and the entry is dropped, as before.
 - The hook entry has the same signature. This base also calls it once per evaluation with i = -1 (a reset of the
   quantized-src1 records); the recorder's new-pass rule (the node index went back) starts a pass there, and the call
   takes no node.

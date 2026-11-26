@@ -555,10 +555,14 @@ class MatchGateTools(unittest.TestCase):
                 if f.endswith(".sh"):
                     self.assertEqual(subprocess.run(["bash", "-n", os.path.join(d, f)]).returncode, 0, f"{v} {f}")
             patch = os.path.join(folder, "patches", "kernels.patch")
-            text = open(patch, encoding="utf-8").read() if os.path.exists(patch) else ""
+            text = ""
+            if os.path.exists(patch):
+                with open(patch, encoding="utf-8") as fh:
+                    text = fh.read()
             part = text.split("+++ b/ggml/src/ggml-cuda/ext-kernels.cpp", 1)[1].split("\ndiff --git", 1)[0] if "ext-kernels.cpp" in text else ""
             local = re.findall(r'^\+#include "([^"/]+\.cuh?)"', part, re.M)
-            build = open(os.path.join(d, "gate_build.sh"), encoding="utf-8").read()
+            with open(os.path.join(d, "gate_build.sh"), encoding="utf-8") as fh:
+                build = fh.read()
             if local:
                 self.assertIn("-I$(dirname $SRC)", build, f"{v}: ext-kernels.cpp includes {local} from its own folder")
             seen += 1
@@ -576,3 +580,51 @@ class MatchGateTools(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("server not started", r.stderr)
             self.assertLess(time.time() - t0, 10)
+
+    # cuFuncGetAttribute (MAX_THREADS_PER_BLOCK, SHARED_SIZE_BYTES, NUM_REGS) on the RTX 5090, CUDA driver 13.2, for the
+    # b12681 kernel artifacts in this repo (BoltBeam runtime/cuda_device, gpu_run --short, 2026-11-25;
+    # boltbeam-runs/loopfix-recorder-20261125/gpu-attrs.json)
+    DRIVER = {"region_down_silu_c2r4u5": (256, 8192, 44), "region_down_tail": (64, 0, 19), "region_ff96d2ea18a8": (16, 0, 19),
+              "region_gdn_gate": (256, 1024, 38), "region_inject_tail": (256, 1024, 40), "region_shexp_gate": (256, 1024, 38),
+              "rt_kproj_c2r4u1": (256, 8192, 58), "rt_router_c2r4u1": (256, 8192, 58), "sparse_exact_combine_72_256_r14": (256, 0, 58),
+              "sparse_exact_combine_96_256_r10": (256, 0, 48), "sparse_mask_count_t3": (256, 32, 40), "sparse_mask_count_t4": (256, 32, 40),
+              "sparse_mask_write_t3_l2051": (256, 96, 59), "sparse_mask_write_t4_l2051": (256, 96, 59),
+              "sparse_q8_exact2_t3_h24_2_d256_l2051_r14": (64, 26624, 209), "sparse_q8_exact2_t4_h24_2_d256_l2051_r10": (64, 35328, 201)}
+
+    def test_b12681_stub_reads_the_drivers_function_attributes_from_the_cubin(self):
+        """The hook's loader checks a launches entry against these attributes; the stub answered 0 before, so a dry run
+        dropped every launches entry the device keeps. Read from the cubin, they equal the driver's on every kernel here."""
+        import glob, shutil, subprocess
+        cu = os.environ.get("CUDA_INCLUDE", "/usr/local/cuda/include")
+        if not (shutil.which("g++") and os.path.exists(os.path.join(cu, "cuda.h"))):
+            self.skipTest("needs g++ and the CUDA headers")
+        d = dict((v, g) for v, _, g in self.gates())["b12681"]
+        main = r'''
+#include <cuda.h>
+#include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <string>
+int main(int argc, char ** argv) {
+    for (int i = 1; i + 1 < argc; i += 2) {
+        std::ifstream f(argv[i], std::ios::binary); std::string b((std::istreambuf_iterator<char>(f)), {});
+        CUmodule m; CUfunction fn; int t, s, r;
+        cuModuleLoadData(&m, b.data()); cuModuleGetFunction(&fn, m, argv[i + 1]);
+        cuFuncGetAttribute(&t, CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, fn); cuFuncGetAttribute(&s, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fn);
+        cuFuncGetAttribute(&r, CU_FUNC_ATTRIBUTE_NUM_REGS, fn);
+        printf("%s %d %d %d\n", argv[i + 1], t, s, r);
+    }
+}'''
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, "main.cpp"), "w").write(main)
+            exe = os.path.join(tmp, "attrs")
+            got = subprocess.run(["g++", "-O1", "-std=c++17", "-w", os.path.join(tmp, "main.cpp"), os.path.join(d, "cudastub.cpp"), f"-I{cu}", "-o", exe], capture_output=True, text=True)
+            self.assertEqual(got.returncode, 0, got.stderr[-800:])
+            args = []
+            for f in sorted(glob.glob(os.path.join(os.path.dirname(os.path.dirname(d)), "kernels", "*", "*.cubin"))):
+                if os.path.basename(f)[:-6] in self.DRIVER:
+                    args += [f, os.path.basename(f)[:-6]]
+            out = subprocess.run([exe, *args], capture_output=True, text=True, check=True).stdout.split("\n")
+            seen = {w[0]: tuple(map(int, w[1:])) for w in (x.split() for x in out) if w}
+        self.assertGreaterEqual(len(seen), 12)
+        self.assertEqual(seen, {k: v for k, v in self.DRIVER.items() if k in seen})

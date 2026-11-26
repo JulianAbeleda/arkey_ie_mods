@@ -2441,12 +2441,12 @@
  "tools": [
   {
    "path": "tools/match_gate/README.md",
-   "sha256": "a9d40b29b0308c28e73ac3b1edffad6131a16486ad0af1a11dc0b6c8a60f84a1",
+   "sha256": "6ba6199fc82fe4748fc2e1027ac0aeccc02a794ced2cf45b4cbb27a4cbcbe232",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
    ],
-   "what": "what the match gate is on this base (the b12521 tool carried over: one include path, memcap --wait, the dry run's own process group), and what its dry run proves and does not: the 72,680-offset comparison is b12521's; no b12681 GPU recording compared yet; a src1_q8_1 hand-off to a later stock matmul is outside the matcher."
+   "what": "what the match gate is on this base (the b12521 tool carried over: one include path, memcap --wait, the dry run's own process group, a stub that answers launch limits), and what its dry run proves and does not: the 72,680-offset comparison is b12521's; no b12681 GPU recording compared yet; a src1_q8_1 hand-off to a later stock matmul is outside the matcher."
   },
   {
    "path": "tools/match_gate/build_stubs.sh",
@@ -2468,12 +2468,12 @@
   },
   {
    "path": "tools/match_gate/cudastub.cpp",
-   "sha256": "b8c17ef0705d0b49947e47996032126b381a9ea174345d4a46025265ceba1dd9",
+   "sha256": "0baa78af9ed22935f3bea64c8167cfd6a5174a0fdc807be8848485096d09b496",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
    ],
-   "what": "the do-nothing CUDA runtime, driver and cuBLAS for the dry run (built by build_stubs.sh)."
+   "what": "the do-nothing CUDA runtime, driver and cuBLAS for the dry run (built by build_stubs.sh); it answers the RTX 5090's launch limits and each kernel's static shared, registers and launch bound from its cubin, so the hook's loader keeps the launches entries the device keeps (equal to the driver's on 16 of 16 kernels)."
   },
   {
    "path": "tools/match_gate/drive_session.py",

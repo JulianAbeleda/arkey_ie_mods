@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -106,9 +107,21 @@ void __cudaRegisterVar(void **, char *, char *, const char *, int, size_t, int, 
 // ---- driver
 CUresult cuDeviceGet(CUdevice * d, int) { *d = 0; return CUDA_SUCCESS; }
 CUresult cuCtxGetDevice(CUdevice * d) { *d = 0; return CUDA_SUCCESS; }
+// the dev box's card (RTX 5090, sm_120, measured: BoltBeam data/targets.json occupancy_scan): the SM count the hook's
+// sm_count key reads, and the launch limits its loader checks a launches entry against (ext_load: block, grid, shared)
 CUresult cuDeviceGetAttribute(int * v, CUdevice_attribute a, CUdevice) {
-    *v = a == CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED ? 1 : a == CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR ? 12
-       : a == CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT ? 170 : 0; return CUDA_SUCCESS;   // the SM count cudaGetDeviceProperties states (the hook's sm_count key reads it)
+    switch (a) {
+        case CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED: *v = 1; break;
+        case CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR: *v = 12; break;
+        case CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT: *v = 170; break;
+        case CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X: *v = 2147483647; break;
+        case CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y: case CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z: *v = 65535; break;
+        case CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK: *v = 1024; break;
+        case CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN: *v = 101376; break;
+        case CU_DEVICE_ATTRIBUTE_WARP_SIZE: *v = 32; break;
+        default: *v = 0;
+    }
+    return CUDA_SUCCESS;
 }
 CUresult cuGetErrorString(CUresult, const char ** s) { *s = "cudastub"; return CUDA_SUCCESS; }
 CUresult cuMemGetAllocationGranularity(size_t * g, const CUmemAllocationProp *, CUmemAllocationGranularity_flags) { *g = (size_t) 2 << 20; return CUDA_SUCCESS; }
@@ -118,11 +131,72 @@ CUresult cuMemCreate(CUmemGenericAllocationHandle * h, size_t, const CUmemAlloca
 CUresult cuMemcpyDtoH_v2(void * d, CUdeviceptr s, size_t n) { stub_copy(d, (const void *) (uintptr_t) s, n, true); return CUDA_SUCCESS; }
 CUresult cuMemcpyHtoD_v2(CUdeviceptr d, const void * s, size_t n) { stub_copy((void *) (uintptr_t) d, s, n, false); return CUDA_SUCCESS; }
 CUresult cuStreamIsCapturing(CUstream, CUstreamCaptureStatus * st) { *st = CU_STREAM_CAPTURE_STATUS_NONE; return CUDA_SUCCESS; }
-CUresult cuModuleLoadData(CUmodule * m, const void *) { *m = (CUmodule) malloc(8); return CUDA_SUCCESS; }
-CUresult cuModuleGetFunction(CUfunction * f, CUmodule, const char * name) {
+// A module keeps a copy of its cubin (an ELF): a function's static shared bytes (.nv.shared.<name>), registers
+// (.nv.info EIATTR_REGCOUNT) and launch bound (.nv.info.<name> EIATTR_MAX_THREADS) are read from it, so the hook's
+// loader checks a launches entry against what the driver would say (cuFuncGetAttribute). A module that is not an ELF64
+// (or a function it lacks) has no facts: its attributes read 0, and the loader drops the entry, as before.
+struct stub_fn_facts { int smem = 0, regs = 0, max_threads = 0; };
+static std::vector<stub_fn_facts> g_fn_facts;
+static stub_fn_facts stub_elf_facts(const std::string & img, const char * name) {
+    stub_fn_facts f;
+    auto rd = [&](size_t o, size_t n) -> uint64_t { uint64_t v = 0; if (o + n <= img.size()) memcpy(&v, img.data() + o, n); return v; };
+    if (img.size() < 64 || memcmp(img.data(), "\x7f" "ELF", 4) != 0 || img[4] != 2) return f;
+    const uint64_t shoff = rd(0x28, 8), shent = rd(0x3a, 2), shnum = rd(0x3c, 2), shstr = rd(0x3e, 2);
+    const uint64_t stroff = rd(shoff + shstr * shent + 0x18, 8);
+    const std::string fn = name;
+    for (uint64_t i = 0; i < shnum; ++i) {
+        const uint64_t h = shoff + i * shent, off = rd(h + 0x18, 8), size = rd(h + 0x20, 8);
+        const std::string sec = stroff + rd(h, 4) < img.size() ? std::string(img.c_str() + stroff + rd(h, 4)) : "";
+        if (sec == ".nv.shared." + fn) f.smem = (int) std::max<uint64_t>(size, 1024) - 1024;   // the section holds the block's 1 KB reserved shared, the driver's attribute does not (19 of 19 cubins, measured)
+        if (sec != ".nv.info" && sec != ".nv.info." + fn) continue;
+        for (uint64_t o = off; o + 4 <= off + size;) {   // records: format, attribute, then a u16 value (HVAL) or a u16 size and that many bytes (SVAL)
+            const int fmt = (int) rd(o, 1), attr = (int) rd(o + 1, 1);
+            if (fmt == 4) {
+                const uint64_t n = rd(o + 2, 2);
+                if (sec == ".nv.info" && attr == 0x2f && n == 8) {   // EIATTR_REGCOUNT {symbol index, registers}: one row per function
+                    const uint64_t symtab = [&] { for (uint64_t k = 0; k < shnum; ++k) if (rd(shoff + k * shent + 4, 4) == 2) return shoff + k * shent; return (uint64_t) 0; }();
+                    const uint64_t sym = rd(o + 4, 4), symoff = rd(symtab + 0x18, 8), strtab = rd(shoff + rd(symtab + 0x28, 4) * shent + 0x18, 8);
+                    if (symtab && fn == std::string(img.c_str() + std::min<uint64_t>(img.size() - 1, strtab + rd(symoff + sym * 24, 4)))) f.regs = (int) rd(o + 8, 4);
+                }
+                if (sec != ".nv.info" && attr == 0x05 && n == 12) f.max_threads = (int) (rd(o + 4, 4) * rd(o + 8, 4) * rd(o + 12, 4));   // EIATTR_MAX_THREADS (launch bounds)
+                o += 4 + n;
+            } else {
+                o += 4;
+            }
+        }
+    }
+    if (f.regs > 0) {   // the block's registers: per thread rounded up to 8, 65,536 a block (sm_120), allocated a warp at a time
+        const int per_warp = (f.regs + 7) / 8 * 8 * 32, by_regs = 65536 / per_warp * 32;
+        f.max_threads = std::min(f.max_threads > 0 ? f.max_threads : 1024, std::min(1024, by_regs));
+    } else {
+        f.max_threads = 0;   // no register count read: unknown, the loader drops a launches entry on it
+    }
+    return f;
+}
+CUresult cuModuleLoadData(CUmodule * m, const void * image) {
+    const char * p = (const char *) image; size_t n = 0;
+    if (p && memcmp(p, "\x7f" "ELF", 4) == 0 && p[4] == 2) {   // the ELF's extent: its section headers and every section's bytes
+        uint64_t shoff, shent = 0, shnum = 0; memcpy(&shoff, p + 0x28, 8); memcpy(&shent, p + 0x3a, 2); memcpy(&shnum, p + 0x3c, 2);
+        n = shoff + shent * shnum;
+        for (uint64_t i = 0; i < shnum; ++i) {
+            uint32_t type; uint64_t off, size; memcpy(&type, p + shoff + i * shent + 4, 4); memcpy(&off, p + shoff + i * shent + 0x18, 8); memcpy(&size, p + shoff + i * shent + 0x20, 8);
+            if (type != 8) n = std::max<uint64_t>(n, off + size);   // NOBITS take no bytes
+        }
+    }
+    *m = (CUmodule) new std::string(p ? p : "", n); return CUDA_SUCCESS;
+}
+CUresult cuModuleGetFunction(CUfunction * f, CUmodule m, const char * name) {
     std::lock_guard<std::mutex> l(g_mu);
     if (g_fn_names.empty()) atexit(stub_report);
-    g_fn_names.reserve(4096); g_fn_names.push_back(name); g_fn_launches.push_back(0); *f = (CUfunction) (uintptr_t) g_fn_names.size(); return CUDA_SUCCESS;
+    g_fn_names.reserve(4096); g_fn_names.push_back(name); g_fn_launches.push_back(0); g_fn_facts.push_back(stub_elf_facts(*(const std::string *) m, name));
+    *f = (CUfunction) (uintptr_t) g_fn_names.size(); return CUDA_SUCCESS;
+}
+CUresult cuFuncGetAttribute(int * v, CUfunction_attribute a, CUfunction f) {
+    const size_t i = (size_t) (uintptr_t) f; *v = 0;
+    if (i < 1 || i > g_fn_facts.size()) return CUDA_SUCCESS;
+    const stub_fn_facts & x = g_fn_facts[i - 1];
+    *v = a == CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK ? x.max_threads : a == CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES ? x.smem : a == CU_FUNC_ATTRIBUTE_NUM_REGS ? x.regs : 0;
+    return CUDA_SUCCESS;
 }
 static thread_local const char * g_last_symbol = nullptr;
 CUresult cuLaunchKernelEx(const CUlaunchConfig *, CUfunction f, void **, void **) {
