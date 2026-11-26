@@ -5793,12 +5793,12 @@
    "engine": "llama.cpp",
    "version": "b12681",
    "path": "engines/llama.cpp/b12681/tools/match_gate/hook_gate.cpp",
-   "sha256": "0f01f0faf9b11da08e460df835c55f639d55017d55c2d57ccd27c6c3b9271fe8",
+   "sha256": "9613b8804d8472b70439f3a38c387b930d6274f6d9ebeaa239b0bc06c6708d9e",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
    ],
-   "what": "the matcher replay: per entry the windows taken a decode step, shape spots, address refusals, the rejecting rule, checked against the engine's own result (built by gate_build.sh)."
+   "what": "the matcher replay: per entry the windows taken a decode step, shape spots, address refusals, the rejecting rule, checked against the engine's own result (built by gate_build.sh); it loads the list through the stub runtime, so it keeps the entries the dry run's engine keeps."
   },
   {
    "id": "llama.cpp/b12681/hookspy.cpp",

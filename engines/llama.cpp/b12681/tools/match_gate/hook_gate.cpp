@@ -17,11 +17,10 @@
 // (region_state_copy_front matched a 10-token prompt pass and no decode step) must not count.
 // --json writes the report (arkey.match_gate.v1) that BoltBeam's region search reads (its llama.cpp match adapter) before a kernel may be timed.
 // usage: hook_gate SPY.jsonl MANIFEST.json [--check] [--steps TURNS.json] [--expect ID=N ...] [--json OUT.json]
+// The list is loaded through the stub runtime the replay links (cudastub.cpp), as the dry run's engine loads it: the
+// loader keeps and drops the same entries (a launches entry's limits are read from its cubin; a null function, as the
+// b12521 replay gave, read 0 and dropped every launches entry the engine kept).
 #include <cuda.h>
-static CUresult gate_stub_load(CUmodule * m, const void *) { *m = nullptr; return CUDA_SUCCESS; }
-static CUresult gate_stub_fn(CUfunction * f, CUmodule, const char *) { *f = nullptr; return CUDA_SUCCESS; }
-#define cuModuleLoadData gate_stub_load
-#define cuModuleGetFunction gate_stub_fn
 #include <vector>
 struct gate_reject { int line = 0, k = -1, s = -1, o = -1; };
 struct gate_refusal { int o, k, s; const char * a0, * a1, * b0, * b1, * v0, * v1; };
