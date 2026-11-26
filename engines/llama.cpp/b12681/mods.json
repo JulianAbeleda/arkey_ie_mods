@@ -2495,7 +2495,7 @@
   },
   {
    "path": "tools/match_gate/gate_build.sh",
-   "sha256": "5a63e987619d94b8967fe6ebaf2a2f03f11351c588a44362a0c8494c57d3807d",
+   "sha256": "23dd74d39979f3c525f135efb6af47d3550ccec4550a0b7604d9fc66edda297d",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
@@ -2522,12 +2522,12 @@
   },
   {
    "path": "tools/match_gate/match_gate.sh",
-   "sha256": "4bac93f619c74e99fe67f6dccd0c0fdea3f3db27210010a2b8969ca79374aa7a",
+   "sha256": "49e994b391df29da0b8e0f8bc2db379d90c02867e6fb373b6656dde3e164d78e",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
    ],
-   "what": "OUT TREE MANIFEST CTX TURNS [ENV...] -- [--expect ID=N]: the kernel hook's MATCH gate, CPU only: a dry run of TREE's unmodified build on a do-nothing CUDA runtime with the hook recorder in front, driven through the session's turns with the served requests' fields, then a replay of the hook's own matcher over the recorded graphs. Writes OUT/gate.json (arkey.match_gate.v1, stamped with the sha256 of its recording), spy.jsonl, turns.json, ldd.txt. The dry run is its own process group: a failed drive stops it. Reads MATCH_GATE_SESSION, MATCH_GATE_SERVER, MATCH_GATE_REQUEST from the environment. Read by BoltBeam's region search (its llama.cpp match adapter). Not a patch."
+   "what": "OUT TREE MANIFEST CTX TURNS [ENV...] -- [--expect ID=N]: the kernel hook's MATCH gate, CPU only: a dry run of TREE's unmodified build on a do-nothing CUDA runtime with the hook recorder in front, driven through the session's turns with the served requests' fields, then a replay of the hook's own matcher over the recorded graphs. Writes OUT/gate.json (arkey.match_gate.v1, stamped with the sha256 of its recording), spy.jsonl, turns.json, ldd.txt. The dry run is its own process group: a failed drive stops it. Reads MATCH_GATE_SESSION, MATCH_GATE_SERVER, MATCH_GATE_REQUEST from the environment. Read by BoltBeam's region search (its llama.cpp match adapter). Not a patch. TREE may hold the source and its build as src/ and build/ (a BoltBeam `mods apply` build)."
   },
   {
    "path": "tools/match_gate/stamp.py",
