@@ -11,6 +11,8 @@
 #include "ggml-backend.h"
 #include "ggml-impl.h"
 #include <dlfcn.h>
+#include <nlohmann/json.hpp>
+#include <fstream>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -110,6 +112,29 @@ static long dump_graph(const ggml_cgraph * g, std::string & text) {
 }
 static void at_exit() { std::lock_guard<std::mutex> l(g_mu); for (auto & [g, p] : g_pass) flush_pass(g, p); if (g_out) fclose(g_out); g_out = nullptr; }
 
+// the stub names the kernel launched last; a pass record names the list ENTRY (BoltBeam and hook_gate key on its id): a
+// one-kernel entry's symbol, or a launches entry's last kernel's, mapped to the entry's id by the list the engine loads
+// (GGML_CUDA_EXT_KERNELS). A symbol two entries end with stays the symbol (no entry can be named).
+static std::string entry_of(const char * sym) {
+    static const std::map<std::string, std::string> ids = [] {
+        std::map<std::string, std::string> m; std::set<std::string> twice;
+        const char * path = getenv("GGML_CUDA_EXT_KERNELS");
+        std::ifstream f(path ? path : "");
+        const nlohmann::json j = f ? nlohmann::json::parse(f, nullptr, false) : nlohmann::json();
+        if (j.is_object() && j.contains("entries")) for (const auto & e : j.at("entries")) {
+            std::string last;
+            if (e.contains("launches")) { for (const auto & q : e.at("launches")) if (q.contains("kernel")) last = q.at("kernel").value("symbol", ""); }
+            else if (e.contains("kernel")) last = e.at("kernel").value("symbol", "");
+            if (last.empty() || !e.contains("id")) continue;
+            if (!m.emplace(last, e.at("id").get<std::string>()).second) twice.insert(last);
+        }
+        for (const auto & s : twice) m.erase(s);
+        return m;
+    }();
+    const auto it = ids.find(sym);
+    return it == ids.end() ? std::string(sym) : it->second;
+}
+
 int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (*stock)(void *, ggml_tensor *), void * stock_ctx) {
     static run_fn real = (run_fn) dlsym(RTLD_NEXT, "_Z25ggml_cuda_ext_kernels_runPvP11ggml_cgraphiPFbS_P11ggml_tensorES_");
     {
@@ -129,7 +154,7 @@ int ggml_cuda_ext_kernels_run(void * stream, ggml_cgraph * cgraph, int i, bool (
         // dry run: the stub says which manifest kernel was launched; in front of the real GPU the entry is found by the gate's replay
         static const char * (*take)(void) = (const char * (*)(void)) dlsym(RTLD_DEFAULT, "cudastub_take_last_symbol");
         const char * sym = take ? take() : nullptr;
-        std::lock_guard<std::mutex> l(g_mu); pass_state & p = g_pass[cgraph]; p.hits.emplace_back(i, n); if (sym) p.by[sym]++;
+        std::lock_guard<std::mutex> l(g_mu); pass_state & p = g_pass[cgraph]; p.hits.emplace_back(i, n); if (sym) p.by[entry_of(sym)]++;
     }
     return n;
 }

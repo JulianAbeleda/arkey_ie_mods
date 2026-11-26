@@ -21,5 +21,5 @@ diff $SRC $OUT.d/ext-kernels.gate.cpp > $OUT.d/gate.diff || true
 gcc -O1 -I$T/vendor/hash -c $T/vendor/hash/sha256/sha256.c -o $OUT.d/sha256.o
 g++ -O1 -std=c++17 -w -DGATE_SRC="\"$SRC\"" $D/hook_gate.cpp -I$OUT.d -I$(dirname $SRC) -I$T/ggml/include -I$T/ggml/src -I$T/vendor -I$T/vendor/hash -I$CU \
     $OUT.d/sha256.o -L$T/build/bin -lggml-base -L$B/stublib -l:libcuda.so.1 -Wl,-rpath,$T/build/bin -Wl,-rpath,$B/stublib -o $OUT
-g++ -O1 -std=c++17 -w -fPIC -shared $D/hookspy.cpp -I$T/ggml/include -I$T/ggml/src -o $(dirname $OUT)/libhookspy.so -ldl
+g++ -O1 -std=c++17 -w -fPIC -shared $D/hookspy.cpp -I$T/ggml/include -I$T/ggml/src -I$T/vendor -o $(dirname $OUT)/libhookspy.so -ldl
 echo "built $OUT and $(dirname $OUT)/libhookspy.so ($(grep -c '^[<>]' $OUT.d/gate.diff) changed lines in ext_match, lines $A-$Z of $SRC)"

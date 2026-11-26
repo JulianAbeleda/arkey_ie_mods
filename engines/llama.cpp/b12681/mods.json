@@ -2495,7 +2495,7 @@
   },
   {
    "path": "tools/match_gate/gate_build.sh",
-   "sha256": "65a14388ef9bfa7e0af1754634aa47576be6386677575f8f43778f0590b03bb9",
+   "sha256": "5a63e987619d94b8967fe6ebaf2a2f03f11351c588a44362a0c8494c57d3807d",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
@@ -2513,16 +2513,16 @@
   },
   {
    "path": "tools/match_gate/hookspy.cpp",
-   "sha256": "9156b827d6df53bcff527fafbaa54ef007177911106b2a55cae9e2cd9752a954",
+   "sha256": "b9d74ed525319d9dbd01001423a2db00133d6c8fea149602e9f741cae6ee5f91",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
    ],
-   "what": "the hook recorder (LD_PRELOAD): every graph with its allocator addresses and what the hook's matcher took, as boltbeam.engine_graph_dump.v2 lines (built by gate_build.sh)."
+   "what": "the hook recorder (LD_PRELOAD): every graph with its allocator addresses and what the hook's matcher took, as boltbeam.engine_graph_dump.v2 lines (built by gate_build.sh). A pass record names the list entry id a launch belongs to (a launches entry by its last kernel), not the kernel symbol."
   },
   {
    "path": "tools/match_gate/match_gate.sh",
-   "sha256": "c64d618959336552fc7245feed105b83a3b533bb273ac51101b7ece1c8271164",
+   "sha256": "4bac93f619c74e99fe67f6dccd0c0fdea3f3db27210010a2b8969ca79374aa7a",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"

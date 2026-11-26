@@ -22,9 +22,9 @@ ENVS=(); while [ $# -gt 0 ] && [ "$1" != -- ]; do ENVS+=("$1"); shift; done; [ "
 : "${MATCH_GATE_SESSION:?set MATCH_GATE_SESSION}" "${MATCH_GATE_SERVER:?set MATCH_GATE_SERVER}"
 B=${MATCH_GATE_BUILD:-${XDG_CACHE_HOME:-$HOME/.cache}/arkey_ie_mods/match_gate}; SRC=$TREE/ggml/src/ggml-cuda/ext-kernels.cpp
 mkdir -p $B; SY=$(mktemp -p $B); { cat $D/syms.txt; nm -D --undefined-only $TREE/build/bin/libggml-cuda.so.1.0.0 | awk '{print $2}' | grep -E '^cu'; } | sed 's/@.*//' | sort -u > $SY
-ST=$B/stubs-$(cat $SY $D/cudastub.cpp | sha256sum | cut -c1-16)   # the symbols the tree's build imports: a newer tree may import more
+ST=$B/stubs-$(cat $SY $D/cudastub.cpp $D/build_stubs.sh | sha256sum | cut -c1-16)   # the symbols the tree's build imports: a newer tree may import more
 [ -f $ST/stublib/libcuda.so.1 ] || "$D/build_stubs.sh" $ST $SY > /dev/null || exit 9; rm -f $SY
-G=$B/gates/$(cat $SRC $D/hook_gate.cpp $D/hookspy.cpp | sha256sum | cut -c1-16)-${ST##*-}
+G=$B/gates/$(cat $SRC $D/hook_gate.cpp $D/hookspy.cpp $D/gate_build.sh $TREE/ggml/include/ggml.h $(dirname $SRC)/*.cuh | sha256sum | cut -c1-16)-${ST##*-}
 [ -x $G/hook_gate ] || { mkdir -p $G && "$D/gate_build.sh" $TREE $G/hook_gate $ST; } || exit 9
 mkdir -p $OUT; export DRY_PORT=${DRY_PORT:-$((39600 + RANDOM % 300))}
 setsid "$D/dryrun.sh" $OUT $TREE/build/bin $G $ST "GGML_CUDA_EXT_KERNELS=$MAN ${ENVS[*]}" "-c $CTX $MATCH_GATE_SERVER" > $OUT/launch.log 2>&1 & LP=$!
