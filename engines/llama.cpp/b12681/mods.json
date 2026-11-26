@@ -2438,6 +2438,116 @@
    ]
   }
  ],
+ "tools": [
+  {
+   "path": "tools/match_gate/README.md",
+   "sha256": "a9d40b29b0308c28e73ac3b1edffad6131a16486ad0af1a11dc0b6c8a60f84a1",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "what the match gate is on this base (the b12521 tool carried over: one include path, memcap --wait, the dry run's own process group), and what its dry run proves and does not: the 72,680-offset comparison is b12521's; no b12681 GPU recording compared yet; a src1_q8_1 hand-off to a later stock matmul is outside the matcher."
+  },
+  {
+   "path": "tools/match_gate/build_stubs.sh",
+   "sha256": "7cd48d9148171ba799439f412f73dfb45fb9c480bf4f0b352da6f1fade484fa9",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "STUBS SYMBOLS: the do-nothing CUDA runtime (cudastub.cpp) as the four libraries the engine build loads, into STUBS/stublib; a do-nothing default for every symbol of SYMBOLS (syms.txt and what the tree's libggml-cuda imports) it does not define (match_gate.sh runs it)."
+  },
+  {
+   "path": "tools/match_gate/compare_spy.py",
+   "sha256": "b0f114ccde35e83f4ae99c52ba8b48cb067ca88d378913f3dfed0b5b42b9ced5",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "A.jsonl B.jsonl: two recordings (a dry run and a GPU run of the same build and turns): per common graph, how many tensors sit at the same offset and whether the matcher took the same windows."
+  },
+  {
+   "path": "tools/match_gate/cudastub.cpp",
+   "sha256": "b8c17ef0705d0b49947e47996032126b381a9ea174345d4a46025265ceba1dd9",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "the do-nothing CUDA runtime, driver and cuBLAS for the dry run (built by build_stubs.sh)."
+  },
+  {
+   "path": "tools/match_gate/drive_session.py",
+   "sha256": "974474a7ee57d03e2caedf5911a8d844ba22ab04fbf1b6dc5948bbdccc0fea46",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "OUT SESSION FIRST-LAST [REQUEST.json]: the session's turns through the chat endpoint with the served request's fields, each turn's decode passes marked in turns.json (match_gate.sh runs it). Its 300 s health wait starts once the queued server has started; a memcap refusal ends it at once."
+  },
+  {
+   "path": "tools/match_gate/dryrun.sh",
+   "sha256": "f0d60a451d6e50894d6b86948311552d2054181c7af1f0663f07e90f3762d45f",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "OUT BIN GATE_DIR STUBS SWITCHES FLAGS: the engine server on the stub runtime with the recorder preloaded; refuses to start when ldd shows a real CUDA library (match_gate.sh runs it). memcap --wait: queues behind other jobs' reservations."
+  },
+  {
+   "path": "tools/match_gate/gate_build.sh",
+   "sha256": "65a14388ef9bfa7e0af1754634aa47576be6386677575f8f43778f0590b03bb9",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "TREE OUT BUILD: hook_gate built from TREE's own ext_match (a mechanical copy that records each refusal's line and byte ranges) and the recorder hookspy.cpp against TREE's headers (match_gate.sh runs it). The matcher's own folder is on the include path (ext-src1q.cuh)."
+  },
+  {
+   "path": "tools/match_gate/hook_gate.cpp",
+   "sha256": "0f01f0faf9b11da08e460df835c55f639d55017d55c2d57ccd27c6c3b9271fe8",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "the matcher replay: per entry the windows taken a decode step, shape spots, address refusals, the rejecting rule, checked against the engine's own result (built by gate_build.sh)."
+  },
+  {
+   "path": "tools/match_gate/hookspy.cpp",
+   "sha256": "9156b827d6df53bcff527fafbaa54ef007177911106b2a55cae9e2cd9752a954",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "the hook recorder (LD_PRELOAD): every graph with its allocator addresses and what the hook's matcher took, as boltbeam.engine_graph_dump.v2 lines (built by gate_build.sh)."
+  },
+  {
+   "path": "tools/match_gate/match_gate.sh",
+   "sha256": "c64d618959336552fc7245feed105b83a3b533bb273ac51101b7ece1c8271164",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "OUT TREE MANIFEST CTX TURNS [ENV...] -- [--expect ID=N]: the kernel hook's MATCH gate, CPU only: a dry run of TREE's unmodified build on a do-nothing CUDA runtime with the hook recorder in front, driven through the session's turns with the served requests' fields, then a replay of the hook's own matcher over the recorded graphs. Writes OUT/gate.json (arkey.match_gate.v1, stamped with the sha256 of its recording), spy.jsonl, turns.json, ldd.txt. The dry run is its own process group: a failed drive stops it. Reads MATCH_GATE_SESSION, MATCH_GATE_SERVER, MATCH_GATE_REQUEST from the environment. Read by BoltBeam's region search (its llama.cpp match adapter). Not a patch."
+  },
+  {
+   "path": "tools/match_gate/stamp.py",
+   "sha256": "64c93639cb66d053191c9bdbe6250e94b74aaa66d2845f31e5c9cbd7c7b9b5ae",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "OUT SOURCE: adds recording_sha256 (spy.jsonl, turns.json), matcher_source_sha256, produced_by dry run and device null to OUT/gate.json (match_gate.sh runs it)."
+  },
+  {
+   "path": "tools/match_gate/syms.txt",
+   "sha256": "ff4c3b696a5b349bf698b148a291541b826fe666b7a7814760f73c7edd5bd471",
+   "needs": [
+    "ext-kernels",
+    "ext-kernels-window"
+   ],
+   "what": "the CUDA symbols the engine build imports, for build_stubs.sh's do-nothing defaults."
+  }
+ ],
  "tested_trees": [
   {
    "id": "release-kpool-exact-b12681",

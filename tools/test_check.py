@@ -531,3 +531,48 @@ class DefaultRunTest(unittest.TestCase):
             self.assertTrue(any("default_run_where must name" in x for x in c.default_run_bad(bad, {"mods": [bad]})), w)
         off = self.mod("a", default_run="off", default_run_why="w", default_run_where={"sm_count": 170})
         self.assertIn("switch.default_run_where on a row whose default_run is not on", c.default_run_bad(off, {"mods": [off]}))
+
+
+class MatchGateTools(unittest.TestCase):
+    """engines/<engine>/<version>/tools/match_gate: the match gate builds the replay from the tree's own matcher, so its
+    include path must reach every header that matcher includes from its own folder (b12681: ext-src1q.cuh); its scripts
+    parse; on b12681 a dry run whose server memcap refused ends the drive at once (no 300 s wait, no orphan)."""
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def gates(self):
+        top = os.path.join(self.ROOT, "engines")
+        for e in sorted(x for x in os.listdir(top) if os.path.isdir(os.path.join(top, x))):
+            for v in sorted(os.listdir(os.path.join(top, e))):
+                d = os.path.join(top, e, v, "tools", "match_gate")
+                if os.path.isdir(d):
+                    yield v, os.path.join(top, e, v), d
+
+    def test_scripts_parse_and_the_matchers_local_headers_are_on_the_include_path(self):
+        import re, subprocess
+        seen = 0
+        for v, folder, d in self.gates():
+            for f in sorted(os.listdir(d)):
+                if f.endswith(".sh"):
+                    self.assertEqual(subprocess.run(["bash", "-n", os.path.join(d, f)]).returncode, 0, f"{v} {f}")
+            patch = os.path.join(folder, "patches", "kernels.patch")
+            text = open(patch, encoding="utf-8").read() if os.path.exists(patch) else ""
+            part = text.split("+++ b/ggml/src/ggml-cuda/ext-kernels.cpp", 1)[1].split("\ndiff --git", 1)[0] if "ext-kernels.cpp" in text else ""
+            local = re.findall(r'^\+#include "([^"/]+\.cuh?)"', part, re.M)
+            build = open(os.path.join(d, "gate_build.sh"), encoding="utf-8").read()
+            if local:
+                self.assertIn("-I$(dirname $SRC)", build, f"{v}: ext-kernels.cpp includes {local} from its own folder")
+            seen += 1
+        self.assertGreaterEqual(seen, 2)
+
+    def test_b12681_drive_ends_when_memcap_refused_the_server(self):
+        import subprocess, time
+        d = dict((v, g) for v, _, g in self.gates())["b12681"]
+        with tempfile.TemporaryDirectory() as out:
+            open(os.path.join(out, "server.log"), "w").write("memcap: refused -- cap would be 1M; need 12288M. Use --wait to queue.\n")
+            open(os.path.join(out, "s.json"), "w").write('{"turns": []}')
+            t0 = time.time()
+            r = subprocess.run([sys.executable, "-I", os.path.join(d, "drive_session.py"), out, os.path.join(out, "s.json"), "1-1"], capture_output=True, text=True,
+                               timeout=60, env={**os.environ, "DRY_PORT": "1"})
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("server not started", r.stderr)
+            self.assertLess(time.time() - t0, 10)
