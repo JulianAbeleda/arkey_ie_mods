@@ -5745,12 +5745,12 @@
    "engine": "llama.cpp",
    "version": "b12681",
    "path": "engines/llama.cpp/b12681/tools/match_gate/cudastub.cpp",
-   "sha256": "0baa78af9ed22935f3bea64c8167cfd6a5174a0fdc807be8848485096d09b496",
+   "sha256": "8a4c8a9b7099e359fe56c45d1da31b6dc8f8326417633b2b6846a3b40c4267b5",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
    ],
-   "what": "the do-nothing CUDA runtime, driver and cuBLAS for the dry run (built by build_stubs.sh); it answers the RTX 5090's launch limits and each kernel's static shared, registers and launch bound from its cubin, so the hook's loader keeps the launches entries the device keeps (equal to the driver's on 16 of 16 kernels)."
+   "what": "the do-nothing CUDA runtime, driver and cuBLAS for the dry run (built by build_stubs.sh); it answers the RTX 5090's launch limits and each kernel's static shared, registers and launch bound from its cubin, so the hook's loader keeps the launches entries the device keeps (equal to the driver's on 16 of 16 kernels). It allocates a list entry's scratch, so the engine takes entries with scratch as the replay does."
   },
   {
    "id": "llama.cpp/b12681/drive_session.py",
@@ -5793,12 +5793,12 @@
    "engine": "llama.cpp",
    "version": "b12681",
    "path": "engines/llama.cpp/b12681/tools/match_gate/hook_gate.cpp",
-   "sha256": "9613b8804d8472b70439f3a38c387b930d6274f6d9ebeaa239b0bc06c6708d9e",
+   "sha256": "6d75dae5dd816a132df5b8474f6fef5de317834d8e176f76a6254e86c746d966",
    "needs": [
     "ext-kernels",
     "ext-kernels-window"
    ],
-   "what": "the matcher replay: per entry the windows taken a decode step, shape spots, address refusals, the rejecting rule, checked against the engine's own result (built by gate_build.sh); it loads the list through the stub runtime, so it keeps the entries the dry run's engine keeps."
+   "what": "the matcher replay: per entry the windows taken a decode step, shape spots, address refusals, the rejecting rule, checked against the engine's own result (built by gate_build.sh); it loads the list through the stub runtime, so it keeps the entries the dry run's engine keeps. It names a launches entry by the sha256 of its kernels' sha256s (BoltBeam's identity.sequence)."
   },
   {
    "id": "llama.cpp/b12681/hookspy.cpp",

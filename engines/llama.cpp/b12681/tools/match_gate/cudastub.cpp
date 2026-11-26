@@ -130,6 +130,10 @@ CUresult cuMemAddressFree(CUdeviceptr p, size_t) { stub_unmap((void *) (uintptr_
 CUresult cuMemCreate(CUmemGenericAllocationHandle * h, size_t, const CUmemAllocationProp *, unsigned long long) { *h = 1; return CUDA_SUCCESS; }
 CUresult cuMemcpyDtoH_v2(void * d, CUdeviceptr s, size_t n) { stub_copy(d, (const void *) (uintptr_t) s, n, true); return CUDA_SUCCESS; }
 CUresult cuMemcpyHtoD_v2(CUdeviceptr d, const void * s, size_t n) { stub_copy((void *) (uintptr_t) d, s, n, false); return CUDA_SUCCESS; }
+// a list entry's scratch (ext-kernels.cpp: cuMemAlloc once a stream): without an address the hook runs the engine's own
+// path and the dry run's engine never takes an entry with scratch, while the replay does
+CUresult cuMemAlloc_v2(CUdeviceptr * p, size_t n) { *p = (CUdeviceptr) (uintptr_t) stub_map(n); return *p ? CUDA_SUCCESS : CUDA_ERROR_OUT_OF_MEMORY; }
+CUresult cuMemFree_v2(CUdeviceptr p) { stub_unmap((void *) (uintptr_t) p); return CUDA_SUCCESS; }
 CUresult cuStreamIsCapturing(CUstream, CUstreamCaptureStatus * st) { *st = CU_STREAM_CAPTURE_STATUS_NONE; return CUDA_SUCCESS; }
 // A module keeps a copy of its cubin (an ELF): a function's static shared bytes (.nv.shared.<name>), registers
 // (.nv.info EIATTR_REGCOUNT) and launch bound (.nv.info.<name> EIATTR_MAX_THREADS) are read from it, so the hook's
@@ -158,7 +162,10 @@ static stub_fn_facts stub_elf_facts(const std::string & img, const char * name) 
                     const uint64_t sym = rd(o + 4, 4), symoff = rd(symtab + 0x18, 8), strtab = rd(shoff + rd(symtab + 0x28, 4) * shent + 0x18, 8);
                     if (symtab && fn == std::string(img.c_str() + std::min<uint64_t>(img.size() - 1, strtab + rd(symoff + sym * 24, 4)))) f.regs = (int) rd(o + 8, 4);
                 }
-                if (sec != ".nv.info" && attr == 0x05 && n == 12) f.max_threads = (int) (rd(o + 4, 4) * rd(o + 8, 4) * rd(o + 12, 4));   // EIATTR_MAX_THREADS (launch bounds)
+                if (sec != ".nv.info" && (attr == 0x05 || attr == 0x10) && n == 12) {   // EIATTR_MAX_THREADS (launch bounds), EIATTR_REQNTID (the block it requires)
+                    const int t = (int) (rd(o + 4, 4) * rd(o + 8, 4) * rd(o + 12, 4));
+                    f.max_threads = f.max_threads > 0 ? std::min(f.max_threads, t) : t;
+                }
                 o += 4 + n;
             } else {
                 o += 4;

@@ -137,7 +137,9 @@ int main(int argc, char ** argv) {
     printf("hook_gate: matcher %s\nmanifest %s\n", GATE_SRC, man.c_str());
     for (const json & j : m.at("entries")) {
         try { entries.push_back(load_entry(ext_load_entry, j, mdir, j.at("target").get<std::string>(), v2, nsm, 0));
-              entries_json.push_back({{"id", j.at("id")}, {"kernel_sha256", j.at("kernel").at("sha256")}, {"placeholder", j.at("kernel").value("placeholder", false)}, {"ops", j.at("match").at("ops").size()}}); }
+              std::string seq; bool ph = false;   // a launches entry's identity: the sha256 of its kernels' sha256s, one a line (BoltBeam's identity.sequence)
+              for (const json & q : j.contains("launches") ? j.at("launches") : json::array({json{{"kernel", j.at("kernel")}}})) if (q.contains("kernel")) { seq += q.at("kernel").at("sha256").get<std::string>() + "\n"; ph = ph || q.at("kernel").value("placeholder", false); }
+              entries_json.push_back({{"id", j.at("id")}, {"kernel_sha256", j.contains("launches") ? ext_sha256(seq) : j.at("kernel").at("sha256").get<std::string>()}, {"placeholder", ph}, {"ops", j.at("match").at("ops").size()}}); }
         catch (const std::exception & err) { printf("  entry %s DROPPED at load: %s\n", j.value("id", "?").c_str(), err.what()); }
     }
     // pass records: every evaluation of the run, by graph kind; what the engine's own matcher took (and, in a dry run, which kernel)
